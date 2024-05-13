@@ -1,0 +1,22 @@
+# Compiled files
+/target/
+Cargo.lock
+
+# Dependency directories
+/vendor/
+/.cargo/
+
+# Generated documentation
+/doc/
+/target/doc/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Editor-specific files
+.vscode/
+.idea/
+
+# Build files
+*.rs.bk

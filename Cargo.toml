@@ -1,0 +1,28 @@
+ [package]
+name = "pf_module"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+default=["klu"]
+klu = ["dep:klu-rs"]
+
+[profile.release]
+opt-level = 3              # Use slightly better optimizations.
+overflow-checks = false     # Disable integer overflow checks.
+lto = true
+
+[dependencies]
+ordered-float = { version = ">3.0", default-features = false }
+nalgebra = { version = ">=0.32.0", features = ["serde-serialize"] }
+nalgebra-sparse = { version = ">=0.7.0", features = ["serde-serialize"] }
+serde = { version = ">=1.0", features = ["derive"] }
+serde_json = ">=1.0"
+num-traits = ">=0.2"
+num-derive = ">=0.3"
+num-complex = ">=0.4"
+rsparse = "1.0"
+[dependencies.klu-rs]
+path = "./klu_rs"
+optional = true
