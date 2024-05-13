@@ -1,4 +1,4 @@
-**RustPower**
+# RustPower
 
 RustPower is a power flow calculation library written in Rust, designed to perform steady-state analysis on electrical power systems.
 
