@@ -1,8 +1,6 @@
-**Repository Name: rspower**
+**RustPower**
 
-# RSPower
-
-RSPower is a power flow calculation library written in Rust, designed to perform steady-state analysis on electrical power systems.
+RustPower is a power flow calculation library written in Rust, designed to perform steady-state analysis on electrical power systems.
 
 ## Current Features
 
@@ -27,12 +25,12 @@ Add this library to your `Cargo.toml` file:
 
 ```toml
 [dependencies]
-rspower = "0.1.0"
+RustPower = "0.1.0"
 ```
 
 ## Usage
 
-```rust
+```Rust
 use pf_module::{io::pandapower::Network, prelude::*};
 fn main() {
     // Define your power flow network or load pandapower files
@@ -66,8 +64,7 @@ Contributions are welcome! Feel free to open an issue or submit a pull request.
 
 ## Authors
 
-- [Your Name]
-
+- Tianshi Cheng
 ## Contact
 
-For questions or inquiries, feel free to contact [Your Email].
+Feel free to open a issue or PR.
