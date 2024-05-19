@@ -33,7 +33,7 @@ fn main() {
         // bindings for.
         .header("wrapper.h")
         .clang_arg(format!("-I{}/include", suitesparse_dir))
-        .clang_arg(format!("-I{}/suitesparse/include", suitesparse_dir))
+        .clang_arg(format!("-I{}/include/suitesparse", suitesparse_dir))
         .derive_default(true)
         // Tell cargo to invalidate the built crate whenever any of the
         // included header files changed.

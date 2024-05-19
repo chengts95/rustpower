@@ -39,12 +39,12 @@ pub fn newton_pf<Solver: Solve>(
 
     let mut v_m = v.map(|e| e.simd_modulus());
     let mut v_a = v.map(|e| e.simd_argument());
-
+     let mut cache :Option<JacobianCache>  = None;
     for iterations in 0..max_iter {
         // let power_mismatch = calc_power_mismatch(Ybus, S_load, &v);
 
         let (dS_dVm, dS_dVa) = dSbus_dV(Ybus, &v, &v_norm); // Assume Vnorm is just the norm of V here
-        let jacobian = build_jacobian(&dS_dVm, &dS_dVa, npv, n_ext); // Need to implement this function
+        let jacobian = build_jacobian_cached(&dS_dVm, &dS_dVa, &mut cache,npv, n_ext); // Need to implement this function
 
         let n = jacobian.nrows();
 
@@ -124,81 +124,6 @@ fn update_v(
     v.zip_zip_apply(v_norm, v_m, |a, e, vm| *a = vm * e);
 }
 
-// fn slice_csc_matrix_block<T: Clone>(
-//     mat: &CscMatrix<T>,
-//     start_col: usize,
-//     end_col: usize,
-//     start_row: usize,
-//     end_row: usize
-// ) -> CscMatrix<T> {
-//     let mut new_values = Vec::new();
-//     let mut new_row_indices = Vec::new();
-//     let mut new_col_offsets = Vec::new();
-//     let mut current_offset = 0;
-
-//     new_col_offsets.push(current_offset);
-
-//     for col in start_col..=end_col {
-//         let col_start_idx = mat.col_offsets()[col];
-//         let col_end_idx = mat.col_offsets()[col + 1];
-
-//         for idx in col_start_idx..col_end_idx {
-//             let row_idx = mat.row_indices()[idx];
-//             if row_idx >= start_row && row_idx <= end_row {
-//                 new_row_indices.push(row_idx - start_row); // Adjust row indices
-//                 new_values.push(mat.values()[idx].clone());
-//                 current_offset += 1;
-//             }
-//         }
-//         new_col_offsets.push(current_offset);
-//     }
-
-//     CscMatrix::try_from_csc_data(
-//         end_row - start_row + 1,
-//         end_col - start_col + 1,
-//         new_col_offsets,
-//         new_row_indices,
-//         new_values
-//     ).unwrap()
-// }
-
-// fn slice_csc_rows<T: Clone>(
-//     mat: &CscMatrix<T>,
-//     start_row: usize,
-//     end_row: usize
-// ) -> CscMatrix<T> {
-//     let nrows = end_row - start_row + 1;
-//     let ncols = mat.ncols();
-//     let mut new_values = Vec::new();
-//     let mut new_row_indices = Vec::new();
-//     let mut new_col_offsets = vec![0; ncols + 1];
-
-//     // 遍历每一列
-//     for col in 0..ncols {
-//         let col_start_idx = mat.col_offsets()[col];
-//         let col_end_idx = mat.col_offsets()[col + 1];
-
-//         // 遍历当前列中的每个元素
-//         for idx in col_start_idx..col_end_idx {
-//             let row_idx = mat.row_indices()[idx];
-//             // 检查行索引是否在给定范围内
-//             if row_idx >= start_row && row_idx <= end_row {
-//                 new_row_indices.push(row_idx - start_row); // 调整行索引
-//                 new_values.push(mat.values()[idx].clone());
-//             }
-//         }
-//         new_col_offsets[col + 1] = new_values.len(); // 更新列偏移
-//     }
-
-//     CscMatrix::try_from_csc_data(
-//         nrows,
-//         ncols,
-//         new_col_offsets,
-//         new_row_indices,
-//         new_values
-//     ).unwrap()
-// }
-
 trait Slice {
     type Mat;
     fn block(&self, start_pos: (usize, usize), shape: (usize, usize)) -> Self::Mat;
@@ -213,6 +138,23 @@ impl<T: Clone + Zero + Scalar + ClosedAdd> Slice for CscMatrix<T> {
     #[inline(always)]
     fn columns(&self, start_col: usize, end_col: usize) -> Self::Mat {
         slice_csc_matrix(self, start_col, end_col)
+    }
+}
+
+trait SliceTo {
+    type Mat;
+    fn block_to(&self, start_pos: (usize, usize), shape: (usize, usize), mat: &mut Self::Mat);
+    fn columns_to(&self, start_col: usize, end_col: usize, mat: &mut Self::Mat);
+}
+impl<T: Copy + Clone + Zero + Scalar + ClosedAdd> SliceTo for CscMatrix<T> {
+    type Mat = CscMatrix<T>;
+    #[inline(always)]
+    fn block_to(&self, start_pos: (usize, usize), shape: (usize, usize), mat: &mut Self::Mat) {
+        slice_csc_matrix_block_to(self, start_pos, shape, mat)
+    }
+    #[inline(always)]
+    fn columns_to(&self, start_col: usize, end_col: usize, mat: &mut Self::Mat) {
+        slice_csc_matrix_to(self, start_col, end_col, mat)
     }
 }
 
@@ -237,4 +179,77 @@ fn build_jacobian(
 
     let J = csc_vstack(&[&csc_hstack(&[&J11, &J12]), &csc_hstack(&[&J21, &J22])]);
     J
+}
+
+#[allow(non_snake_case)]
+#[inline(always)]
+fn build_jacobian_cached(
+    ds_dvm: &CscMatrix<Complex64>,
+    ds_dva: &CscMatrix<Complex64>,
+    cache: &mut Option<JacobianCache>,
+    npv: usize,
+    n_ext: usize,
+) -> CscMatrix<f64> {
+    match cache {
+        Some(cache) => {
+            ds_dva.block_to(
+                (0, 0),
+                (ds_dva.nrows() - n_ext, ds_dva.ncols() - n_ext),
+                &mut cache.ds_dva,
+            );
+            let (real, imag) = cache.ds_dva.real_imag();
+            cache.j11 = real;
+            ds_dvm.block_to(
+                (0, 0),
+                (ds_dvm.nrows() - n_ext, ds_dvm.ncols() - n_ext),
+                &mut cache.ds_dvm,
+            );
+
+            let (real2, imag2) = cache.ds_dvm.real_imag();
+            real2.columns_to(npv, real2.ncols(), &mut cache.j12);
+            imag.block_to((npv, 0), (imag.nrows() - npv, imag.ncols()), &mut cache.j21);
+            imag2.block_to(
+                (npv, npv),
+                (imag2.nrows() - npv, imag2.ncols() - npv),
+                &mut cache.j22,
+            );
+
+            let J = csc_vstack(&[
+                &csc_hstack(&[&cache.j11, &cache.j12]),
+                &csc_hstack(&[&cache.j21, &cache.j22]),
+            ]);
+            J
+        }
+        None => {
+            let ds_dva = ds_dva.block((0, 0), (ds_dva.nrows() - n_ext, ds_dva.ncols() - n_ext));
+            let ds_dvm = ds_dvm.block((0, 0), (ds_dvm.nrows() - n_ext, ds_dvm.ncols() - n_ext));
+            let (real, imag) = ds_dva.real_imag();
+            let (real2, imag2) = ds_dvm.real_imag();
+            let j11 = real;
+            let j12 = real2.columns(npv, real2.ncols());
+            let j21 = imag.block((npv, 0), (imag.nrows() - npv, imag.ncols()));
+            let j22 = imag2.block((npv, npv), (imag2.nrows() - npv, imag2.ncols() - npv));
+            let J = csc_vstack(&[&csc_hstack(&[&j11, &j12]), &csc_hstack(&[&j21, &j22])]);
+            let icache = JacobianCache {
+                ds_dva,
+                ds_dvm,
+                j11,
+                j12,
+                j21,
+                j22,
+            };
+            cache.replace(icache);
+           
+            J
+        }
+    }
+}
+
+struct JacobianCache {
+    ds_dva: CscMatrix<Complex64>,
+    ds_dvm: CscMatrix<Complex64>,
+    j11: CscMatrix<f64>,
+    j12: CscMatrix<f64>,
+    j21: CscMatrix<f64>,
+    j22: CscMatrix<f64>,
 }
