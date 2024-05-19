@@ -8,7 +8,21 @@ pub struct KLUSolver(pub klu_rs::KLUSolver);
 pub struct RSparseSolver;
 
 #[allow(non_snake_case)]
+/// A trait for solving sparse linear systems.
 pub trait Solve {
+    /// Solves the sparse linear system.
+    ///
+    /// # Parameters
+    ///
+    /// * `Ap` - Column pointers of the matrix.
+    /// * `Ai` - Row indices of the matrix.
+    /// * `Ax` - Non-zero values of the matrix.
+    /// * `_b` - Right-hand side vector.
+    /// * `_n` - Dimension of the system.
+    ///
+    /// # Returns
+    ///
+    /// A result indicating success or failure.
     fn solve(
         &mut self,
         Ap: &mut [usize],
@@ -23,6 +37,19 @@ pub trait Solve {
 #[allow(non_snake_case)]
 impl Solve for KLUSolver {
     #[allow(unused)]
+    /// Solves the sparse linear system using the KLU solver.
+    ///
+    /// # Parameters
+    ///
+    /// * `Ap` - Column pointers of the matrix.
+    /// * `Ai` - Row indices of the matrix.
+    /// * `Ax` - Non-zero values of the matrix.
+    /// * `b` - Right-hand side vector.
+    /// * `n` - Dimension of the system.
+    ///
+    /// # Returns
+    ///
+    /// A result indicating success or failure.
     fn solve(
         &mut self,
         Ap: &mut [usize],
@@ -40,31 +67,49 @@ impl Solve for KLUSolver {
             ret |= self.0.factor(
                 Ap.as_mut_ptr() as *mut i64,
                 Ai.as_mut_ptr() as *mut i64,
-                Ax.as_mut_ptr()
+                Ax.as_mut_ptr(),
             );
             ret |= self.0.solve(b.as_mut_ptr(), n as i64, 1);
             if ret != 0 {
-                return Err("error occured when calling klu routines!");
+                return Err("error occurred when calling KLU routines!");
             }
         }
         Ok(())
     }
 }
+
 #[cfg(feature = "klu")]
 #[test]
+/// Tests the drop functionality of the KLU solver.
 fn drop_test() {
     let klu = KLUSolver::default();
     drop(klu);
 }
+
 #[cfg(feature = "klu")]
 #[test]
+/// Tests the reset functionality of the KLU solver.
 fn reset_test() {
     let mut klu = KLUSolver::default();
     klu.0.reset();
 }
+
 #[allow(non_snake_case)]
 impl Solve for RSparseSolver {
     #[allow(unused)]
+    /// Solves the sparse linear system using the RSparse solver.
+    ///
+    /// # Parameters
+    ///
+    /// * `Ap` - Column pointers of the matrix.
+    /// * `Ai` - Row indices of the matrix.
+    /// * `Ax` - Non-zero values of the matrix.
+    /// * `b` - Right-hand side vector.
+    /// * `n` - Dimension of the system.
+    ///
+    /// # Returns
+    ///
+    /// A result indicating success or failure.
     fn solve(
         &mut self,
         Ap: &mut [usize],
@@ -77,9 +122,9 @@ impl Solve for RSparseSolver {
 
         let p = unsafe { std::slice::from_raw_parts_mut(Ap.as_mut_ptr() as *mut isize, Ap.len()) };
         unsafe {
-            mat.i.swap_with_slice(Ai);
-            mat.p.swap_with_slice(p);
-            mat.x.swap_with_slice(Ax);
+            mat.i.clone_from_slice(Ai);
+            mat.p.clone_from_slice(p);
+            mat.x.clone_from_slice(Ax);
         }
 
         lusol(&mat, b, 1, 1e-6);

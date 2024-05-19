@@ -1,10 +1,17 @@
 use nalgebra::*;
 use nalgebra_sparse::CscMatrix;
+
+/// Trait for computing the conjugate of a matrix.
 pub(crate) trait Conjugate {
     type Mat;
+
+    /// Returns the conjugate of the matrix.
     fn conjugate(&self) -> Self::Mat;
+
+    /// Computes the conjugate of the matrix in-place.
     fn conjugate_mut(&mut self);
 }
+
 impl<T: SimdRealField> Conjugate for CscMatrix<Complex<T>>
 where
     Complex<T>: SimdComplexField,
@@ -47,13 +54,20 @@ where
     }
 }
 
+/// Trait for extracting the real and imaginary parts of a matrix.
 pub(crate) trait RealImage {
     type Mat;
+
+    /// Returns the real and imaginary parts of the matrix.
     fn real_imag(&self) -> (Self::Mat, Self::Mat);
 
+    /// Returns the real part of the matrix.
     fn real(&self) -> Self::Mat;
+
+    /// Returns the imaginary part of the matrix.
     fn imag(&self) -> Self::Mat;
 }
+
 impl<T: SimdRealField> RealImage for CscMatrix<Complex<T>>
 where
     Complex<T>: SimdComplexField,
@@ -93,6 +107,7 @@ where
         };
         imag_mat
     }
+
     fn real_imag(&self) -> (Self::Mat, Self::Mat) {
         let values = unsafe {
             let data = ViewStorage::<_, Dyn, U1, U1, Dyn>::from_raw_parts(
@@ -122,10 +137,9 @@ where
 mod tests {
     use nalgebra::*;
     use nalgebra_sparse::{CooMatrix, CscMatrix};
-    // 导入外部作用域中的所有内容
     use super::*;
 
-    // 一个测试案例
+    /// Tests the conjugate operation.
     #[test]
     fn test_conj() {
         let mut a = CooMatrix::new(6, 6);
@@ -147,7 +161,8 @@ mod tests {
         println!("conj(a)={}", DMatrix::from(&a.conjugate()));
         assert!(a.conjugate() == b, "matrices do not match!")
     }
-    // 一个测试案例
+
+    /// Tests the in-place conjugate operation.
     #[test]
     fn test_conj_mut() {
         let mut a = CooMatrix::new(6, 6);

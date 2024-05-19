@@ -1,5 +1,5 @@
  [package]
-name = "pf_module"
+name = "rustpower"
 version = "0.1.0"
 edition = "2021"
 

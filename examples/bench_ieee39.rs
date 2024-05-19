@@ -1,5 +1,5 @@
 use nalgebra::ComplexField;
-use pf_module::{io::pandapower::Network, prelude::*};
+use rustpower::{io::pandapower::Network, prelude::*};
 
 #[macro_export]
 macro_rules! timeit {

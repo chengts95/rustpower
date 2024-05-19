@@ -11,6 +11,23 @@ use nalgebra::*;
 use nalgebra_sparse::*;
 use num_complex::Complex64;
 
+/// Performs a Newton-Raphson power flow calculation.
+///
+/// # Parameters
+///
+/// * `Ybus` - The bus admittance matrix.
+/// * `Sbus` - The bus power injections.
+/// * `v_init` - The initial voltage vector.
+/// * `npv` - The number of PV buses.
+/// * `npq` - The number of PQ buses.
+/// * `tolerance` - The tolerance for convergence (optional).
+/// * `max_iter` - The maximum number of iterations (optional).
+/// * `solver` - The solver for the linear system.
+///
+/// # Returns
+///
+/// A result containing the converged voltage vector and the number of iterations.
+/// Returns an error if the algorithm did not converge.
 #[allow(non_snake_case)]
 pub fn newton_pf<Solver: Solve>(
     Ybus: &CscMatrix<Complex64>,
@@ -30,7 +47,6 @@ pub fn newton_pf<Solver: Solve>(
     let mut mis = &v.component_mul(&(Ybus * &v).conjugate()) - Sbus;
 
     let n_ext = v.len() - npv - npq;
-
     let n_bus = npq + npv;
     let num_state = npv + 2 * npq;
 
@@ -39,16 +55,15 @@ pub fn newton_pf<Solver: Solve>(
 
     let mut v_m = v.map(|e| e.simd_modulus());
     let mut v_a = v.map(|e| e.simd_argument());
-     let mut cache :Option<JacobianCache>  = None;
-    for iterations in 0..max_iter {
-        // let power_mismatch = calc_power_mismatch(Ybus, S_load, &v);
+    let mut cache: Option<JacobianCache> = None;
 
-        let (dS_dVm, dS_dVa) = dSbus_dV(Ybus, &v, &v_norm); // Assume Vnorm is just the norm of V here
-        let jacobian = build_jacobian_cached(&dS_dVm, &dS_dVa, &mut cache,npv, n_ext); // Need to implement this function
+    for iterations in 0..max_iter {
+        let (dS_dVm, dS_dVa) = dSbus_dV(Ybus, &v, &v_norm);
+        let jacobian = build_jacobian_cached(&dS_dVm, &dS_dVa, &mut cache, npv, n_ext);
 
         let n = jacobian.nrows();
-
         let (mut Ap, mut Ai, mut Ax) = jacobian.disassemble();
+
         let _err = unsafe {
             solver
                 .solve(
@@ -58,20 +73,11 @@ pub fn newton_pf<Solver: Solve>(
                     F.data.as_mut_slice_unchecked(),
                     n,
                 )
-                .unwrap();
+                .unwrap()
         };
 
         let dx = &F;
-        update_v(
-            &mut v_a,
-            dx,
-            n_bus,
-            &mut v_m,
-            npv,
-            num_state,
-            &mut v_norm,
-            &mut v,
-        );
+        update_v(&mut v_a, dx, n_bus, &mut v_m, npv, num_state, &mut v_norm, &mut v);
 
         v.component_mul(&(Ybus * &v).conjugate())
             .sub_to(Sbus, &mut mis);
@@ -82,9 +88,19 @@ pub fn newton_pf<Solver: Solve>(
             return Ok((v, iterations));
         }
     }
+
     Err((String::from("Did not converge!"), v))
 }
 
+/// Assembles the mismatch vector.
+///
+/// # Parameters
+///
+/// * `f` - The mismatch vector to be assembled.
+/// * `n_bus` - The number of buses.
+/// * `mis` - The current power mismatches.
+/// * `num_state` - The number of states.
+/// * `npv` - The number of PV buses.
 #[inline(always)]
 fn assemble_f(
     f: &mut DVector<f64>,
@@ -101,6 +117,18 @@ fn assemble_f(
         });
 }
 
+/// Updates the voltage vector.
+///
+/// # Parameters
+///
+/// * `v_a` - The voltage angle vector.
+/// * `dx` - The state update vector.
+/// * `n_bus` - The number of buses.
+/// * `v_m` - The voltage magnitude vector.
+/// * `npv` - The number of PV buses.
+/// * `num_state` - The number of states.
+/// * `v_norm` - The normalized voltage vector.
+/// * `v` - The voltage vector to be updated.
 #[inline(always)]
 fn update_v(
     v_a: &mut DVector<f64>,
@@ -124,41 +152,70 @@ fn update_v(
     v.zip_zip_apply(v_norm, v_m, |a, e, vm| *a = vm * e);
 }
 
+/// Trait for slicing a CSC matrix.
 trait Slice {
     type Mat;
+
+    /// Slices a block from the CSC matrix.
     fn block(&self, start_pos: (usize, usize), shape: (usize, usize)) -> Self::Mat;
+
+    /// Slices columns from the CSC matrix.
     fn columns(&self, start_col: usize, end_col: usize) -> Self::Mat;
 }
+
 impl<T: Clone + Zero + Scalar + ClosedAdd> Slice for CscMatrix<T> {
     type Mat = CscMatrix<T>;
+
     #[inline(always)]
     fn block(&self, start_pos: (usize, usize), shape: (usize, usize)) -> Self::Mat {
         slice_csc_matrix_block(self, start_pos, shape)
     }
+
     #[inline(always)]
     fn columns(&self, start_col: usize, end_col: usize) -> Self::Mat {
         slice_csc_matrix(self, start_col, end_col)
     }
 }
 
+/// Trait for slicing a CSC matrix into a destination matrix.
 trait SliceTo {
     type Mat;
+
+    /// Slices a block from the CSC matrix into a destination matrix.
     fn block_to(&self, start_pos: (usize, usize), shape: (usize, usize), mat: &mut Self::Mat);
+
+    /// Slices columns from the CSC matrix into a destination matrix.
     fn columns_to(&self, start_col: usize, end_col: usize, mat: &mut Self::Mat);
 }
+
 impl<T: Copy + Clone + Zero + Scalar + ClosedAdd> SliceTo for CscMatrix<T> {
     type Mat = CscMatrix<T>;
+
     #[inline(always)]
     fn block_to(&self, start_pos: (usize, usize), shape: (usize, usize), mat: &mut Self::Mat) {
         slice_csc_matrix_block_to(self, start_pos, shape, mat)
     }
+
     #[inline(always)]
     fn columns_to(&self, start_col: usize, end_col: usize, mat: &mut Self::Mat) {
         slice_csc_matrix_to(self, start_col, end_col, mat)
     }
 }
 
+/// Builds the Jacobian matrix.
+///
+/// # Parameters
+///
+/// * `ds_dvm` - The partial derivatives of the power injections with respect to voltage magnitudes.
+/// * `ds_dva` - The partial derivatives of the power injections with respect to voltage angles.
+/// * `npv` - The number of PV buses.
+/// * `n_ext` - The number of external elements.
+///
+/// # Returns
+///
+/// The Jacobian matrix.
 #[allow(non_snake_case)]
+#[allow(dead_code)]
 #[inline(always)]
 fn build_jacobian(
     ds_dvm: &CscMatrix<Complex64>,
@@ -181,6 +238,20 @@ fn build_jacobian(
     J
 }
 
+
+/// Builds the Jacobian matrix using a cache.
+///
+/// # Parameters
+///
+/// * `ds_dvm` - The partial derivatives of the power injections with respect to voltage magnitudes.
+/// * `ds_dva` - The partial derivatives of the power injections with respect to voltage angles.
+/// * `cache` - The cache for the Jacobian matrix.
+/// * `npv` - The number of PV buses.
+/// * `n_ext` - The number of external elements.
+///
+/// # Returns
+///
+/// The Jacobian matrix.
 #[allow(non_snake_case)]
 #[inline(always)]
 fn build_jacobian_cached(
@@ -245,6 +316,7 @@ fn build_jacobian_cached(
     }
 }
 
+/// A cache for the Jacobian matrix components.
 struct JacobianCache {
     ds_dva: CscMatrix<Complex64>,
     ds_dvm: CscMatrix<Complex64>,
