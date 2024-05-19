@@ -44,7 +44,7 @@ fn main() {
     let tol = Some(1e-8);
     let max_it = Some(10);
 
-    let v = (&pf).run_pf(v_init.clone(), max_it, tol);
+    let v = pf.run_pf(v_init.clone(), max_it, tol);
     println!("Vm,\t angle");
     for i in v.iter() {
         println!("{:.5}, {:.5}", i.modulus(), i.argument().to_degrees());
