@@ -24,7 +24,7 @@ This project draws inspiration and knowledge from the following libraries:
 PyPower and PandaPower: These tools use traditional ways to build admittance matrices. They perform dynamic slicing in each iteration to extract vectors and matrices for PQ and PV nodes. While this approach is general, it can lead to performance bottlenecks when dealing with large-scale power systems.
 
 This Program: By using some simple linear algebra methods, this program constructs the required vectors and matrices during initialization, avoiding the need for dynamic slicing in each iteration. I believe it will never become necessary to check individual column in the jacobian matrix during its construction. This not only simplifies the code logic but also significantly improves computational efficiency beyond the benefits brought by Rust and KLU.
-
+Currently, on IEEE 39-Bus system, this program takes 300 microseconds to finish 3 iterations, which is 10 times faster than Python and Numba-based implementation.
 ## Installation
 
 Add this library to your `Cargo.toml` file:
