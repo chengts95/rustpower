@@ -41,7 +41,7 @@ fn main() {
     let tol = Some(1e-8);
     let max_it = Some(10);
 
-    let _v = (&pf).run_pf(v_init.clone(), max_it, tol);
+    let _v = pf.run_pf(v_init.clone(), max_it, tol);
 }
 ```
 
