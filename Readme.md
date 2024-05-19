@@ -11,19 +11,6 @@ RustPower is a power flow calculation library written in Rust, designed to perfo
 - Handles external grid nodes and transformer elements
 - RSparse and KLU solver (preferred but optional )
 
-## Acknowledgements
-
-This project draws inspiration and knowledge from the following libraries:
-
-- [Pandapower](https://github.com/e2nIEE/pandapower): An easy-to-use Python package for power system analysis.
-- [PyPower](/https://github.com/rwl/PYPOWER): A Python implementation of the power flow analysis tool MatPower.
-- [MatPower](https://matpower.org/): A package of MATLAB-based power system simulation, analysis, and optimization tools.
-
-In addition, it uses part of the design philosophy and theory in:
-[T. Cheng, T. Duan and V. Dinavahi, "ECS-Grid: Data-Oriented Real-Time Simulation Platform for Cyber-Physical Power Systems," in IEEE Transactions on Industrial Informatics, vol. 19, no. 11, pp. 11128-11138, Nov. 2023, doi: 10.1109/TII.2023.3244329.](https://era.library.ualberta.ca/items/5e45c2ff-9b92-41c7-b685-020110b77239)
-
-Although ECS-Grid is a more complex electromagnetic transient (EMT) cyber-physical simulation system, it provided valuable insights and experience that contributed to the design of this steady-state power flow calculation software.
-
 ## Comparison with Existing Tools 
 
 PyPower and PandaPower: These tools use traditional ways to build admittance matrices. They perform dynamic slicing in each iteration to extract vectors and matrices for PQ and PV nodes. While this approach is general, it can lead to performance bottlenecks when dealing with large-scale power systems.
@@ -81,3 +68,16 @@ Contributions are welcome! Feel free to open an issue or submit a pull request.
 ## Contact
 
 Feel free to open a issue or PR.
+
+## Acknowledgements
+
+This project draws inspiration and knowledge from the following libraries:
+
+- [Pandapower](https://github.com/e2nIEE/pandapower): An easy-to-use Python package for power system analysis.
+- [PyPower](/https://github.com/rwl/PYPOWER): A Python implementation of the power flow analysis tool MatPower.
+- [MatPower](https://matpower.org/): A package of MATLAB-based power system simulation, analysis, and optimization tools.
+
+In addition, it uses part of the design philosophy and theory in:
+[T. Cheng, T. Duan and V. Dinavahi, "ECS-Grid: Data-Oriented Real-Time Simulation Platform for Cyber-Physical Power Systems," in IEEE Transactions on Industrial Informatics, vol. 19, no. 11, pp. 11128-11138, Nov. 2023, doi: 10.1109/TII.2023.3244329.](https://era.library.ualberta.ca/items/5e45c2ff-9b92-41c7-b685-020110b77239)
+
+Although ECS-Grid is a more complex electromagnetic transient (EMT) cyber-physical simulation system, it provided valuable insights and experience that contributed to the design of this steady-state power flow calculation software.
