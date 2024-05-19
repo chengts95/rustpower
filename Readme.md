@@ -31,7 +31,7 @@ RustPower = "0.1.0"
 ## Usage
 
 ```Rust
-use pf_module::{io::pandapower::Network, prelude::*};
+use rustpower::{io::pandapower::Network, prelude::*};
 fn main() {
     // Define your power flow network or load pandapower files
     let json = "{...}";
@@ -43,15 +43,6 @@ fn main() {
 
     let _v = (&pf).run_pf(v_init.clone(), max_it, tol);
 }
-// Define your power flow network
-let mut network = PFNetwork::new();
-// Add buses, loads, generators, transformers, etc.
-
-// Run power flow analysis
-let v_init = DVector::from_element(network.buses.len(), Complex::new(1.0, 0.0));
-let converged_v = network.run_pf(v_init, None, None);
-
-// Access results, perform further analysis, etc.
 ```
 
 ## License
