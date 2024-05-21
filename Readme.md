@@ -35,7 +35,7 @@ use rustpower::{io::pandapower::Network, prelude::*};
 fn main() {
     // Define your power flow network or load pandapower files
     let json = "{...}";
-    let net: Network = serde_json::from_str(file_path).unwrap();
+    let net: Network = serde_json::from_str(json).unwrap();
     let pf = PFNetwork::from(net);
     let v_init = pf.create_v_init();
     let tol = Some(1e-8);
