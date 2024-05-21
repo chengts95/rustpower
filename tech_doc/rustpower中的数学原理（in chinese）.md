@@ -99,7 +99,7 @@ $$
 $$
 \begin{equation}
 \begin{aligned}
-\Delta \bm x = J^{-1}f(x_n)
+\Delta \bm x = -J^{-1}f(x_n)
 \end{aligned}
 \end{equation}
 $$
