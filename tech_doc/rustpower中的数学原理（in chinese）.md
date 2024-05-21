@@ -27,41 +27,45 @@ useMath: true
 $$
 \begin{equation}
 \begin{aligned}
-         \sum \bm{i}_{out} & = \bm{i}_{L} + \bm{i}_{C} + \bm{i}_{G}\\ 
-            &=Y_{L}\int  \bm{v} 
-             dt + Y_{C}\frac{d \bm{v  }}{dt} + Y_{G}\bm{v} = \bm{s}, \\ 
-             Y_L &= D_L^T [\frac{1}{\bm{L}}] D_{L}, 
-             Y_C = D_C^T [\bm{C}] D_{C}, 
-             Y_G = D_G^T [\bm{G}] D_{G},
+         \sum \boldsymbol{i}_{out} & = \boldsymbol{i}_{L} + \boldsymbol{i}_{C} + \boldsymbol{i}_{G}\\ 
+            &=Y_{L}\int  \boldsymbol{v} 
+             dt + Y_{C}\frac{d \boldsymbol{v  }}{dt} + Y_{G}\boldsymbol{v} = \boldsymbol{s}, \\ 
+             Y_L &= D_L^T [\frac{1}{\boldsymbol{L}}] D_{L}, 
+             Y_C = D_C^T [\boldsymbol{C}] D_{C}, 
+             Y_G = D_G^T [\boldsymbol{G}] D_{G},
 \end{aligned}
 \end{equation}
 $$
-其中，$D$ 是有向关联矩阵，其行对应物理组件，列对应节点；$L$ 是电感，$C$ 是电容，$G$ 是导纳，$\bm s$ 是由源引起的电流注入向量。$D$ 是一个将全局节点电压 $\bm v$ 转换为端口电压的变换矩阵，而 $D^T$ 可以将支路电流分散到节点注入向量中。$Y$ 矩阵是不同类型组件的加权拉普拉斯矩阵，也称为导纳矩阵，在求解电网方程系统中起着重要作用。$[X]$ 表示一维向量 $X$ 的对角化矩阵。(1)这个形式的KCL公式使得任意类型的电气元件都可以被表达为支路组件形式。对这个连续时间域的公式进行拉普拉斯变换就可以轻松得到稳态和机电暂态分析的基本公式。
+其中，$D$ 是有向关联矩阵，其行对应物理组件，列对应节点；$L$ 是电感，$C$ 是电容，$G$ 是导纳，$\boldsymbol s$ 是由源引起的电流注入向量。$D$ 是一个将全局节点电压 $\boldsymbol v$ 转换为端口电压的变换矩阵，而 $D^T$ 可以将支路电流分散到节点注入向量中。$Y$ 矩阵是不同类型组件的加权拉普拉斯矩阵，也称为导纳矩阵，在求解电网方程系统中起着重要作用。$[X]$ 表示一维向量 $X$ 的对角化矩阵。(1)这个形式的KCL公式使得任意类型的电气元件都可以被表达为支路组件形式。对这个连续时间域的公式进行拉普拉斯变换就可以轻松得到稳态和机电暂态分析的基本公式。
 $$
 \begin{equation}
 \begin{aligned}
-         \bm I_{bus} = Y_{bus}\bm V_{bus}
+         \boldsymbol I_{bus} = Y_{bus}\boldsymbol V_{bus}
 \end{aligned}
 \end{equation}
 $$
 
-在这里的$\bm I_{bus}$是注入到节点的电源造成的节点注入电流，经过拉普拉斯变换后向量和矩阵内都为复数，也就是在频域或者相域工频的值。拉普拉斯变换导纳的细节我就不在这里赘述，这都是教科书写烂的东西。RustPower中就是依据这个公式去组装$Y_{bus}$的。在RustPower中，数据结构内所存储的导纳和初始组装的矩阵全部都是真值导纳，而不是每个支路归算后的导纳，这和开源实现也是一个巨大的区别，但是却可以和EMT仿真所需参数保持算法一致性，是统一模型实现三种电力系统分析的第一步。因为数据参数可能来自于多个电压等级区域，每个系统按照自己的电压等级归算万类还得按照最终计算的需要调整基值，这是给自己添麻烦的做法。
+在这里的$\boldsymbol I_{bus}$是注入到节点的电源造成的节点注入电流，经过拉普拉斯变换后向量和矩阵内都为复数，也就是在频域或者相域工频的值。拉普拉斯变换导纳的细节我就不在这里赘述，这都是教科书写烂的东西。RustPower中就是依据这个公式去组装$Y_{bus}$的。在RustPower中，数据结构内所存储的导纳和初始组装的矩阵全部都是真值导纳，而不是每个支路归算后的导纳，这和开源实现也是一个巨大的区别，但是却可以和EMT仿真所需参数保持算法一致性，是统一模型实现三种电力系统分析的第一步。因为数据参数可能来自于多个电压等级区域，每个系统按照自己的电压等级归算万类还得按照最终计算的需要调整基值，这是给自己添麻烦的做法。
 
 有了这个，很容易发现$S=diag[V]I^{*}$, 上标$^*$代表共轭，于是得到
 
 $$
 \begin{equation}
 \begin{aligned}
-         \bm S_{bus} = diag[\bm V](Y_{bus}\bm V)^{*} 
+         \boldsymbol S_{bus} = diag[\boldsymbol V](Y_{bus}\boldsymbol V)^{*} 
 \end{aligned}
 \end{equation}
 $$
 
-关于用这个公式做EMT仿真的其他详情可见于我的论文<details><summary>ECSGrid</summary>
+关于用这个公式做EMT仿真的其他详情可见于我的论文
+[ECSGrid](https://era.library.ualberta.ca/items/5e45c2ff-9b92-41c7-b685-020110b77239)
 
-[T. Cheng, T. Duan and V. Dinavahi, "ECS-Grid: Data-Oriented Real-Time Simulation Platform for 
-Cyber-Physical Power Systems," in IEEE Transactions on Industrial Informatics, vol. 19, no. 11, pp. 11128-11138, Nov. 2023, doi: 10.1109/TII.2023.3244329.](https://era.library.ualberta.ca/items/5e45c2ff-9b92-41c7-b685-020110b77239)
-</details>
+---
+T. Cheng, T. Duan and V. Dinavahi, "ECS-Grid: Data-Oriented Real-Time Simulation Platform for 
+Cyber-Physical Power Systems," in IEEE Transactions on Industrial Informatics, vol. 19, no. 11, pp. 11128-11138, Nov. 2023, doi: 10.1109/TII.2023.3244329.
+
+---
+
 
 值得留意(在我看来是令人担忧)的是，在一般的公开文献中，常见的只有对单个节点的基尔霍夫电流定律（KCL）分析。教材中也通常只提供单个节点的潮流计算公式。然而，这种矩阵表达形式的理论来源于早期的电路仿真理论。上世纪70年代，计算机电路仿真的理论已经被提出并实现，早期代表性程序包括SPICE和EMTP等Fortran程序。这些早期的程序只是一些函数的集合，在现代看来显得十分原始。我国在80年代也有许多学者对这些仍处于初期阶段的EDA软件进行了研究。尽管当时的文献中也有类似的基于图论的矩阵形式表述，但并未用于实际的代码编写。
 
@@ -69,7 +73,7 @@ Cyber-Physical Power Systems," in IEEE Transactions on Industrial Informatics, v
 
 目前的本科教材，无论国内外，基本都是过去的时代编写的，考试仍然要求手算。然而，手算在现代工程中已毫无意义，考试时还不是靠计算器。现代工程师应该意识到掌握计算机算法工具的重要性。或许总有人觉得，计算机和人工智能替代人的工作是令人担忧的，但是正如火车汽车跑得比人快一样，计算机比任何人都更要擅长计算。我们应该关注的是谁能更深入地理解问题，设计出优秀的程序算法和软件框架，解决实际的工程问题。如果要想建立战略层面的科学技术优势，我们必须超越现有的先进技术，让我国的工业建立在与时俱进的先进技术和理论基础之上，而不是靠比谁按计算器更快，或谁背题目更熟。
 
-下面我们来看下用矩阵形式表达的稳态潮流计算牛顿法的雅各比矩阵是如何得到的，该方法来源于MatPower:
+下面我们来看下用矩阵形式表达的稳态潮流计算牛顿法的雅各比矩阵是如何得到的，该方法来源于[MatPower](http://www.pserc.cornell.edu/matpower/TN2-OPF-Derivatives.pdf):
 
 ---
 [
@@ -85,12 +89,12 @@ x_{n+1} = x_n - \frac{f(x_n)}{f'(x_n)}
 \end{equation}
 $$
 
-这个迭代公式特指求出$f(x)=0$这个方程的根$x$,然而向量和矩阵没有除法，除以$f'(x)=0$实际转变为雅各比矩阵的逆矩阵$\frac{\partial \bm F}{\partial \bm x_n}^{-1}$，即
+这个迭代公式特指求出$f(x)=0$这个方程的根$x$,然而向量和矩阵没有除法，除以$f'(x)=0$实际转变为雅各比矩阵的逆矩阵$\frac{\partial \boldsymbol F}{\partial \boldsymbol x_n}^{-1}$，即
 $$
 \begin{equation}
 \begin{aligned}
-\bm x_{n+1} & = \bm x_n - J^{-1}f(x_n),  \\
- J & = \frac{\partial \bm F}{\partial \bm x_n}
+\boldsymbol x_{n+1} & = \boldsymbol x_n - J^{-1}f(x_n),  \\
+ J & = \frac{\partial \boldsymbol F}{\partial \boldsymbol x_n}
 \end{aligned}
 \end{equation}
 $$
@@ -99,7 +103,7 @@ $$
 $$
 \begin{equation}
 \begin{aligned}
-\Delta \bm x = -J^{-1}f(x_n)
+\Delta \boldsymbol x = -J^{-1}f(x_n)
 \end{aligned}
 \end{equation}
 $$
@@ -107,23 +111,23 @@ $$
 $$
 \begin{equation}
 \begin{aligned}
-         \bm F(\bm V) = \bm S_{bus} - \bm S_{inj} = 0
+         \boldsymbol F(\boldsymbol V) = \boldsymbol S_{bus} - \boldsymbol S_{inj} = 0
 \end{aligned}
 \end{equation}
 $$
-其中 $\bm F$ 是构造出的在方程的根处等于0的函数，即节点功率平衡，$\bm S_{inj}$是电源以及负荷注入节点的功率，是一个常数。对这个复数方程可以求一阶导，得到：
+其中 $\boldsymbol F$ 是构造出的在方程的根处等于0的函数，即节点功率平衡，$\boldsymbol S_{inj}$是电源以及负荷注入节点的功率，是一个常数。对这个复数方程可以求一阶导，得到：
 
-\[
-\frac{\partial \bm S}{\partial \bm V_m} = \text{diag}[\bm V]  (Y_{\text{bus}}  \text{diag}[\bm V_{\text{norm}}])^* + \\ \text{diag}[\bm I_{\text{bus}}]^*  \text{diag}[\bm V_{\text{norm}}]，
-\]
+$$
+\frac{\partial \boldsymbol S}{\partial \boldsymbol V_m} = \text{diag}[\boldsymbol V]  (Y_{\text{bus}}  \text{diag}[\boldsymbol V_{\text{norm}}])^* + \\ \text{diag}[\boldsymbol I_{\text{bus}}]^*  \text{diag}[\boldsymbol V_{\text{norm}}]，
+$$
 
-\[
-\frac{\partial \bm S}{\partial \bm V_a} = i\cdot\text{diag}[\bm V]  (\text{diag}[\bm I_{\text{bus}}] - Y_{\text{bus}}  \text{diag}[V])^* ，
-\]
+$$
+\frac{\partial \boldsymbol S}{\partial \boldsymbol V_a} = i\cdot\text{diag}[\boldsymbol V]  (\text{diag}[\boldsymbol I_{\text{bus}}] - Y_{\text{bus}}  \text{diag}[\boldsymbol V])^* ，
+$$
 
-\[
-     \bm V_{norm} = \frac{\bm V}{|\bm V|}，
-\]
+$$
+     \boldsymbol V_{norm} = \frac{\boldsymbol V}{|\boldsymbol V|}，\boldsymbol I_{bus} = Y_{bus}\boldsymbol V
+$$
 
 这个导数是复数形式的，还有二阶导数构成黑塞矩阵的原理在MatPower的文献中用于最优潮流计算。复功率导数取出实部虚部就能得到PQ对应的导数。
 其迭代格式的雅各比矩阵（实数PQ矩阵）和电压向量为:
@@ -131,43 +135,38 @@ $$
 \begin{equation}
 \begin{aligned}
           J & = \begin{bmatrix}
-\frac{\partial \bm P_{bus}}{\partial \bm \theta} & \frac{\partial \bm P_{bus}}{\partial \bm V_m} \\ 
-\frac {\partial \bm Q_{bus}}{\partial \bm \theta}  &\frac{\partial \bm Q_{bus}}{\partial \bm Vm}  
+\frac{\partial \boldsymbol P_{bus}}{\partial \boldsymbol \theta} & \frac{\partial \boldsymbol P_{bus}}{\partial \boldsymbol V_m} \\ 
+\frac {\partial \boldsymbol Q_{bus}}{\partial \boldsymbol \theta}  &\frac{\partial \boldsymbol Q_{bus}}{\partial \boldsymbol Vm}  
 \end{bmatrix}, \\
-\bm x & = \begin{bmatrix} \bm V_a \\ \bm V_m \end{bmatrix}
+\boldsymbol x & = \begin{bmatrix} \boldsymbol V_a \\ \boldsymbol V_m \end{bmatrix}
 \end{aligned}
 \end{equation}
 $$
 
 
-在实际潮流问题中，$\bm S_{inj}$ 的部分节点实数部分和虚数部分是提前确定的，电压$\bm V$ 的部分节点相角 $\bm V_a$ 和幅值 $\bm V_m$ 是提前确定的，而没有被确定的部分视为在预设条件下自动平衡，比如平衡节点的电压是确定的，但是P，Q都由最终公式得到。也就不能全部出现在最后的方程求解过程中。由此产生三种基本节点，PQ，PV，平衡节点。这些已知的量必须作为等式约束条件考虑在求解过程中，并且从雅各比矩阵中剔除。
-
-
-<details>
-
-<summary>有关处理等式约束的原理的小贴士</summary>
+在实际潮流问题中，$\boldsymbol S_{inj}$ 的部分节点实数部分和虚数部分是提前确定的，电压$\boldsymbol V$ 的部分节点相角 $\boldsymbol V_a$ 和幅值 $\boldsymbol V_m$ 是提前确定的，而没有被确定的部分视为在预设条件下自动平衡，比如平衡节点的电压是确定的，但是P，Q都由最终公式得到。也就不能全部出现在最后的方程求解过程中。由此产生三种基本节点，PQ，PV，平衡节点。这些已知的量必须作为等式约束条件考虑在求解过程中，并且从雅各比矩阵中剔除相关方程。这种常量等式约束可以用如下方法化简：
 
  $$
 \begin{bmatrix}
 A_{11} & A_{12} \\ 
 A_{21}   & A_{22}  
 \end{bmatrix} \begin{bmatrix}
-\bm x_{constant} \\ 
-\bm x_{unknown}  
+\boldsymbol x_{constant} \\ 
+\boldsymbol x_{unknown}  
 \end{bmatrix} = \begin{bmatrix}
-\bm b_{1} \\ 
-\bm b_{2}  
+\boldsymbol b_{1} \\ 
+\boldsymbol b_{2}  
 \end{bmatrix}
 $$
 
 
-对于这个方程组，只需要求解$\bm x_{unknown}$，得到
+对于这个方程组，只需要求解$\boldsymbol x_{unknown}$，得到
 $$
-\bm x_{unknown} = A^{-1}_{22}(\bm b_2-A_{21}\bm x_{constant})
-$$$$
+\boldsymbol x_{unknown} = A^{-1}_{22}(\boldsymbol b_2-A_{21}\boldsymbol x_{constant})
+$$
 
-注意到，在雅各比矩阵中，关于 $x_{constant}$ 等式约束项的偏导全部为0，因此 $A_{21} = 0$ ，然而该公式说明即使 $A_{21} \neq 0$ 甚至 $\bm x_{constant}$ 不需要为常数时我们仍然可以进行矩阵化简，相关结论在机电暂态稳定性仿真时十分有用。
-</details>
+注意到，在雅各比矩阵中，关于 $x_{constant}$ 等式约束项的偏导全部为0，因此 $A_{21} = 0$ ，然而该公式说明即使 $A_{21} \neq 0$ 甚至 $\boldsymbol x_{constant}$ 不需要为常数时我们仍然可以进行矩阵化简，相关结论在机电暂态稳定性仿真时十分有用。
+
 
 ## 矩阵切分方法
 在过去的PyPower和PandaPower以及大部分我所知的开源实现中，节点的识别和雅各比矩阵剔除切分都是在迭代过程中动态选取原始系统各种节点的行列去临阵构造约束后的雅各比矩阵，在PandaPower种，他们使用了一个lookup table去加速这个过程，然而不论怎样，这样做不仅重复了无意义的内存读取和分配，而且开发工作量巨大。而在RustPower中，在进入潮流计算之前，就会产生如下的导纳矩阵，使得节点全部可以用连续内存读取 从而更容易产生合适的雅各比矩阵:
@@ -175,40 +174,40 @@ $$$$
 $$
 \begin{equation}
 \begin{bmatrix}
-\bm S_{pv} \\ 
-\bm S_{pq} \\
-\bm S_{ext}
+\boldsymbol S_{pv} \\ 
+\boldsymbol S_{pq} \\
+\boldsymbol S_{ext}
 \end{bmatrix} = diag
 \begin{bmatrix}
-\bm V_{pv} \\ 
-\bm V_{pq} \\
-\bm V_{ext}
+\boldsymbol V_{pv} \\ 
+\boldsymbol V_{pq} \\
+\boldsymbol V_{ext}
 \end{bmatrix} (
 Y_{pmut}
 \begin{bmatrix}
-\bm V_{pv} \\ 
-\bm V_{pq} \\
-\bm V_{ext}
+\boldsymbol V_{pv} \\ 
+\boldsymbol V_{pq} \\
+\boldsymbol V_{ext}
 \end{bmatrix} )^{*}
 \end{equation}
 $$
 这样在雅各比矩阵切片时，只需要知道有多少PV,PQ,和平衡节点，就可以切出连续的分块矩阵。而求解状态更新也不再需要匹配节点索引，可以直接向量相加。并且这个方法对于任意多的节点(0个PV节点或者多个平衡节点)以及特殊类型都可以适用，实现起来非常简单。
 得到这个方法的核心在于如下数学原理：
-首先让我们记调整顺序之前的电气量为$S$,$V$,$Y$等，调整后的为$\bm S^{p}$,$\bm V^{p}$,$Y^{p}$，通过基本的线性代数理论,我们发现$V^{p}$可以通过如下线性变换得到
+首先让我们记调整顺序之前的电气量为$S$,$V$,$Y$等，调整后的为$\boldsymbol S^{p}$,$\boldsymbol V^{p}$,$Y^{p}$，通过基本的线性代数理论,我们发现$V^{p}$可以通过如下线性变换得到
 $$
- \bm S^{p} = T\bm S,\bm V^{p} = T\bm V
+ \boldsymbol S^{p} = T\boldsymbol S,\boldsymbol V^{p} = T\boldsymbol V
 $$
 其中，T为每行只有1个为1的元素的置换矩阵，左乘可以置换矩阵的行，右乘置换矩阵的列，它的具体内容不在这里赘述。于是可以发现
 
-$$S^{p}=T\bm S_{bus} = T diag[\bm V]Y_{bus}^{*}\bm V^{*}\\
-T\bm S_{bus} = T diag[\bm V]T^{-1}TY_{bus}^{*}\bm T^{-1}TV^{*}$$
+$$S^{p}=T\boldsymbol S_{bus} = T diag[\boldsymbol V]Y_{bus}^{*}\boldsymbol V^{*}\\
+T\boldsymbol S_{bus} = T diag[\boldsymbol V]T^{-1}TY_{bus}^{*}\boldsymbol T^{-1}TV^{*}$$
 并且我们不难发现
-$$ T diag[\bm V]T^{-1} = diag[T\bm V] = diag[V^{p}]$$
+$$ T diag[\boldsymbol V]T^{-1} = diag[T\boldsymbol V] = diag[V^{p}]$$
 进行代换就可以得到
 $$
 \begin{equation}
 \begin{aligned}
-\bm S^{p}_{bus} &= diag[\bm V^{p}](Y^{p}_{bus}\bm V^{p})^*， \\
+\boldsymbol S^{p}_{bus} &= diag[\boldsymbol V^{p}](Y^{p}_{bus}\boldsymbol V^{p})^*， \\
 Y_{p} &= TY_{bus}T^{-1}
 \end{aligned}
 \end{equation}
@@ -225,7 +224,7 @@ $$
 $$
 \begin{equation}
 \begin{aligned}
-(T^{*})^{-1}\bm i & = Y T\bm v，\\
+(T^{*})^{-1}\boldsymbol i & = Y T\boldsymbol v，\\
      T &=  \begin{bmatrix}
 1 &  0\\ 
 0 & k 
@@ -257,7 +256,7 @@ $$
 所以得到的$Y$是
 $$
 \begin{equation}
- T^{*}Y T = \begin{bmatrix}y & y k_{m} e^{ i \theta}\\ y k_{m} e^{- i \theta} &  y 
+ T^{*}Y T = \begin{bmatrix}y *k_{m}^{2} & y k_{m} e^{ i \theta}\\ y k_{m} e^{- i \theta} &  y 
  \end{bmatrix}
 \end{equation}
 $$
