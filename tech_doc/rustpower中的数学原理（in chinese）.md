@@ -1,17 +1,11 @@
 ---
-title: "Page Title"
-subtitle: "Page sub-title"
-author: "Author name"
-description: "This is a test"
-institute: "MU"
-date: "20/02/2020"
+title: "RustPower中的数学原理"
+subtitle: "图论，矩阵，向量万岁！"
+author: "Tianshi Cheng"
+description: ""
+institute: "UofA"
+date: "01/05/2024"
 abstract: "YAML"
-keywords: 
-  - key1
-  - key2
-tags:
-  - tag1
-  - tag2
 useMath: true
 ---
 # 简介
