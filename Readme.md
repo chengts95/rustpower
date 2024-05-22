@@ -10,13 +10,15 @@ RustPower is a power flow calculation library written in Rust, designed to perfo
 - Supports for pandapower network Json files via Serde (todo:CSV parsing)
 - Handles external grid nodes and transformer elements
 - RSparse and KLU solver* (preferred but optional )
-\* need to set "SUITESPARSE_DIR" to the installed folder on Windows
+
+\* Need to set "SUITESPARSE_DIR" to the installed folder on Windows. The KLU feature is disabled by default.
+
 ## Comparison with Existing Tools 
 
 PyPower and PandaPower: These tools use traditional ways to build admittance matrices. They perform dynamic slicing in each iteration to extract vectors and matrices for PQ and PV nodes. While this approach is general, it can lead to performance bottlenecks when dealing with large-scale power systems.
 
 This Program: By using some simple linear algebra methods, this program constructs the required vectors and matrices during initialization, avoiding the need for dynamic slicing of PV, PQ, Ext nodes in each iteration. Based on experience with real-time EMT simulation, I believe it will never become necessary to check individual column in the jacobian matrix during its construction. This not only simplifies the code logic but also significantly improves computational efficiency beyond the benefits brought by Rust and KLU.
-Currently, on IEEE 39-Bus system, this program takes 300 microseconds to finish 3 iterations, which is 10 times faster than Python and Numba-based implementation.
+Currently, on IEEE 39-Bus system, this program takes around 300 microseconds (with KLU) and 500 microseconds (with RSparse solver) to finish 3 iterations, which is 10 times faster than Python and Numba-based implementation.
 
 
 ## Installation
