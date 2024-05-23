@@ -2,7 +2,6 @@ use csv::ReaderBuilder;
 use nalgebra::{vector, Complex};
 use serde::Deserializer;
 use serde::{Deserialize, Serialize};
-use std::env;
 use std::f64::consts::PI;
 use std::fs::File;
 use std::{io::Read, option::Option};
@@ -10,8 +9,9 @@ use std::{io::Read, option::Option};
 use crate::basic::system::*;
 use crate::prelude::admittance::*;
 
-//This module is used to parse pandapower network parameters
+/// This module is used to parse pandapower network parameters
 
+/// Deserializes a number from JSON format.
 fn from_number<'de, D>(deserializer: D) -> Result<i64, D::Error>
 where
     D: Deserializer<'de>,
@@ -24,6 +24,7 @@ where
     Err(serde::de::Error::custom("invalid number format"))
 }
 
+/// Deserializes a string from JSON format.
 fn from_str<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: Deserializer<'de>,
@@ -38,6 +39,7 @@ where
     Ok(None)
 }
 
+/// Represents a bus in the network.
 #[derive(Default, Debug, Serialize, Deserialize, Clone)]
 pub struct Bus {
     pub index: i64,
@@ -53,6 +55,7 @@ pub struct Bus {
     pub zone: i64,
 }
 
+/// Represents a generator in the network.
 #[derive(Default, Debug, Serialize, Deserialize)]
 pub struct Gen {
     pub bus: i64,
@@ -73,6 +76,7 @@ pub struct Gen {
     pub slack_weight: f64,
 }
 
+/// Represents a load in the network.
 #[derive(Default, Debug, Serialize, Deserialize)]
 pub struct Load {
     pub bus: i64,
@@ -89,6 +93,7 @@ pub struct Load {
     pub type_: Option<String>, // Added underscore to avoid conflict with Rust keyword
 }
 
+/// Represents a line in the network.
 #[derive(Default, Debug, Serialize, Deserialize)]
 pub struct Line {
     pub c_nf_per_km: f64,
@@ -109,6 +114,7 @@ pub struct Line {
     pub std_type: Option<String>,
 }
 
+/// Represents a transformer in the network.
 #[derive(Default, Debug, Serialize, Deserialize)]
 pub struct Transformer {
     pub df: f64,
@@ -137,6 +143,7 @@ pub struct Transformer {
     pub tap_step_percent: Option<f64>,
 }
 
+/// Represents an external grid in the network.
 #[derive(Default, Debug, Serialize, Deserialize)]
 pub struct ExtGrid {
     pub bus: i64,
@@ -151,6 +158,7 @@ pub struct ExtGrid {
     pub name: Option<String>,
 }
 
+/// Represents a shunt in the network.
 #[derive(Default, Debug, Serialize, Deserialize)]
 pub struct Shunt {
     pub bus: i64,
@@ -163,6 +171,7 @@ pub struct Shunt {
     pub name: Option<String>,
 }
 
+/// Represents a network.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Network {
     pub gen: Option<Vec<Gen>>,
@@ -175,6 +184,8 @@ pub struct Network {
     pub f_hz: f64,
     pub sn_mva: f64,
 }
+
+/// Trait for saving a network to CSV files.
 pub trait ToCSV {
     fn save_csv(&self) -> Result<(), &'static str>;
 }
@@ -201,12 +212,14 @@ impl Default for Network {
     }
 }
 
+/// Loads a pandapower CSV file into a vector of the specified type.
 fn load_pandapower_csv<T: for<'de> Deserialize<'de>>(name: String) -> Vec<T> {
     let file = read_csv(&name).unwrap();
     let rdr = ReaderBuilder::new().from_reader(file.as_bytes());
     rdr.into_deserialize::<T>().map(|x| x.unwrap()).collect()
 }
 
+/// Reads a CSV file and replaces "True"/"False" with "true"/"false".
 fn read_csv(name: &str) -> Result<String, std::io::Error> {
     let mut file = File::open(name)?;
     let mut buffer = String::new();
@@ -215,6 +228,7 @@ fn read_csv(name: &str) -> Result<String, std::io::Error> {
     Ok(file)
 }
 
+/// Loads a CSV folder into a Network structure.
 pub fn load_csv_folder(folder: String) -> Network {
     let bus = folder.to_owned() + "/bus.csv";
     let gen = folder.to_owned() + "/gen.csv";
@@ -263,6 +277,7 @@ fn line_to_admit(wbase: f64, bus: &[Bus], line: &Line) -> Vec<AdmittanceBranch> 
     out.push(l);
     out
 }
+
 /// Converts a load to its equivalent PQ nodes.
 fn load_to_pqnode(item: &Load) -> [PQNode; 1] {
     let s = Complex::new(item.p_mw, item.q_mvar);
@@ -345,6 +360,7 @@ fn trafo_to_admit(item: &Transformer) -> Vec<AdmittanceBranch> {
     v
 }
 
+/// Collects PQ nodes from the given items using the provided converter function.
 #[inline(always)]
 fn collect_pq_nodes<T>(items: Option<Vec<T>>, converter: fn(&T) -> [PQNode; 1]) -> Vec<PQNode> {
     items
@@ -352,6 +368,60 @@ fn collect_pq_nodes<T>(items: Option<Vec<T>>, converter: fn(&T) -> [PQNode; 1]) 
         .iter()
         .flat_map(converter)
         .collect()
+}
+
+/// Reads a CSV file from the given map and deserializes it into a vector of the specified type.
+fn csv_from_map<T: for<'de> Deserialize<'de>>(
+    map: &std::collections::HashMap<String, String>,
+    key: &str,
+) -> Option<Vec<T>> {
+    if !map.contains_key(key) {
+        return None;
+    }
+
+    let s = map
+        .get(key)
+        .unwrap()
+        .replace("True", "true")
+        .replace("False", "false");
+    let rdr = ReaderBuilder::new().from_reader(s.as_bytes());
+    Some(rdr.into_deserialize::<T>().map(|x| x.unwrap()).collect())
+}
+
+/// Macro to read network data from a CSV file.
+macro_rules! read_csv_network {
+    ($net:ident, $map:ident, { $($field:ident: $file:expr),* $(,)? }) => {
+        $(
+            $net.$field = csv_from_map(&$map, $file);
+        )*
+    };
+}
+
+/// Loads a network from a ZIP file containing CSV files.
+pub fn load_csv_zip(name: String) {
+    let f = File::open(name).unwrap();
+    let mut zip = zip::ZipArchive::new(f).unwrap();
+    let mut map = std::collections::HashMap::new();
+    for i in 0..zip.len() {
+        let mut file = zip.by_index(i).unwrap();
+
+        if file.is_file() {
+            let mut s = String::with_capacity(file.size() as usize);
+            file.read_to_string(&mut s).unwrap();
+            map.insert(file.name().to_owned(), s);
+        }
+    }
+
+    let mut net = Network::default();
+    net.bus = csv_from_map(&map, "bus.csv").unwrap();
+    read_csv_network!(net, map, {
+        gen: "gen.csv",
+        line: "line.csv",
+        shunt: "shunt.csv",
+        trafo: "trafo.csv",
+        ext_grid: "ext_grid.csv",
+        load: "load.csv",
+    });
 }
 
 impl From<Network> for PFNetwork {
@@ -393,10 +463,10 @@ impl From<Network> for PFNetwork {
         }
     }
 }
-
+#[cfg(test)]
 mod tests {
     use super::*;
-
+    use std::env;
     #[test]
     fn test_load_csv() -> () {
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -409,6 +479,7 @@ mod tests {
             println!("{:?}", record);
         }
     }
+
     #[test]
     fn load_csv_all() -> () {
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -416,5 +487,12 @@ mod tests {
         let mut net = load_csv_folder(folder);
         net.f_hz = 60.0;
         net.sn_mva = 100.0;
+    }
+    #[test]
+    fn test_load_csv_zip() -> () {
+        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let folder = format!("{}/cases/IEEE118", dir);
+        let name = folder.to_owned() + "/data.zip";
+        load_csv_zip(name);
     }
 }
