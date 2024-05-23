@@ -1,12 +1,14 @@
-use csv::{DeserializeRecordsIntoIter, ReaderBuilder};
+use csv::ReaderBuilder;
+use nalgebra::{vector, Complex};
 use serde::Deserializer;
 use serde::{Deserialize, Serialize};
-use soa_rs::Soars;
+use std::env;
+use std::f64::consts::PI;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
-use std::option::Option;
-use std::path::Path;
-use std::str::FromStr;
+use std::{io::Read, option::Option};
+
+use crate::basic::system::*;
+use crate::prelude::admittance::*;
 
 //This module is used to parse pandapower network parameters
 
@@ -87,8 +89,7 @@ pub struct Load {
     pub type_: Option<String>, // Added underscore to avoid conflict with Rust keyword
 }
 
-#[derive(Default, Debug, Serialize, Deserialize, Soars)]
-#[soa_derive(include(Ref), Serialize)]
+#[derive(Default, Debug, Serialize, Deserialize)]
 pub struct Line {
     pub c_nf_per_km: f64,
     pub df: f64,
@@ -162,7 +163,7 @@ pub struct Shunt {
     pub name: Option<String>,
 }
 
-#[derive(Default, Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Network {
     pub gen: Option<Vec<Gen>>,
     pub bus: Vec<Bus>,
@@ -184,27 +185,29 @@ impl ToCSV for Network {
     }
 }
 
-#[test]
-fn test_load_csv() -> () {
-    use std::io::{BufRead, BufReader};
-    // let file_path = "data.zip";
-    let folder = "D:/projects/rust/rustpower/out";
-    let name = folder.to_owned() + "/bus.csv";
-    let file = read_csv(&name).unwrap();
-    let mut rdr = ReaderBuilder::new().from_reader(file.as_bytes());
-    for result in rdr.deserialize() {
-        let record: Bus = result.unwrap();
-        println!("{:?}", record);
+impl Default for Network {
+    fn default() -> Self {
+        Self {
+            gen: None,
+            bus: Vec::new(),
+            load: None,
+            line: None,
+            trafo: None,
+            shunt: None,
+            ext_grid: None,
+            f_hz: 60.0,
+            sn_mva: 100.0,
+        }
     }
 }
 
-pub fn load_pandapower_csv<T:for<'de> Deserialize<'de>>(name: String) -> Vec<T> {
+fn load_pandapower_csv<T: for<'de> Deserialize<'de>>(name: String) -> Vec<T> {
     let file = read_csv(&name).unwrap();
     let rdr = ReaderBuilder::new().from_reader(file.as_bytes());
-     rdr.into_deserialize::<T>().map(|x| x.unwrap()).collect()
+    rdr.into_deserialize::<T>().map(|x| x.unwrap()).collect()
 }
 
-fn read_csv(name: &str) -> Result<String,std::io::Error> {
+fn read_csv(name: &str) -> Result<String, std::io::Error> {
     let mut file = File::open(name)?;
     let mut buffer = String::new();
     file.read_to_string(&mut buffer)?;
@@ -212,17 +215,13 @@ fn read_csv(name: &str) -> Result<String,std::io::Error> {
     Ok(file)
 }
 
-#[test]
-fn load_csv_all() -> () {
-    use std::io::{BufRead, BufReader};
-    // let file_path = "data.zip";
-    let folder = "D:/projects/rust/rustpower/out";
+pub fn load_csv_folder(folder: String) -> Network {
     let bus = folder.to_owned() + "/bus.csv";
     let gen = folder.to_owned() + "/gen.csv";
     let line = folder.to_owned() + "/line.csv";
     let shunt = folder.to_owned() + "/shunt.csv";
     let trafo = folder.to_owned() + "/trafo.csv";
-    let extgrid = folder.to_owned() + "/extgrid.csv";
+    let extgrid = folder.to_owned() + "/ext_grid.csv";
     let load = folder.to_owned() + "/load.csv";
     let mut net = Network::default();
     net.bus = load_pandapower_csv(bus);
@@ -232,7 +231,190 @@ fn load_csv_all() -> () {
     net.trafo = Some(load_pandapower_csv(trafo));
     net.ext_grid = Some(load_pandapower_csv(extgrid));
     net.load = Some(load_pandapower_csv(load));
-    net.f_hz = 60.0;
-    net.sn_mva = 100.0;
-    println!("{:?}",net);
+    net
+}
+
+/// Converts a line to its equivalent admittance branches.
+fn line_to_admit(wbase: f64, bus: &[Bus], line: &Line) -> Vec<AdmittanceBranch> {
+    let mut out = Vec::new();
+    let (mut shunt_f, mut shunt_t) = (AdmittanceBranch::default(), AdmittanceBranch::default());
+    let b = wbase * 1e-9 * line.c_nf_per_km * line.length_km * (line.parallel as f64);
+    let g = line.g_us_per_km * line.length_km * 1e-6 * (line.parallel as f64);
+    let v_base = bus[line.from_bus as usize].vn_kv;
+    let a = Admittance(0.5 * Complex { re: g, im: b });
+    if line.g_us_per_km != 0.0 || line.c_nf_per_km != 0.0 {
+        shunt_f.y = a.clone();
+        shunt_f.v_base = v_base;
+        shunt_t.y = a;
+        shunt_t.v_base = v_base;
+        shunt_f.port = Port2(vector![line.from_bus as i32, GND]);
+        shunt_t.port = Port2(vector![line.to_bus as i32, GND]);
+        out.push(shunt_f);
+        out.push(shunt_t);
+    }
+
+    let rl = line.r_ohm_per_km * line.length_km * (line.parallel as f64);
+    let xl = line.x_ohm_per_km * line.length_km * (line.parallel as f64);
+    let l = AdmittanceBranch {
+        y: Admittance(1.0 / Complex { re: rl, im: xl }),
+        port: Port2(vector![line.from_bus as i32, line.to_bus as i32]),
+        v_base,
+    };
+    out.push(l);
+    out
+}
+/// Converts a load to its equivalent PQ nodes.
+fn load_to_pqnode(item: &Load) -> [PQNode; 1] {
+    let s = Complex::new(item.p_mw, item.q_mvar);
+    let bus = item.bus;
+    [PQNode { s, bus }]
+}
+
+/// Converts a generator to its equivalent PV nodes.
+fn gen_to_pvnode(item: &Gen) -> [PVNode; 1] {
+    let p = item.p_mw;
+    let v = item.vm_pu;
+    let bus = item.bus;
+    [PVNode { p, v, bus }]
+}
+
+/// Converts an external grid to its equivalent external grid node.
+fn extgrid_to_extnode(item: &ExtGrid) -> [ExtGridNode; 1] {
+    let bus = item.bus;
+    let v = item.vm_pu;
+    let phase = item.va_degree.to_radians();
+
+    [ExtGridNode { v, phase, bus }]
+}
+
+/// Converts a shunt to its equivalent PQ nodes.
+fn shunt_to_pqnode(item: &Shunt) -> [PQNode; 1] {
+    let s = Complex::new(item.p_mw, item.q_mvar);
+    let bus = item.bus;
+    [PQNode { s, bus }]
+}
+
+/// Converts a transformer to its equivalent admittance branches.
+fn trafo_to_admit(item: &Transformer) -> Vec<AdmittanceBranch> {
+    let v_base = item.vn_hv_kv;
+    let vkr = item.vkr_percent * 0.01;
+    let vk = item.vk_percent * 0.01;
+
+    let tap_m = 1.0 + item.tap_pos.unwrap_or(0.0) * 0.01 * item.tap_step_percent.unwrap_or(0.0);
+
+    let zbase = v_base * v_base / item.sn_mva;
+    let z = zbase * vk;
+    let parallel = item.parallel;
+
+    let re = zbase * vkr;
+    let im = (z.powi(2) - re.powi(2)).sqrt();
+    let port = Port2(vector![item.hv_bus, item.lv_bus]);
+    let y = 1.0 / (Complex { re, im } * parallel as f64);
+    let sc = AdmittanceBranch {
+        y: Admittance(y / tap_m),
+        port,
+        v_base,
+    };
+    let mut v = Vec::new();
+    v.push(sc);
+    v.push(AdmittanceBranch {
+        y: Admittance((1.0 - tap_m) * y / tap_m.powi(2)),
+        port: Port2(vector![item.hv_bus, GND]),
+        v_base,
+    });
+    v.push(AdmittanceBranch {
+        y: Admittance((1.0 - 1.0 / tap_m) * y),
+        port: Port2(vector![item.lv_bus, GND]),
+        v_base,
+    });
+    let re = zbase * (0.001 * item.pfe_kw) / item.sn_mva;
+    let im = zbase / (0.01 * item.i0_percent);
+    let c = parallel as f64 / Complex { re, im };
+
+    if c.is_nan() {
+        return v;
+    }
+    let port = Port2(vector![item.hv_bus, GND]);
+    let y = Admittance(0.5 * c / tap_m.powi(2));
+    let shunt = AdmittanceBranch { y, port, v_base };
+    v.push(shunt);
+    let port = Port2(vector![item.lv_bus, GND]);
+    let y = Admittance(0.5 * c);
+    let shunt = AdmittanceBranch { y, port, v_base };
+    v.push(shunt);
+    v
+}
+
+#[inline(always)]
+fn collect_pq_nodes<T>(items: Option<Vec<T>>, converter: fn(&T) -> [PQNode; 1]) -> Vec<PQNode> {
+    items
+        .unwrap_or_else(Vec::new)
+        .iter()
+        .flat_map(converter)
+        .collect()
+}
+
+impl From<Network> for PFNetwork {
+    fn from(value: Network) -> Self {
+        let v_base = value.bus[value.ext_grid.as_ref().unwrap()[0].bus as usize].vn_kv;
+        let s_base = value.sn_mva;
+        let wbase = value.f_hz * 2.0 * PI;
+        let binding = value.line.unwrap_or(Vec::new());
+        let bus = &value.bus;
+        let a = binding
+            .iter()
+            .flat_map(|x| line_to_admit(wbase, bus, x).into_iter());
+
+        let binding = value.trafo.unwrap_or(Vec::new());
+        let b = binding.iter().flat_map(|x| trafo_to_admit(x).into_iter());
+        let y_br = a.chain(b).collect();
+
+        let ext = extgrid_to_extnode(&value.ext_grid.unwrap_or(Vec::new())[0])[0];
+        let pq_loads = collect_pq_nodes(value.load, load_to_pqnode)
+            .into_iter()
+            .chain(collect_pq_nodes(value.shunt, shunt_to_pqnode))
+            .collect();
+
+        let pv_nodes = value
+            .gen
+            .unwrap_or(Vec::new())
+            .iter()
+            .map(|x| gen_to_pvnode(x).into_iter())
+            .flatten()
+            .collect();
+        Self {
+            v_base,
+            s_base,
+            pq_loads,
+            pv_nodes,
+            ext,
+            y_br,
+            buses: value.bus,
+        }
+    }
+}
+
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_load_csv() -> () {
+        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let folder = format!("{}/cases/IEEE118", dir);
+        let name = folder.to_owned() + "/bus.csv";
+        let file = read_csv(&name).unwrap();
+        let mut rdr = ReaderBuilder::new().from_reader(file.as_bytes());
+        for result in rdr.deserialize() {
+            let record: Bus = result.unwrap();
+            println!("{:?}", record);
+        }
+    }
+    #[test]
+    fn load_csv_all() -> () {
+        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let folder = format!("{}/cases/IEEE118", dir);
+        let mut net = load_csv_folder(folder);
+        net.f_hz = 60.0;
+        net.sn_mva = 100.0;
+    }
 }
