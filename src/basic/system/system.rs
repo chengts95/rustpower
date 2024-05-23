@@ -25,6 +25,7 @@ pub struct AdmittanceBranch {
     pub y: admittance::Admittance,
     /// The port information of the branch.
     pub port: admittance::Port2,
+    pub v_base: f64,
 }
 
 /// Represents a node with specified power and bus information in a power system.
@@ -99,16 +100,19 @@ fn collect_pq_nodes<T>(items: Option<Vec<T>>, converter: fn(&T) -> [PQNode; 1]) 
 
 impl From<Network> for PFNetwork {
     fn from(value: Network) -> Self {
-        let v_base = value.bus[0].vn_kv;
+        let v_base = value.bus[value.ext_grid.as_ref().unwrap()[0].bus as usize].vn_kv;
         let s_base = value.sn_mva;
         let wbase = value.f_hz * 2.0 * PI;
         let binding = value.line.unwrap_or(Vec::new());
+        let bus = &value.bus;
         let a = binding
             .iter()
-            .flat_map(|x| line_to_admit(wbase, x).into_iter());
+            .flat_map(|x| line_to_admit(wbase, bus, x).into_iter());
+
         let binding = value.trafo.unwrap_or(Vec::new());
         let b = binding.iter().flat_map(|x| trafo_to_admit(x).into_iter());
         let y_br = a.chain(b).collect();
+
         let ext = extgrid_to_extnode(&value.ext_grid.unwrap_or(Vec::new())[0])[0];
         let pq_loads = collect_pq_nodes(value.load, load_to_pqnode)
             .into_iter()
@@ -150,15 +154,21 @@ impl From<Network> for PFNetwork {
 fn create_ybus(
     pf: &PFNetwork,
     incidence_matrix: &CooMatrix<Complex<f64>>,
-    admits: &[Complex<f64>],
+    admits: &[AdmittanceBranch],
 ) -> CsrMatrix<Complex<f64>> {
     let mut diag_admit = CsrMatrix::identity(pf.y_br.len());
-    diag_admit.values_mut().clone_from_slice(admits);
+    let y: Vec<_> = admits.iter().map(|x| x.y.0).collect();
+    let base: Vec<_> = admits.iter().map(|x| x.v_base).collect();
+    diag_admit.values_mut().clone_from_slice(y.as_slice());
+    diag_admit
+        .values_mut()
+        .iter_mut()
+        .zip(base)
+        .for_each(|(x, vbase)| (*x) *= (vbase * vbase) / pf.s_base);
 
-    let zbase = pf.v_base * pf.v_base / pf.s_base;
     let incidence_matrix = CsrMatrix::from(incidence_matrix);
     let mut ybus = &incidence_matrix * (diag_admit * incidence_matrix.transpose());
-    ybus.values_mut().iter_mut().for_each(|x| (*x) *= zbase);
+
     ybus
 }
 
@@ -210,6 +220,7 @@ fn create_premute_mat(
     let row_indices = DVector::from_fn(nodes, |i, _| i);
     let mut col_indices = DVector::from_fn(nodes, |i, _| i);
     let values = DVector::from_element(nodes, 1);
+
     let n_bus = pv.len() + pq.len();
     for i in 0..pv.len() {
         //let temp = col_indices[i];
@@ -238,11 +249,12 @@ fn create_premute_mat(
 }
 
 /// Converts a line to its equivalent admittance branches.
-fn line_to_admit(wbase: f64, line: &Line) -> Vec<AdmittanceBranch> {
+fn line_to_admit(wbase: f64, bus: &[Bus], line: &Line) -> Vec<AdmittanceBranch> {
     let mut out = Vec::new();
     let (mut shunt_f, mut shunt_t) = (AdmittanceBranch::default(), AdmittanceBranch::default());
     let b = wbase * 1e-9 * line.c_nf_per_km * line.length_km * (line.parallel as f64);
     let g = line.g_us_per_km * line.length_km * 1e-6 * (line.parallel as f64);
+    let v_base = bus[line.from_bus as usize].vn_kv;
     let a = Admittance(0.5 * Complex { re: g, im: b });
     if line.g_us_per_km != 0.0 || line.c_nf_per_km != 0.0 {
         shunt_f.y = a.clone();
@@ -258,6 +270,7 @@ fn line_to_admit(wbase: f64, line: &Line) -> Vec<AdmittanceBranch> {
     let l = AdmittanceBranch {
         y: Admittance(1.0 / Complex { re: rl, im: xl }),
         port: Port2(vector![line.from_bus as i32, line.to_bus as i32]),
+        v_base,
     };
     out.push(l);
     out
@@ -295,13 +308,13 @@ fn shunt_to_pqnode(item: &Shunt) -> [PQNode; 1] {
 
 /// Converts a transformer to its equivalent admittance branches.
 fn trafo_to_admit(item: &Transformer) -> Vec<AdmittanceBranch> {
-    let vbase = item.vn_hv_kv;
+    let v_base = item.vn_hv_kv;
     let vkr = item.vkr_percent * 0.01;
     let vk = item.vk_percent * 0.01;
 
     let tap_m = 1.0 + item.tap_pos.unwrap_or(0.0) * 0.01 * item.tap_step_percent.unwrap_or(0.0);
 
-    let zbase = vbase * vbase / item.sn_mva;
+    let zbase = v_base * v_base / item.sn_mva;
     let z = zbase * vk;
     let parallel = item.parallel;
 
@@ -312,16 +325,19 @@ fn trafo_to_admit(item: &Transformer) -> Vec<AdmittanceBranch> {
     let sc = AdmittanceBranch {
         y: Admittance(y / tap_m),
         port,
+        v_base,
     };
     let mut v = Vec::new();
     v.push(sc);
     v.push(AdmittanceBranch {
         y: Admittance((1.0 - tap_m) * y / tap_m.powi(2)),
         port: Port2(vector![item.hv_bus, GND]),
+        v_base,
     });
     v.push(AdmittanceBranch {
         y: Admittance((1.0 - 1.0 / tap_m) * y),
         port: Port2(vector![item.lv_bus, GND]),
+        v_base,
     });
     let re = zbase * item.pfe_kw;
     let im = zbase * item.i0_percent;
@@ -332,7 +348,7 @@ fn trafo_to_admit(item: &Transformer) -> Vec<AdmittanceBranch> {
     }
     let port = Port2(vector![item.hv_bus, GND]);
     let y = Admittance(c);
-    let shunt = AdmittanceBranch { y, port };
+    let shunt = AdmittanceBranch { y, port, v_base };
     v.push(shunt);
     v
 }
@@ -369,9 +385,8 @@ pub trait RunPF {
 impl RunPF for PFNetwork {
     fn create_y_bus(&self) -> CsrMatrix<Complex64> {
         let nodes = self.buses.len();
-        let admits: Vec<_> = self.y_br.iter().map(|x| x.y.0).collect();
         let incidence_matrix = create_incidence_mat(nodes, &self.y_br);
-        let ybus = create_ybus(self, &incidence_matrix, admits.as_slice());
+        let ybus = create_ybus(self, &incidence_matrix, self.y_br.as_slice());
 
         ybus
     }
@@ -410,6 +425,7 @@ impl RunPF for PFNetwork {
         tol: Option<f64>,
     ) -> DVector<Complex64> {
         let (reorder, Ybus, Sbus, v_init, npv, npq) = self.prepare_matrices(v_init);
+
         #[cfg(feature = "klu")]
         let mut solver = KLUSolver::default();
         #[cfg(not(feature = "klu"))]
@@ -459,6 +475,14 @@ impl PFNetwork {
             Vec::from_iter(from.values().iter().map(|x| Complex64::new(*x as f64, 0.0))),
         )
         .unwrap();
+        println!(
+            "{:?},{:?},{:?},{:?}",
+            Ybus.get_entry(7, 7),
+            Ybus.get_entry(7, 4),
+            Ybus.get_entry(7, 8),
+            Ybus.get_entry(7, 29)
+        );
+        println!("{:?}", Ybus.get_entry(4, 4));
         // Transform Ybus and Sbus according to the permutation
         let Ybus: CscMatrix<_> = (&reorder * Ybus * &reorder.transpose()).transpose_as_csc();
 

@@ -83,7 +83,7 @@ pub fn newton_pf<Solver: Solve>(
             .sub_to(Sbus, &mut mis);
 
         assemble_f(&mut F, n_bus, &mis, num_state, npv);
-
+  
         if F.norm() < tol {
             return Ok((v, iterations));
         }
