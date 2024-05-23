@@ -1,3 +1,5 @@
+use std::env;
+
 use nalgebra::ComplexField;
 use rustpower::{io::pandapower::*, prelude::*};
 
@@ -37,31 +39,18 @@ macro_rules! timeit {
 }
 
 fn main() {
-    let folder = "D:/projects/rust/rustpower/out";
-    let bus = folder.to_owned() + "/bus.csv";
-    let gen = folder.to_owned() + "/gen.csv";
-    let line = folder.to_owned() + "/line.csv";
-    let shunt = folder.to_owned() + "/shunt.csv";
-    let trafo = folder.to_owned() + "/trafo.csv";
-    let extgrid = folder.to_owned() + "/extgrid.csv";
-    let load = folder.to_owned() + "/load.csv";
-    let mut net = Network::default();
-    net.bus = load_pandapower_csv(bus);
-    net.gen = Some(load_pandapower_csv(gen));
-    net.line = Some(load_pandapower_csv(line));
-    net.shunt = Some(load_pandapower_csv(shunt));
-    net.trafo = Some(load_pandapower_csv(trafo));
-    net.ext_grid = Some(load_pandapower_csv(extgrid));
-    net.load = Some(load_pandapower_csv(load));
-    net.sn_mva = 100.0;
-    net.f_hz = 60.0;
+    let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    let folder = format!("{}/cases/IEEE118", dir);
+    let net = load_csv_folder(folder);
     let pf = PFNetwork::from(net);
     let v_init = pf.create_v_init();
     let tol = Some(1e-6);
     let max_it = Some(10);
     let v = pf.run_pf(v_init.clone(), max_it, tol);
+    println!("{}",v);
     println!("Vm,\t angle");
-    for i in v.iter() {
-        println!("{:.5}, {:.5}", i.modulus(), i.argument().to_degrees());
+    for (x, i) in v.iter().enumerate() {
+        println!("{} {:.5}, {:.5}", x, i.modulus(), i.argument().to_degrees());
     }
+    timeit!(pf_ieee118,100,|| _ = (&pf).run_pf(v_init.clone(), max_it, tol));
 }

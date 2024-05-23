@@ -16,7 +16,7 @@ use num_traits::One;
 use crate::basic::solver::KLUSolver;
 
 /// Represents the ground node in the network.
-const GND: i32 = -1;
+pub const GND: i32 = -1;
 
 /// Represents a branch with admittance and port information.
 #[derive(Debug, Default)]
@@ -89,54 +89,7 @@ pub struct PFNetwork {
     pub y_br: Vec<AdmittanceBranch>,
 }
 
-#[inline(always)]
-fn collect_pq_nodes<T>(items: Option<Vec<T>>, converter: fn(&T) -> [PQNode; 1]) -> Vec<PQNode> {
-    items
-        .unwrap_or_else(Vec::new)
-        .iter()
-        .flat_map(converter)
-        .collect()
-}
 
-impl From<Network> for PFNetwork {
-    fn from(value: Network) -> Self {
-        let v_base = value.bus[value.ext_grid.as_ref().unwrap()[0].bus as usize].vn_kv;
-        let s_base = value.sn_mva;
-        let wbase = value.f_hz * 2.0 * PI;
-        let binding = value.line.unwrap_or(Vec::new());
-        let bus = &value.bus;
-        let a = binding
-            .iter()
-            .flat_map(|x| line_to_admit(wbase, bus, x).into_iter());
-
-        let binding = value.trafo.unwrap_or(Vec::new());
-        let b = binding.iter().flat_map(|x| trafo_to_admit(x).into_iter());
-        let y_br = a.chain(b).collect();
-
-        let ext = extgrid_to_extnode(&value.ext_grid.unwrap_or(Vec::new())[0])[0];
-        let pq_loads = collect_pq_nodes(value.load, load_to_pqnode)
-            .into_iter()
-            .chain(collect_pq_nodes(value.shunt, shunt_to_pqnode))
-            .collect();
-
-        let pv_nodes = value
-            .gen
-            .unwrap_or(Vec::new())
-            .iter()
-            .map(|x| gen_to_pvnode(x).into_iter())
-            .flatten()
-            .collect();
-        Self {
-            v_base,
-            s_base,
-            pq_loads,
-            pv_nodes,
-            ext,
-            y_br,
-            buses: value.bus,
-        }
-    }
-}
 
 /// Creates the nodal admittance matrix (Ybus) of the power flow network.
 ///
@@ -167,7 +120,7 @@ fn create_ybus(
         .for_each(|(x, vbase)| (*x) *= (vbase * vbase) / pf.s_base);
 
     let incidence_matrix = CsrMatrix::from(incidence_matrix);
-    let mut ybus = &incidence_matrix * (diag_admit * incidence_matrix.transpose());
+    let ybus = &incidence_matrix * (diag_admit * incidence_matrix.transpose());
 
     ybus
 }
@@ -248,110 +201,6 @@ fn create_premute_mat(
     t
 }
 
-/// Converts a line to its equivalent admittance branches.
-fn line_to_admit(wbase: f64, bus: &[Bus], line: &Line) -> Vec<AdmittanceBranch> {
-    let mut out = Vec::new();
-    let (mut shunt_f, mut shunt_t) = (AdmittanceBranch::default(), AdmittanceBranch::default());
-    let b = wbase * 1e-9 * line.c_nf_per_km * line.length_km * (line.parallel as f64);
-    let g = line.g_us_per_km * line.length_km * 1e-6 * (line.parallel as f64);
-    let v_base = bus[line.from_bus as usize].vn_kv;
-    let a = Admittance(0.5 * Complex { re: g, im: b });
-    if line.g_us_per_km != 0.0 || line.c_nf_per_km != 0.0 {
-        shunt_f.y = a.clone();
-        shunt_t.y = a;
-        shunt_f.port = Port2(vector![line.from_bus as i32, GND]);
-        shunt_t.port = Port2(vector![line.to_bus as i32, GND]);
-        out.push(shunt_f);
-        out.push(shunt_t);
-    }
-
-    let rl = line.r_ohm_per_km * line.length_km * (line.parallel as f64);
-    let xl = line.x_ohm_per_km * line.length_km * (line.parallel as f64);
-    let l = AdmittanceBranch {
-        y: Admittance(1.0 / Complex { re: rl, im: xl }),
-        port: Port2(vector![line.from_bus as i32, line.to_bus as i32]),
-        v_base,
-    };
-    out.push(l);
-    out
-}
-/// Converts a load to its equivalent PQ nodes.
-fn load_to_pqnode(item: &Load) -> [PQNode; 1] {
-    let s = Complex::new(item.p_mw, item.q_mvar);
-    let bus = item.bus;
-    [PQNode { s, bus }]
-}
-
-/// Converts a generator to its equivalent PV nodes.
-fn gen_to_pvnode(item: &Gen) -> [PVNode; 1] {
-    let p = item.p_mw;
-    let v = item.vm_pu;
-    let bus = item.bus;
-    [PVNode { p, v, bus }]
-}
-
-/// Converts an external grid to its equivalent external grid node.
-fn extgrid_to_extnode(item: &ExtGrid) -> [ExtGridNode; 1] {
-    let bus = item.bus;
-    let v = item.vm_pu;
-    let phase = item.va_degree.to_radians();
-
-    [ExtGridNode { v, phase, bus }]
-}
-
-/// Converts a shunt to its equivalent PQ nodes.
-fn shunt_to_pqnode(item: &Shunt) -> [PQNode; 1] {
-    let s = Complex::new(item.p_mw, item.q_mvar);
-    let bus = item.bus;
-    [PQNode { s, bus }]
-}
-
-/// Converts a transformer to its equivalent admittance branches.
-fn trafo_to_admit(item: &Transformer) -> Vec<AdmittanceBranch> {
-    let v_base = item.vn_hv_kv;
-    let vkr = item.vkr_percent * 0.01;
-    let vk = item.vk_percent * 0.01;
-
-    let tap_m = 1.0 + item.tap_pos.unwrap_or(0.0) * 0.01 * item.tap_step_percent.unwrap_or(0.0);
-
-    let zbase = v_base * v_base / item.sn_mva;
-    let z = zbase * vk;
-    let parallel = item.parallel;
-
-    let re = zbase * vkr;
-    let im = (z.powi(2) - re.powi(2)).sqrt();
-    let port = Port2(vector![item.hv_bus, item.lv_bus]);
-    let y = 1.0 / (Complex { re, im } * parallel as f64);
-    let sc = AdmittanceBranch {
-        y: Admittance(y / tap_m),
-        port,
-        v_base,
-    };
-    let mut v = Vec::new();
-    v.push(sc);
-    v.push(AdmittanceBranch {
-        y: Admittance((1.0 - tap_m) * y / tap_m.powi(2)),
-        port: Port2(vector![item.hv_bus, GND]),
-        v_base,
-    });
-    v.push(AdmittanceBranch {
-        y: Admittance((1.0 - 1.0 / tap_m) * y),
-        port: Port2(vector![item.lv_bus, GND]),
-        v_base,
-    });
-    let re = zbase * item.pfe_kw;
-    let im = zbase * item.i0_percent;
-    let c = 1.0 * parallel as f64 / Complex { re, im };
-
-    if c.is_nan() {
-        return v;
-    }
-    let port = Port2(vector![item.hv_bus, GND]);
-    let y = Admittance(c);
-    let shunt = AdmittanceBranch { y, port, v_base };
-    v.push(shunt);
-    v
-}
 /// A trait for running power flow analysis.
 pub trait RunPF {
     /// Creates the nodal admittance matrix (Ybus) of the power flow network.
@@ -475,14 +324,6 @@ impl PFNetwork {
             Vec::from_iter(from.values().iter().map(|x| Complex64::new(*x as f64, 0.0))),
         )
         .unwrap();
-        println!(
-            "{:?},{:?},{:?},{:?}",
-            Ybus.get_entry(7, 7),
-            Ybus.get_entry(7, 4),
-            Ybus.get_entry(7, 8),
-            Ybus.get_entry(7, 29)
-        );
-        println!("{:?}", Ybus.get_entry(4, 4));
         // Transform Ybus and Sbus according to the permutation
         let Ybus: CscMatrix<_> = (&reorder * Ybus * &reorder.transpose()).transpose_as_csc();
 
@@ -562,10 +403,10 @@ mod tests {
     }
     #[test]
     fn test_ybus() {
-        let (pf, _pv, nodes, admits) = test_system();
+        let (pf, _pv, nodes, _) = test_system();
 
         let incidence_matrix = create_incidence_mat(nodes, &pf.y_br);
-        let ybus = create_ybus(&pf, &incidence_matrix, admits.as_slice());
+        let ybus = create_ybus(&pf, &incidence_matrix, &pf.y_br);
         let nan = ybus.values().iter().fold(false, |a, b| a | b.is_nan());
         assert_eq!(nan, false, "invalid parameters {:?}", ybus.values());
     }
@@ -595,9 +436,9 @@ mod tests {
 
     #[test]
     fn test_ybus_values() {
-        let (pf, _pv, nodes, admits) = test_system();
+        let (pf, _pv, nodes, _) = test_system();
         let incidence_matrix = create_incidence_mat(nodes, &pf.y_br);
-        let ybus = create_ybus(&pf, &incidence_matrix, admits.as_slice());
+        let ybus = create_ybus(&pf, &incidence_matrix, &pf.y_br);
         //pandapower IEEE39 case for validation
         let data = vec![
             "3.65450097 -63.36747732j",
