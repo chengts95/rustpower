@@ -36,16 +36,22 @@ RustPower = "0.1.0"
 use rustpower::{io::pandapower::Network, prelude::*};
 fn main() {
     // Define your power flow network or load pandapower files
-    let json = "{...}";
-    let net: Network = serde_json::from_str(json).unwrap();
+    let dir = "{your file path}/file_name.zip";
+    let net : Network = load_csv_zip(dir).unwrap(); //can load a zip archive or folder with csvs
     let pf = PFNetwork::from(net);
     let v_init = pf.create_v_init();
     let tol = Some(1e-8);
     let max_it = Some(10);
 
-    let _v = pf.run_pf(v_init.clone(), max_it, tol);
+    let v = pf.run_pf(v_init.clone(), max_it, tol);
+    //display results
+    println!("Vm,\t angle"); 
+    for (x, i) in v.iter().enumerate() {
+        println!("{} {:.5}, {:.5}", x, i.modulus(), i.argument().to_degrees());
+    }
 }
 ```
+The cases are generated from pandapower with customized python functions, see the python notebook in the `cases` folder for details.
 
 ## License
 
