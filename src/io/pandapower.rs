@@ -158,6 +158,22 @@ pub struct ExtGrid {
     pub name: Option<String>,
 }
 
+/// Represents the data from the sgen.
+#[derive(Default, Debug, Serialize, Deserialize)]
+pub struct SGen {
+    pub name: Option<String>,
+    pub bus: i64,
+    pub p_mw: f64,
+    pub q_mvar: f64,
+    pub sn_mva: Option<f64>,
+    pub scaling: f64,
+    pub in_service: bool,
+    #[serde(rename = "type")]
+    pub type_: Option<String>,
+    pub current_source: bool,
+    pub controllable: bool,
+}
+
 /// Represents a shunt in the network.
 #[derive(Default, Debug, Serialize, Deserialize)]
 pub struct Shunt {
@@ -181,6 +197,7 @@ pub struct Network {
     pub trafo: Option<Vec<Transformer>>,
     pub shunt: Option<Vec<Shunt>>,
     pub ext_grid: Option<Vec<ExtGrid>>,
+    pub sgen: Option<Vec<SGen>>,
     pub f_hz: f64,
     pub sn_mva: f64,
 }
@@ -206,6 +223,7 @@ impl Default for Network {
             trafo: None,
             shunt: None,
             ext_grid: None,
+            sgen: None,
             f_hz: 60.0,
             sn_mva: 100.0,
         }
@@ -215,8 +233,14 @@ impl Default for Network {
 /// Loads a pandapower CSV file into a vector of the specified type.
 fn load_pandapower_csv<T: for<'de> Deserialize<'de>>(name: String) -> Vec<T> {
     let file = read_csv(&name).unwrap();
-    let rdr = ReaderBuilder::new().from_reader(file.as_bytes());
-    rdr.into_deserialize::<T>().map(|x| x.unwrap()).collect()
+    let mut rdr = ReaderBuilder::new().from_reader(file.as_bytes());
+    let mut records: Vec<T> = Vec::new();
+    let headers = rdr.headers().unwrap().to_owned();
+    for (idx, i) in rdr.records().enumerate() {
+        let record = i.unwrap();
+        records.push(record.deserialize(Some(&headers)).unwrap());
+    }
+    records
 }
 
 /// Reads a CSV file and replaces "True"/"False" with "true"/"false".
@@ -237,6 +261,7 @@ pub fn load_csv_folder(folder: String) -> Network {
     let trafo = folder.to_owned() + "/trafo.csv";
     let extgrid = folder.to_owned() + "/ext_grid.csv";
     let load = folder.to_owned() + "/load.csv";
+    let sgen = folder.to_owned() + "/sgen.csv";
     let mut net = Network::default();
     net.bus = load_pandapower_csv(bus);
     net.gen = Some(load_pandapower_csv(gen));
@@ -245,6 +270,7 @@ pub fn load_csv_folder(folder: String) -> Network {
     net.trafo = Some(load_pandapower_csv(trafo));
     net.ext_grid = Some(load_pandapower_csv(extgrid));
     net.load = Some(load_pandapower_csv(load));
+    net.sgen = Some(load_pandapower_csv(sgen));
     net
 }
 
@@ -305,6 +331,13 @@ fn extgrid_to_extnode(item: &ExtGrid) -> [ExtGridNode; 1] {
 /// Converts a shunt to its equivalent PQ nodes.
 fn shunt_to_pqnode(item: &Shunt) -> [PQNode; 1] {
     let s = Complex::new(item.p_mw, item.q_mvar);
+    let bus = item.bus;
+    [PQNode { s, bus }]
+}
+
+/// Converts a shunt to its equivalent PQ nodes.
+fn sgen_to_pqnode(item: &SGen) -> [PQNode; 1] {
+    let s = Complex::new(-item.p_mw, -item.q_mvar);
     let bus = item.bus;
     [PQNode { s, bus }]
 }
@@ -378,14 +411,22 @@ fn csv_from_map<T: for<'de> Deserialize<'de>>(
     if !map.contains_key(key) {
         return None;
     }
-
     let s = map
         .get(key)
         .unwrap()
         .replace("True", "true")
         .replace("False", "false");
-    let rdr = ReaderBuilder::new().from_reader(s.as_bytes());
-    Some(rdr.into_deserialize::<T>().map(|x| x.unwrap()).collect())
+    let mut rdr = ReaderBuilder::new().from_reader(s.as_bytes());
+    let mut records: Vec<T> = Vec::new();
+    let headers = rdr.headers().unwrap().to_owned();
+    for (idx, i) in rdr.records().enumerate() {
+        let record = i.unwrap();
+        records.push(record.deserialize(Some(&headers)).unwrap());
+    }
+    if records.is_empty() {
+        return None;
+    }
+    Some(records)
 }
 
 /// Macro to read network data from a CSV file.
@@ -398,7 +439,7 @@ macro_rules! read_csv_network {
 }
 
 /// Loads a network from a ZIP file containing CSV files.
-pub fn load_csv_zip(name: String) -> Result<Network,std::io::Error>{
+pub fn load_csv_zip(name: String) -> Result<Network, std::io::Error> {
     let f = File::open(name)?;
     let mut zip = zip::ZipArchive::new(f)?;
     let mut map = std::collections::HashMap::new();
@@ -421,6 +462,7 @@ pub fn load_csv_zip(name: String) -> Result<Network,std::io::Error>{
         trafo: "trafo.csv",
         ext_grid: "ext_grid.csv",
         load: "load.csv",
+        sgen:"sgen.csv"
     });
     Ok(net)
 }
@@ -444,6 +486,7 @@ impl From<Network> for PFNetwork {
         let pq_loads = collect_pq_nodes(value.load, load_to_pqnode)
             .into_iter()
             .chain(collect_pq_nodes(value.shunt, shunt_to_pqnode))
+            .chain(collect_pq_nodes(value.sgen, sgen_to_pqnode))
             .collect();
 
         let pv_nodes = value
