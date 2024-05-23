@@ -20,7 +20,7 @@ PyPower and PandaPower: These tools use traditional ways to build admittance mat
 This Program: By using some simple linear algebra methods, this program constructs the required vectors and matrices during initialization, avoiding the need for dynamic slicing of PV, PQ, Ext nodes in each iteration. Based on experience with real-time EMT simulation, I believe it will never become necessary to check individual column in the jacobian matrix during its construction. This not only simplifies the code logic but also significantly improves computational efficiency beyond the benefits brought by Rust and KLU.
 Currently, on IEEE 39-Bus system, this program takes around 300 microseconds (with KLU) and 500 microseconds (with RSparse solver) to finish 3 iterations, which is 10 times faster than Python and Numba-based implementation.
 
-In performance tests on the PEGASE 9241 system, the Rust implementation for power flow calculation demonstrated significant performance advantages. Despite pandapower using acceleration techniques, the Rust implementation achieved far superior speeds although the post solution is not included.
+In performance tests on the PEGASE 9241 system, the Rust implementation for power flow calculation demonstrated significant performance advantages. Despite pandapower using acceleration techniques, the Rust implementation achieved far superior speeds although the post solution is not included. This indicates that with the Rust technologies, stochastic power flow simulation and optimization problems can be significant faster even without multi-threading, while the painful memory management and compiling problems from C/C++ won't bother us.  
 ![alt text](imgs/performance_1.png)
 ![alt text](imgs/performance_2.png)
 
