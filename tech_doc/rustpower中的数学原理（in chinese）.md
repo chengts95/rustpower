@@ -258,8 +258,8 @@ $$
 $$
 \begin{equation}
  T^{*}Y T = \begin{bmatrix}
- y*k_{m}^{2} & y k_{m} e^{ i \theta}\\ 
- y k_{m} e^{- i \theta} &  y 
+ y & y*k_{m} e^{ i \theta}\\ 
+ y*k_{m} e^{- i \theta} &  y*k_{m}^{2} 
  \end{bmatrix}
 \end{equation}
 $$
