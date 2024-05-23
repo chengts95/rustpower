@@ -43,7 +43,7 @@ fn main() {
     let tol = Some(1e-8);
     let max_it = Some(10);
 
-    let v = pf.run_pf(v_init.clone(), max_it, tol);
+    let (v,iterations) = pf.run_pf(v_init.clone(), max_it, tol);
     //display results
     println!("Vm,\t angle"); 
     for (x, i) in v.iter().enumerate() {
