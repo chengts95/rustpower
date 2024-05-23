@@ -40,8 +40,8 @@ macro_rules! timeit {
 
 fn main() {
     let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let folder = format!("{}/cases/IEEE118", dir);
-    let net = load_csv_folder(folder);
+    let zipfile = format!("{}/cases/IEEE118/data.zip", dir);
+    let net = load_csv_zip(zipfile).unwrap();
     let pf = PFNetwork::from(net);
     let v_init = pf.create_v_init();
     let tol = Some(1e-6);
