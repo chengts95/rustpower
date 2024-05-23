@@ -46,8 +46,8 @@ fn main() {
     let v_init = pf.create_v_init();
     let tol = Some(1e-6);
     let max_it = Some(10);
-    let v = pf.run_pf(v_init.clone(), max_it, tol);
-    println!("{}",v);
+    let (v,iter) = pf.run_pf(v_init.clone(), max_it, tol);
+    println!("converged within {} iterations",iter);
     println!("Vm,\t angle");
     for (x, i) in v.iter().enumerate() {
         println!("{} {:.5}, {:.5}", x, i.modulus(), i.argument().to_degrees());

@@ -222,13 +222,13 @@ pub trait RunPF {
     ///
     /// # Returns
     ///
-    /// The converged voltage vector.
+    /// The converged voltage vector and iterations.
     fn run_pf(
         &self,
         v_init: DVector<Complex64>,
         max_it: Option<usize>,
         tol: Option<f64>,
-    ) -> DVector<Complex64>;
+    ) -> (DVector<Complex64>,usize);
 }
 
 impl RunPF for PFNetwork {
@@ -272,7 +272,7 @@ impl RunPF for PFNetwork {
         v_init: DVector<Complex64>,
         max_it: Option<usize>,
         tol: Option<f64>,
-    ) -> DVector<Complex64> {
+    ) -> (DVector<Complex64>,usize) {
         let (reorder, Ybus, Sbus, v_init, npv, npq) = self.prepare_matrices(v_init);
 
         #[cfg(feature = "klu")]
@@ -280,10 +280,10 @@ impl RunPF for PFNetwork {
         #[cfg(not(feature = "klu"))]
         let mut solver = RSparseSolver {};
         let v = newton_pf(&Ybus, &Sbus, &v_init, npv, npq, tol, max_it, &mut solver);
-        let (v, _) = v.unwrap();
+        let (v, iter) = v.unwrap();
         let x = reorder.transpose() * &v;
 
-        x
+        (x,iter)
     }
 }
 
@@ -389,7 +389,7 @@ mod tests {
                 .iter()
                 .map(|x| Complex64::from_str(&x.replace(" ", "")).unwrap()),
         );
-        let v = pf.run_pf(v_init, Some(10), Some(1e-6));
+        let (v,_) = pf.run_pf(v_init, Some(10), Some(1e-6));
         for i in 0..v.len() {
             assert!(
                 (v[i] - v_actual[i]).norm() < 1e-3,
