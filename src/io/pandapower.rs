@@ -398,9 +398,9 @@ macro_rules! read_csv_network {
 }
 
 /// Loads a network from a ZIP file containing CSV files.
-pub fn load_csv_zip(name: String) {
-    let f = File::open(name).unwrap();
-    let mut zip = zip::ZipArchive::new(f).unwrap();
+pub fn load_csv_zip(name: String) -> Result<Network,std::io::Error>{
+    let f = File::open(name)?;
+    let mut zip = zip::ZipArchive::new(f)?;
     let mut map = std::collections::HashMap::new();
     for i in 0..zip.len() {
         let mut file = zip.by_index(i).unwrap();
@@ -422,6 +422,7 @@ pub fn load_csv_zip(name: String) {
         ext_grid: "ext_grid.csv",
         load: "load.csv",
     });
+    Ok(net)
 }
 
 impl From<Network> for PFNetwork {
@@ -493,6 +494,6 @@ mod tests {
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
         let folder = format!("{}/cases/IEEE118", dir);
         let name = folder.to_owned() + "/data.zip";
-        load_csv_zip(name);
+        load_csv_zip(name).unwrap();
     }
 }
