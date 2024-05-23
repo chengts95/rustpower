@@ -1,6 +1,12 @@
+use csv::{DeserializeRecordsIntoIter, ReaderBuilder};
 use serde::Deserializer;
 use serde::{Deserialize, Serialize};
+use soa_rs::Soars;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Read};
 use std::option::Option;
+use std::path::Path;
+use std::str::FromStr;
 
 //This module is used to parse pandapower network parameters
 
@@ -30,7 +36,7 @@ where
     Ok(None)
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone)]
 pub struct Bus {
     pub index: i64,
     pub in_service: bool,
@@ -45,7 +51,7 @@ pub struct Bus {
     pub zone: i64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize)]
 pub struct Gen {
     pub bus: i64,
     pub controllable: bool,
@@ -65,7 +71,7 @@ pub struct Gen {
     pub slack_weight: f64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize)]
 pub struct Load {
     pub bus: i64,
     pub const_i_percent: f64,
@@ -81,7 +87,8 @@ pub struct Load {
     pub type_: Option<String>, // Added underscore to avoid conflict with Rust keyword
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize, Soars)]
+#[soa_derive(include(Ref), Serialize)]
 pub struct Line {
     pub c_nf_per_km: f64,
     pub df: f64,
@@ -101,7 +108,7 @@ pub struct Line {
     pub std_type: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize)]
 pub struct Transformer {
     pub df: f64,
     pub hv_bus: i32,
@@ -129,7 +136,7 @@ pub struct Transformer {
     pub tap_step_percent: Option<f64>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize)]
 pub struct ExtGrid {
     pub bus: i64,
     pub in_service: bool,
@@ -143,7 +150,7 @@ pub struct ExtGrid {
     pub name: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize)]
 pub struct Shunt {
     pub bus: i64,
     pub q_mvar: f64,
@@ -155,7 +162,7 @@ pub struct Shunt {
     pub name: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize)]
 pub struct Network {
     pub gen: Option<Vec<Gen>>,
     pub bus: Vec<Bus>,
@@ -166,4 +173,66 @@ pub struct Network {
     pub ext_grid: Option<Vec<ExtGrid>>,
     pub f_hz: f64,
     pub sn_mva: f64,
+}
+pub trait ToCSV {
+    fn save_csv(&self) -> Result<(), &'static str>;
+}
+
+impl ToCSV for Network {
+    fn save_csv(&self) -> Result<(), &'static str> {
+        todo!()
+    }
+}
+
+#[test]
+fn test_load_csv() -> () {
+    use std::io::{BufRead, BufReader};
+    // let file_path = "data.zip";
+    let folder = "D:/projects/rust/rustpower/out";
+    let name = folder.to_owned() + "/bus.csv";
+    let file = read_csv(&name).unwrap();
+    let mut rdr = ReaderBuilder::new().from_reader(file.as_bytes());
+    for result in rdr.deserialize() {
+        let record: Bus = result.unwrap();
+        println!("{:?}", record);
+    }
+}
+
+pub fn load_pandapower_csv<T:for<'de> Deserialize<'de>>(name: String) -> Vec<T> {
+    let file = read_csv(&name).unwrap();
+    let rdr = ReaderBuilder::new().from_reader(file.as_bytes());
+     rdr.into_deserialize::<T>().map(|x| x.unwrap()).collect()
+}
+
+fn read_csv(name: &str) -> Result<String,std::io::Error> {
+    let mut file = File::open(name)?;
+    let mut buffer = String::new();
+    file.read_to_string(&mut buffer)?;
+    let file = buffer.replace("True", "true").replace("False", "false");
+    Ok(file)
+}
+
+#[test]
+fn load_csv_all() -> () {
+    use std::io::{BufRead, BufReader};
+    // let file_path = "data.zip";
+    let folder = "D:/projects/rust/rustpower/out";
+    let bus = folder.to_owned() + "/bus.csv";
+    let gen = folder.to_owned() + "/gen.csv";
+    let line = folder.to_owned() + "/line.csv";
+    let shunt = folder.to_owned() + "/shunt.csv";
+    let trafo = folder.to_owned() + "/trafo.csv";
+    let extgrid = folder.to_owned() + "/extgrid.csv";
+    let load = folder.to_owned() + "/load.csv";
+    let mut net = Network::default();
+    net.bus = load_pandapower_csv(bus);
+    net.gen = Some(load_pandapower_csv(gen));
+    net.line = Some(load_pandapower_csv(line));
+    net.shunt = Some(load_pandapower_csv(shunt));
+    net.trafo = Some(load_pandapower_csv(trafo));
+    net.ext_grid = Some(load_pandapower_csv(extgrid));
+    net.load = Some(load_pandapower_csv(load));
+    net.f_hz = 60.0;
+    net.sn_mva = 100.0;
+    println!("{:?}",net);
 }
