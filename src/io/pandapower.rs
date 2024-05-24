@@ -236,7 +236,7 @@ fn load_pandapower_csv<T: for<'de> Deserialize<'de>>(name: String) -> Vec<T> {
     let mut rdr = ReaderBuilder::new().from_reader(file.as_bytes());
     let mut records: Vec<T> = Vec::new();
     let headers = rdr.headers().unwrap().to_owned();
-    for (idx, i) in rdr.records().enumerate() {
+    for (_idx, i) in rdr.records().enumerate() {
         let record = i.unwrap();
         records.push(record.deserialize(Some(&headers)).unwrap());
     }
@@ -344,12 +344,14 @@ fn sgen_to_pqnode(item: &SGen) -> [PQNode; 1] {
 
 /// Converts a transformer to its equivalent admittance branches.
 fn trafo_to_admit(item: &Transformer) -> Vec<AdmittanceBranch> {
-    let v_base = item.vn_hv_kv;
+    let v_base = item.vn_lv_kv;
     let vkr = item.vkr_percent * 0.01;
     let vk = item.vk_percent * 0.01;
 
-    let tap_m = 1.0 + item.tap_pos.unwrap_or(0.0) * 0.01 * item.tap_step_percent.unwrap_or(0.0);
-
+    let tap_m = 1.0
+        + (item.tap_pos.unwrap_or(0.0) - item.tap_neutral.unwrap_or(0.0))
+            * 0.01
+            * item.tap_step_percent.unwrap_or(0.0);
     let zbase = v_base * v_base / item.sn_mva;
     let z = zbase * vk;
     let parallel = item.parallel;
