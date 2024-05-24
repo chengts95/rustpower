@@ -1,7 +1,6 @@
 #[allow(unused_imports)]
 use std::{f64::consts::PI, str::FromStr};
 
-use self::admittance::{Admittance, Port2};
 use super::{admittance, test_ieee39};
 use crate::basic::newtonpf::newton_pf;
 #[allow(unused_imports)]
