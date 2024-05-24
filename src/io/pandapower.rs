@@ -421,7 +421,7 @@ fn csv_from_map<T: for<'de> Deserialize<'de>>(
     let mut rdr = ReaderBuilder::new().from_reader(s.as_bytes());
     let mut records: Vec<T> = Vec::new();
     let headers = rdr.headers().unwrap().to_owned();
-    for (idx, i) in rdr.records().enumerate() {
+    for (_idx, i) in rdr.records().enumerate() {
         let record = i.unwrap();
         records.push(record.deserialize(Some(&headers)).unwrap());
     }
