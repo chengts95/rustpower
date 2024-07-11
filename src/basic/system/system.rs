@@ -88,8 +88,6 @@ pub struct PFNetwork {
     pub y_br: Vec<AdmittanceBranch>,
 }
 
-
-
 /// Creates the nodal admittance matrix (Ybus) of the power flow network.
 ///
 /// This function calculates the nodal admittance matrix (Ybus) of the power flow network using the provided parameters.
@@ -200,6 +198,22 @@ fn create_premute_mat(
     t
 }
 
+fn create_yf_yt(
+    nodes: usize,
+    incidence_matrix: &CsrMatrix<Complex<f64>>,
+    y_br: &Vec<AdmittanceBranch>,
+) -> CsrMatrix<Complex64> {
+    let mut diag_admit = CsrMatrix::identity(y_br.len());
+    diag_admit
+        .values_mut()
+        .iter_mut()
+        .zip(y_br.iter())
+        .for_each(|(x, y)| *x = y.y.0);
+
+    let yf = diag_admit * incidence_matrix.transpose();
+    yf
+}
+
 /// A trait for running power flow analysis.
 pub trait RunPF {
     /// Creates the nodal admittance matrix (Ybus) of the power flow network.
@@ -227,7 +241,7 @@ pub trait RunPF {
         v_init: DVector<Complex64>,
         max_it: Option<usize>,
         tol: Option<f64>,
-    ) -> (DVector<Complex64>,usize);
+    ) -> (DVector<Complex64>, usize);
 }
 
 impl RunPF for PFNetwork {
@@ -271,7 +285,7 @@ impl RunPF for PFNetwork {
         v_init: DVector<Complex64>,
         max_it: Option<usize>,
         tol: Option<f64>,
-    ) -> (DVector<Complex64>,usize) {
+    ) -> (DVector<Complex64>, usize) {
         let (reorder, Ybus, Sbus, v_init, npv, npq) = self.prepare_matrices(v_init);
 
         #[cfg(feature = "klu")]
@@ -282,7 +296,7 @@ impl RunPF for PFNetwork {
         let (v, iter) = v.unwrap();
         let x = reorder.transpose() * &v;
 
-        (x,iter)
+        (x, iter)
     }
 }
 
@@ -388,7 +402,7 @@ mod tests {
                 .iter()
                 .map(|x| Complex64::from_str(&x.replace(" ", "")).unwrap()),
         );
-        let (v,_) = pf.run_pf(v_init, Some(10), Some(1e-6));
+        let (v, _) = pf.run_pf(v_init, Some(10), Some(1e-6));
         for i in 0..v.len() {
             assert!(
                 (v[i] - v_actual[i]).norm() < 1e-3,
@@ -408,6 +422,15 @@ mod tests {
         let ybus = create_ybus(&pf, &incidence_matrix, &pf.y_br);
         let nan = ybus.values().iter().fold(false, |a, b| a | b.is_nan());
         assert_eq!(nan, false, "invalid parameters {:?}", ybus.values());
+    }
+
+    #[test]
+    fn test_yf_yt() {
+        let (pf, _pv, nodes, _) = test_system();
+
+        let incidence_matrix = create_incidence_mat(nodes, &pf.y_br);
+        let yf = create_yf_yt(nodes, &CsrMatrix::from(&incidence_matrix), &pf.y_br);
+        println!("{:?}", yf);
     }
 
     #[test]
