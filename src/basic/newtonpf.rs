@@ -6,7 +6,6 @@ use crate::basic::sparse::{
     stack::{csc_hstack, csc_vstack},
 };
 use num_traits::Zero;
-
 use nalgebra::*;
 use nalgebra_sparse::*;
 use num_complex::Complex64;
@@ -163,7 +162,7 @@ trait Slice {
     fn columns(&self, start_col: usize, end_col: usize) -> Self::Mat;
 }
 
-impl<T: Clone + Zero + Scalar + ClosedAdd> Slice for CscMatrix<T> {
+impl<T: Clone + Zero + Scalar + ClosedAddAssign> Slice for CscMatrix<T> {
     type Mat = CscMatrix<T>;
 
     #[inline(always)]
@@ -188,7 +187,7 @@ trait SliceTo {
     fn columns_to(&self, start_col: usize, end_col: usize, mat: &mut Self::Mat);
 }
 
-impl<T: Copy + Clone + Zero + Scalar + ClosedAdd> SliceTo for CscMatrix<T> {
+impl<T: Copy + Clone + Zero + Scalar + ClosedAddAssign> SliceTo for CscMatrix<T> {
     type Mat = CscMatrix<T>;
 
     #[inline(always)]
