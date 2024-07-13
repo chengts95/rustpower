@@ -3,25 +3,28 @@ use nalgebra::{vector, Complex};
 use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
-use std::fs::File;
+use std::{fs, fs::File};
 use std::{io::Read, option::Option};
 
 use crate::basic::system::*;
 use crate::prelude::admittance::*;
 
+use serde_json;
+use serde_json::{Map, Value};
+
 /// This module is used to parse pandapower network parameters
 
 /// Deserializes a number from JSON format.
-fn from_number<'de, D>(deserializer: D) -> Result<i64, D::Error>
+fn from_number<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
 where
     D: Deserializer<'de>,
 {
     let val: serde_json::Value = Deserialize::deserialize(deserializer)?;
     if let serde_json::Value::Number(n) = val {
         let res = n.as_f64().unwrap();
-        return Ok(res as i64);
+        return Ok(Some(res as i64));
     }
-    Err(serde::de::Error::custom("invalid number format"))
+    Ok(None)
 }
 
 /// Deserializes a string from JSON format.
@@ -44,22 +47,22 @@ where
 pub struct Bus {
     pub index: i64,
     pub in_service: bool,
-    pub max_vm_pu: f64,
-    pub min_vm_pu: f64,
+    pub max_vm_pu: Option<f64>,
+    pub min_vm_pu: Option<f64>,
     #[serde(deserialize_with = "from_str")]
     pub name: Option<String>,
     #[serde(rename = "type")]
     pub type_: Option<String>, // Added underscore to avoid conflict with Rust keyword
     pub vn_kv: f64,
     #[serde(deserialize_with = "from_number")]
-    pub zone: i64,
+    pub zone: Option<i64>,
 }
 
 /// Represents a generator in the network.
 #[derive(Default, Debug, Serialize, Deserialize)]
 pub struct Gen {
     pub bus: i64,
-    pub controllable: bool,
+    pub controllable: Option<bool>,
     pub in_service: bool,
     pub name: Option<String>,
     pub p_mw: f64,
@@ -82,7 +85,7 @@ pub struct Load {
     pub bus: i64,
     pub const_i_percent: f64,
     pub const_z_percent: f64,
-    pub controllable: bool,
+    pub controllable: Option<bool>,
     pub in_service: bool,
     pub name: Option<String>,
     pub p_mw: f64,
@@ -104,11 +107,11 @@ pub struct Line {
     pub in_service: bool,
     pub length_km: f64,
     pub max_i_ka: f64,
-    pub max_loading_percent: f64,
+    pub max_loading_percent: Option<f64>,
     pub parallel: i32,
     pub r_ohm_per_km: f64,
     #[serde(rename = "type")]
-    pub type_: String,
+    pub type_: Option<String>,
     pub x_ohm_per_km: f64,
     pub name: Option<String>,
     pub std_type: Option<String>,
@@ -122,7 +125,7 @@ pub struct Transformer {
     pub i0_percent: f64,
     pub in_service: bool,
     pub lv_bus: i32,
-    pub max_loading_percent: f64,
+    pub max_loading_percent: Option<f64>,
     pub parallel: i32,
     pub pfe_kw: f64,
     pub shift_degree: f64,
@@ -150,10 +153,10 @@ pub struct ExtGrid {
     pub in_service: bool,
     pub va_degree: f64,
     pub vm_pu: f64,
-    pub max_p_mw: f64,
-    pub min_p_mw: f64,
-    pub max_q_mvar: f64,
-    pub min_q_mvar: f64,
+    pub max_p_mw: Option<f64>,
+    pub min_p_mw: Option<f64>,
+    pub max_q_mvar: Option<f64>,
+    pub min_q_mvar: Option<f64>,
     pub slack_weight: f64,
     pub name: Option<String>,
 }
@@ -171,7 +174,7 @@ pub struct SGen {
     #[serde(rename = "type")]
     pub type_: Option<String>,
     pub current_source: bool,
-    pub controllable: bool,
+    pub controllable: Option<bool>,
 }
 
 /// Represents a shunt in the network.
@@ -186,6 +189,17 @@ pub struct Shunt {
     pub in_service: bool,
     pub name: Option<String>,
 }
+/// Represents a switch in the network.
+#[derive(Default, Debug, Serialize, Deserialize)]
+pub struct Switch {
+    pub bus: i64,
+    pub element: i64,
+    #[serde(rename = "type")]
+    pub type_: Option<String>,
+    pub closed: bool,
+    pub name: Option<String>,
+    pub z_ohm: f64,
+}
 
 /// Represents a network.
 #[derive(Debug, Serialize, Deserialize)]
@@ -198,6 +212,7 @@ pub struct Network {
     pub shunt: Option<Vec<Shunt>>,
     pub ext_grid: Option<Vec<ExtGrid>>,
     pub sgen: Option<Vec<SGen>>,
+    pub switch: Option<Vec<Switch>>,
     pub f_hz: f64,
     pub sn_mva: f64,
 }
@@ -224,6 +239,7 @@ impl Default for Network {
             shunt: None,
             ext_grid: None,
             sgen: None,
+            switch: None,
             f_hz: 60.0,
             sn_mva: 100.0,
         }
@@ -439,6 +455,14 @@ macro_rules! read_csv_network {
         )*
     };
 }
+/// Macro to read network data from a json key.
+macro_rules! read_json_network {
+    ($net:ident, $map:ident, { $($field:ident: $file:expr),* $(,)? }) => {
+        $(
+            $net.$field = load_pandapower_element_json(&$map, $file);
+        )*
+    };
+}
 
 /// Loads a network from a ZIP file containing CSV files.
 pub fn load_csv_zip(name: String) -> Result<Network, std::io::Error> {
@@ -464,9 +488,94 @@ pub fn load_csv_zip(name: String) -> Result<Network, std::io::Error> {
         trafo: "trafo.csv",
         ext_grid: "ext_grid.csv",
         load: "load.csv",
-        sgen:"sgen.csv"
+        sgen:"sgen.csv",
+        switch:"switch.csv"
     });
     Ok(net)
+}
+
+fn load_json_from_str(file_content: &str) -> Result<Map<String, Value>, std::io::Error> {
+    let parsed: Value = serde_json::from_str(&file_content)?;
+    let obj: Map<String, Value> = parsed.as_object().unwrap().clone();
+    Ok(obj)
+}
+
+fn load_json(file_path: String) -> Result<Map<String, Value>, std::io::Error> {
+    let file_content =
+        fs::read_to_string(file_path).expect(format!("Error reading file network file").as_str());
+    let obj = load_json_from_str(&file_content);
+    obj
+}
+
+fn load_pandapower_element_json<T: serde::de::DeserializeOwned>(
+    object: &Map<String, Value>,
+    key: &str,
+) -> Option<Vec<T>> {
+    let element = object
+        .get(key)
+        .and_then(|v| v.as_object())
+        .and_then(|v| v.get("_object"))
+        .and_then(|v| v.as_str());
+    if element.is_none() {
+        return None;
+    }
+    let mut elements = Vec::new();
+    let element = element.unwrap();
+    let map = load_json_from_str(element).unwrap();
+
+    let headers = map
+        .get("columns")
+        .and_then(|v| v.as_array())
+        .unwrap()
+        .to_owned();
+
+    let rows = map.get("data").and_then(|v| v.as_array()).unwrap();
+
+    for (index, row) in rows.iter().enumerate() {
+        let obj: Map<String, Value> = Map::new();
+        let mut obj: Map<String, Value> =
+            headers
+                .iter()
+                .zip(row.as_array().unwrap().iter())
+                .fold(obj, |mut acc, (k, v)| {
+                    let key = k.as_str().unwrap();
+                    let value = v.to_owned();
+                    acc.insert(key.to_string(), value);
+                    acc
+                });
+
+        obj.insert(
+            "index".to_string(),
+            Value::Number(serde_json::Number::from(index as i64)),
+        );
+
+        println!("key: {} Obj: {:?}", key, obj);
+
+        let elem: T = serde_json::from_value(obj.clone().into()).unwrap();
+        elements.push(elem);
+    }
+
+    return Some(elements);
+}
+
+pub fn load_pandapower_json(file_path: String) -> Network {
+    let map: Map<String, Value> = load_json(file_path).unwrap();
+    let object: &Map<String, Value> = map.get("_object").and_then(|v| v.as_object()).unwrap();
+
+    let mut net = Network::default();
+    net.bus = load_pandapower_element_json(object, "bus").unwrap();
+    read_json_network!(net, map, {
+        gen: "gen",
+        line: "line",
+        shunt: "shunt",
+        trafo: "trafo",
+        ext_grid: "ext_grid",
+        load: "load",
+        sgen:"sgen",
+        switch:"switch"
+    });
+
+    return net;
 }
 
 impl From<Network> for PFNetwork {
@@ -513,6 +622,16 @@ impl From<Network> for PFNetwork {
 mod tests {
     use super::*;
     use std::env;
+
+    #[test]
+    fn test_load_json() -> () {
+        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let folder = format!("{}/cases", dir);
+        let filepath: String = folder.to_owned() + "/networks.json";
+        let net = load_pandapower_json(filepath);
+        println!("{:?}", net);
+    }
+
     #[test]
     fn test_load_csv() -> () {
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
