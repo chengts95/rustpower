@@ -3,7 +3,7 @@ use nalgebra::{vector, Complex};
 use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
-use std::{fs::File, fs};
+use std::{fs, fs::File};
 use std::{io::Read, option::Option};
 
 use crate::basic::system::*;
@@ -189,6 +189,17 @@ pub struct Shunt {
     pub in_service: bool,
     pub name: Option<String>,
 }
+/// Represents a switch in the network.
+#[derive(Default, Debug, Serialize, Deserialize)]
+pub struct Switch {
+    pub bus: i64,
+    pub element: i64,
+    #[serde(rename = "type")]
+    pub type_: Option<String>,
+    pub closed: bool,
+    pub name: Option<String>,
+    pub z_ohm: f64,
+}
 
 /// Represents a network.
 #[derive(Debug, Serialize, Deserialize)]
@@ -201,6 +212,7 @@ pub struct Network {
     pub shunt: Option<Vec<Shunt>>,
     pub ext_grid: Option<Vec<ExtGrid>>,
     pub sgen: Option<Vec<SGen>>,
+    pub switch: Option<Vec<Switch>>,
     pub f_hz: f64,
     pub sn_mva: f64,
 }
@@ -227,6 +239,7 @@ impl Default for Network {
             shunt: None,
             ext_grid: None,
             sgen: None,
+            switch: None,
             f_hz: 60.0,
             sn_mva: 100.0,
         }
@@ -442,6 +455,14 @@ macro_rules! read_csv_network {
         )*
     };
 }
+/// Macro to read network data from a json key.
+macro_rules! read_json_network {
+    ($net:ident, $map:ident, { $($field:ident: $file:expr),* $(,)? }) => {
+        $(
+            $net.$field = load_pandapower_element_json(&$map, $file);
+        )*
+    };
+}
 
 /// Loads a network from a ZIP file containing CSV files.
 pub fn load_csv_zip(name: String) -> Result<Network, std::io::Error> {
@@ -467,13 +488,13 @@ pub fn load_csv_zip(name: String) -> Result<Network, std::io::Error> {
         trafo: "trafo.csv",
         ext_grid: "ext_grid.csv",
         load: "load.csv",
-        sgen:"sgen.csv"
+        sgen:"sgen.csv",
+        switch:"switch.csv"
     });
     Ok(net)
 }
 
-
-fn load_json_from_str(file_content: String) -> Result<Map<String, Value>, std::io::Error> {
+fn load_json_from_str(file_content: &str) -> Result<Map<String, Value>, std::io::Error> {
     let parsed: Value = serde_json::from_str(&file_content)?;
     let obj: Map<String, Value> = parsed.as_object().unwrap().clone();
     Ok(obj)
@@ -482,25 +503,25 @@ fn load_json_from_str(file_content: String) -> Result<Map<String, Value>, std::i
 fn load_json(file_path: String) -> Result<Map<String, Value>, std::io::Error> {
     let file_content =
         fs::read_to_string(file_path).expect(format!("Error reading file network file").as_str());
-    let obj = load_json_from_str(file_content);
+    let obj = load_json_from_str(&file_content);
     obj
 }
 
 fn load_pandapower_element_json<T: serde::de::DeserializeOwned>(
     object: &Map<String, Value>,
-    key: String,
-) -> Vec<T> {
+    key: &str,
+) -> Option<Vec<T>> {
     let element = object
-        .get(&key)
+        .get(key)
         .and_then(|v| v.as_object())
-        .unwrap()
-        .get("_object")
-        .and_then(|v| v.as_str())
-        .unwrap();
-
+        .and_then(|v| v.get("_object"))
+        .and_then(|v| v.as_str());
+    if element.is_none() {
+        return None;
+    }
     let mut elements = Vec::new();
-
-    let map = load_json_from_str(element.to_string()).unwrap();
+    let element = element.unwrap();
+    let map = load_json_from_str(element).unwrap();
 
     let headers = map
         .get("columns")
@@ -534,7 +555,7 @@ fn load_pandapower_element_json<T: serde::de::DeserializeOwned>(
         elements.push(elem);
     }
 
-    return elements;
+    return Some(elements);
 }
 
 pub fn load_pandapower_json(file_path: String) -> Network {
@@ -542,14 +563,17 @@ pub fn load_pandapower_json(file_path: String) -> Network {
     let object: &Map<String, Value> = map.get("_object").and_then(|v| v.as_object()).unwrap();
 
     let mut net = Network::default();
-    net.bus = load_pandapower_element_json(object, "bus".to_string());
-    net.gen = Some(load_pandapower_element_json(object, "gen".to_string()));
-    net.line = Some(load_pandapower_element_json(object, "line".to_string()));
-    net.shunt = Some(load_pandapower_element_json(object, "shunt".to_string()));
-    net.trafo = Some(load_pandapower_element_json(object, "trafo".to_string()));
-    net.ext_grid = Some(load_pandapower_element_json(object, "ext_grid".to_string()));
-    net.load = Some(load_pandapower_element_json(object, "load".to_string()));
-    net.sgen = Some(load_pandapower_element_json(object, "sgen".to_string()));
+    net.bus = load_pandapower_element_json(object, "bus").unwrap();
+    read_json_network!(net, map, {
+        gen: "gen",
+        line: "line",
+        shunt: "shunt",
+        trafo: "trafo",
+        ext_grid: "ext_grid",
+        load: "load",
+        sgen:"sgen",
+        switch:"switch"
+    });
 
     return net;
 }
@@ -598,7 +622,6 @@ impl From<Network> for PFNetwork {
 mod tests {
     use super::*;
     use std::env;
-
 
     #[test]
     fn test_load_json() -> () {
