@@ -82,7 +82,7 @@ pub fn slice_csc_matrix_to<T: Clone>(
 ///
 /// A new CSC matrix containing the sliced block.
 #[inline(always)]
-pub fn slice_csc_matrix_block<T: Clone + Scalar + ClosedAdd + num_traits::Zero>(
+pub fn slice_csc_matrix_block<T: Clone + Scalar + ClosedAddAssign + num_traits::Zero>(
     mat: &CscMatrix<T>,
     star_pos: (usize, usize),
     shape: (usize, usize),
@@ -128,7 +128,7 @@ pub fn slice_csc_matrix_block<T: Clone + Scalar + ClosedAdd + num_traits::Zero>(
 /// * `shape` - The shape (rows, cols) of the block.
 /// * `dest` - A mutable reference to the destination CSC matrix.
 #[inline(always)]
-pub fn slice_csc_matrix_block_to<T: Copy + Clone + Scalar + ClosedAdd + num_traits::Zero>(
+pub fn slice_csc_matrix_block_to<T: Copy + Clone + Scalar + ClosedAddAssign + num_traits::Zero>(
     mat: &CscMatrix<T>,
     star_pos: (usize, usize),
     shape: (usize, usize),
@@ -166,7 +166,7 @@ pub fn slice_csc_matrix_block_to<T: Copy + Clone + Scalar + ClosedAdd + num_trai
 ///
 /// A vector containing the indices of non-zero elements in the block.
 #[inline(always)]
-pub fn csc_matrix_block_nnz_indices<T: Copy + Clone + Scalar + ClosedAdd + num_traits::Zero>(
+pub fn csc_matrix_block_nnz_indices<T: Copy + Clone + Scalar + ClosedAddAssign + num_traits::Zero>(
     mat: &CscMatrix<T>,
     star_pos: (usize, usize),
     shape: (usize, usize),
