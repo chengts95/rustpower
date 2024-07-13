@@ -24,6 +24,7 @@ pub struct AdmittanceBranch {
     pub y: admittance::Admittance,
     /// The port information of the branch.
     pub port: admittance::Port2,
+    /// base voltage for per-unit values
     pub v_base: f64,
 }
 
@@ -87,6 +88,7 @@ pub struct PFNetwork {
     /// The list of branches with admittance and port information in the network.
     pub y_br: Vec<AdmittanceBranch>,
 }
+
 
 /// Creates the nodal admittance matrix (Ybus) of the power flow network.
 ///

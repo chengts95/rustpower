@@ -184,11 +184,38 @@ pub struct Shunt {
     pub in_service: bool,
     pub name: Option<String>,
 }
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum SwitchType {
+    #[serde(rename = "l")]
+    SwitchBusLine,
+    #[serde(rename = "t")]
+    SwitchBusTransformer,
+    #[serde(rename = "t3")]
+    SwitchBusTransformer3w,
+    #[serde(rename = "b")]
+    #[default]
+    SwitchTwoBuses,
+    Unknown,
+}
+
+impl From<&str> for SwitchType {
+    fn from(s: &str) -> SwitchType {
+        match s {
+            "l" => SwitchType::SwitchBusLine,
+            "t" => SwitchType::SwitchBusTransformer,
+            "t3" => SwitchType::SwitchBusTransformer3w,
+            "b" => SwitchType::SwitchTwoBuses,
+            _ => SwitchType::Unknown,
+        }
+    }
+}
+
 /// Represents a switch in the network.
 #[derive(Default, Debug, Serialize, Deserialize)]
 pub struct Switch {
     pub bus: i64,
     pub element: i64,
+    pub et: SwitchType,
     #[serde(rename = "type")]
     pub type_: Option<String>,
     pub closed: bool,
@@ -393,17 +420,16 @@ fn load_pandapower_element_json<T: serde::de::DeserializeOwned>(
     object: &Map<String, Value>,
     key: &str,
 ) -> Option<Vec<T>> {
-    let element = object
-        .get(key)
-        .and_then(|v| v.as_object())
-        .and_then(|v| v.get("_object"))
-        .and_then(|v| v.as_str());
+    let element = object.get(key).and_then(|v| v.as_object()).and_then(|v| {
+        v.get("_object")
+    });
     if element.is_none() {
+        
         return None;
     }
     let mut elements = Vec::new();
     let element = element.unwrap();
-    let map = load_json_from_str(element).unwrap();
+    let map = load_json_from_str(element.as_str().unwrap()).unwrap();
 
     let headers = map
         .get("columns")
@@ -431,8 +457,6 @@ fn load_pandapower_element_json<T: serde::de::DeserializeOwned>(
             Value::Number(serde_json::Number::from(index as i64)),
         );
 
-        println!("key: {} Obj: {:?}", key, obj);
-
         let elem: T = serde_json::from_value(obj.clone().into()).unwrap();
         elements.push(elem);
     }
@@ -446,7 +470,7 @@ pub fn load_pandapower_json(file_path: &str) -> Network {
 
     let mut net = Network::default();
     net.bus = load_pandapower_element_json(object, "bus").unwrap();
-    read_json_network!(net, map, {
+    read_json_network!(net, object, {
         gen: "gen",
         line: "line",
         shunt: "shunt",
@@ -471,7 +495,7 @@ mod tests {
         let folder = format!("{}/cases", dir);
         let filepath: String = folder.to_owned() + "/networks.json";
         let net = load_pandapower_json(&filepath);
-        println!("{:?}", net);
+        net.gen.unwrap();
     }
 
     #[test]
@@ -500,6 +524,6 @@ mod tests {
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
         let folder = format!("{}/cases/IEEE118", dir);
         let name = folder.to_owned() + "/data.zip";
-        load_csv_zip(&name).unwrap();
+        let net = load_csv_zip(&name).unwrap();
     }
 }
