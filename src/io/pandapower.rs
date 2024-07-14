@@ -564,7 +564,7 @@ pub fn load_pandapower_json(file_path: String) -> Network {
 
     let mut net = Network::default();
     net.bus = load_pandapower_element_json(object, "bus").unwrap();
-    read_json_network!(net, map, {
+    read_json_network!(net, object, {
         gen: "gen",
         line: "line",
         shunt: "shunt",
