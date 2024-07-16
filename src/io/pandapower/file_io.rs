@@ -54,7 +54,7 @@ pub struct Bus {
 }
 
 /// Represents a generator in the network.
-#[derive(Default, Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone)]
 pub struct Gen {
     pub bus: i64,
     pub controllable: Option<bool>,
@@ -75,7 +75,7 @@ pub struct Gen {
 }
 
 /// Represents a load in the network.
-#[derive(Default, Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone)]
 pub struct Load {
     pub bus: i64,
     pub const_i_percent: f64,
@@ -92,7 +92,7 @@ pub struct Load {
 }
 
 /// Represents a line in the network.
-#[derive(Default, Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone)]
 pub struct Line {
     pub c_nf_per_km: f64,
     pub df: f64,
@@ -113,7 +113,7 @@ pub struct Line {
 }
 
 /// Represents a transformer in the network.
-#[derive(Default, Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone)]
 pub struct Transformer {
     pub df: f64,
     pub hv_bus: i32,
@@ -142,7 +142,7 @@ pub struct Transformer {
 }
 
 /// Represents an external grid in the network.
-#[derive(Default, Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone)]
 pub struct ExtGrid {
     pub bus: i64,
     pub in_service: bool,
@@ -157,7 +157,7 @@ pub struct ExtGrid {
 }
 
 /// Represents the data from the sgen.
-#[derive(Default, Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone)]
 pub struct SGen {
     pub name: Option<String>,
     pub bus: i64,
@@ -173,7 +173,7 @@ pub struct SGen {
 }
 
 /// Represents a shunt in the network.
-#[derive(Default, Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone)]
 pub struct Shunt {
     pub bus: i64,
     pub q_mvar: f64,
@@ -184,7 +184,7 @@ pub struct Shunt {
     pub in_service: bool,
     pub name: Option<String>,
 }
-#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize, Clone)]
 pub enum SwitchType {
     #[serde(rename = "l")]
     SwitchBusLine,
@@ -198,6 +198,19 @@ pub enum SwitchType {
     Unknown,
 }
 
+/// Represents a switch in the network.
+#[derive(Default, Debug, Serialize, Deserialize, Clone)]
+pub struct Switch {
+    pub bus: i64,
+    pub element: i64,
+    pub et: SwitchType,
+    #[serde(rename = "type")]
+    pub type_: Option<String>,
+    pub closed: bool,
+    pub name: Option<String>,
+    pub z_ohm: f64,
+}
+
 impl From<&str> for SwitchType {
     fn from(s: &str) -> SwitchType {
         match s {
@@ -208,19 +221,6 @@ impl From<&str> for SwitchType {
             _ => SwitchType::Unknown,
         }
     }
-}
-
-/// Represents a switch in the network.
-#[derive(Default, Debug, Serialize, Deserialize)]
-pub struct Switch {
-    pub bus: i64,
-    pub element: i64,
-    pub et: SwitchType,
-    #[serde(rename = "type")]
-    pub type_: Option<String>,
-    pub closed: bool,
-    pub name: Option<String>,
-    pub z_ohm: f64,
 }
 
 /// Represents a network.
@@ -420,11 +420,11 @@ fn load_pandapower_element_json<T: serde::de::DeserializeOwned>(
     object: &Map<String, Value>,
     key: &str,
 ) -> Option<Vec<T>> {
-    let element = object.get(key).and_then(|v| v.as_object()).and_then(|v| {
-        v.get("_object")
-    });
+    let element = object
+        .get(key)
+        .and_then(|v| v.as_object())
+        .and_then(|v| v.get("_object"));
     if element.is_none() {
-        
         return None;
     }
     let mut elements = Vec::new();
