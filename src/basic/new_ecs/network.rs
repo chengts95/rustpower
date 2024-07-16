@@ -3,7 +3,7 @@ use bevy_ecs::prelude::*;
 
 /// Represents the ground node in the network.
 pub const GND: i32 = -1;
-
+#[derive(Default)]
 pub struct PowerGrid {
     data_storage: App,
 }

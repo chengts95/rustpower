@@ -6,6 +6,7 @@ use crate::basic::newtonpf::newton_pf;
 #[allow(unused_imports)]
 use crate::basic::solver::RSparseSolver;
 use crate::io::pandapower::*;
+use bevy_ecs::component::Component;
 use nalgebra::*;
 use nalgebra_sparse::*;
 use num_complex::Complex64;
@@ -18,7 +19,7 @@ use crate::basic::solver::KLUSolver;
 pub const GND: i32 = -1;
 
 /// Represents a branch with admittance and port information.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Component)]
 pub struct AdmittanceBranch {
     /// The admittance value of the branch.
     pub y: admittance::Admittance,
@@ -29,7 +30,7 @@ pub struct AdmittanceBranch {
 }
 
 /// Represents a node with specified power and bus information in a power system.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Component)]
 pub struct PQNode {
     /// The complex power injected at the node.
     pub s: Complex<f64>,
@@ -38,7 +39,7 @@ pub struct PQNode {
 }
 
 /// Represents a node with specified active power, voltage, and bus information in a power system.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Component)]
 pub struct PVNode {
     /// The active power injected at the node.
     pub p: f64,
@@ -49,7 +50,7 @@ pub struct PVNode {
 }
 
 /// Represents an external grid node with voltage, phase, and bus information.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Component)]
 pub struct ExtGridNode {
     /// The voltage magnitude at the external grid node.
     pub v: f64,
@@ -88,7 +89,6 @@ pub struct PFNetwork {
     /// The list of branches with admittance and port information in the network.
     pub y_br: Vec<AdmittanceBranch>,
 }
-
 
 /// Creates the nodal admittance matrix (Ybus) of the power flow network.
 ///
