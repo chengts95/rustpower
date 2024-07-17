@@ -115,13 +115,13 @@ fn trafo_to_admit(item: &Transformer) -> Vec<AdmittanceBranch> {
         return v;
     }
     let port = Port2(vector![item.hv_bus, GND]);
-    let y = Admittance(0.5 * c / tap_m.powi(2));
+    let y = Admittance( c / tap_m.powi(2));
     let shunt = AdmittanceBranch { y, port, v_base };
     v.push(shunt);
-    let port = Port2(vector![item.lv_bus, GND]);
-    let y = Admittance(0.5 * c);
-    let shunt = AdmittanceBranch { y, port, v_base };
-    v.push(shunt);
+    // let port = Port2(vector![item.lv_bus, GND]);
+    // let y = Admittance(0.5 * c);
+    // let shunt = AdmittanceBranch { y, port, v_base };
+    // v.push(shunt);
     v
 }
 

@@ -1,8 +1,11 @@
 use bevy_ecs::system::RunSystemOnce;
 use derive_more::{Deref, DerefMut};
+use network::DataOps;
+use network::PowerGrid;
 use network::GND;
 
 use crate::basic::new_ecs::*;
+use crate::basic::system::PFNetwork;
 use crate::prelude::pandapower::*;
 use bevy_ecs::prelude::*;
 use bevy_hierarchy::prelude::*;
@@ -142,68 +145,75 @@ fn line_to_admit(cmd: &mut Commands, net: &Network) {
         });
 }
 /// Converts a transformer to its equivalent admittance branches.
-fn trafo_to_admit(cmd: &mut Commands, net: &Network)  {
-    net.trafo.as_ref()
-    .unwrap_or(&Vec::new())
-    .iter()
-    .enumerate()
-    .for_each(|(idx, item)|{
-        let v_base = item.vn_lv_kv;
-        let vkr = item.vkr_percent * 0.01;
-        let vk = item.vk_percent * 0.01;
-    
-        let tap_m = 1.0
-            + (item.tap_pos.unwrap_or(0.0) - item.tap_neutral.unwrap_or(0.0))
-                * 0.01
-                * item.tap_step_percent.unwrap_or(0.0);
-        let zbase = v_base * v_base / item.sn_mva;
-        let z = zbase * vk;
-        let parallel = item.parallel;
-    
-        let re = zbase * vkr;
-        let im = (z.powi(2) - re.powi(2)).sqrt();
-        let port = Port2(vector![item.hv_bus.into(), item.lv_bus.into()]);
-        let y = 1.0 / (Complex { re, im } * parallel as f64);
-        let mut entity = cmd.spawn((
-            Transformer,
-            ElemIdx(idx),
-            Port2(vector![item.hv_bus as i64,item.lv_bus as i64]),
-        ));
-    });
+fn trafo_to_admit(cmd: &mut Commands, net: &Network) {
+    net.trafo
+        .as_ref()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .enumerate()
+        .for_each(|(idx, item)| {
+            let v_base = item.vn_lv_kv;
+            let vkr = item.vkr_percent * 0.01;
+            let vk = item.vk_percent * 0.01;
 
-    // let sc = AdmittanceBranch {
-    //     y: Admittance(y / tap_m), 
-    //     port,
-    //     v_base,
-    // };
-    // let mut v = Vec::new();
-    // v.push(sc);
-    // v.push(AdmittanceBranch {
-    //     y: Admittance((1.0 - tap_m) * y / tap_m.powi(2)),
-    //     port: Port2(vector![item.hv_bus, GND]),
-    //     v_base,
-    // });
-    // v.push(AdmittanceBranch {
-    //     y: Admittance((1.0 - 1.0 / tap_m) * y),
-    //     port: Port2(vector![item.lv_bus, GND]),
-    //     v_base,
-    // });
-    // let re = zbase * (0.001 * item.pfe_kw) / item.sn_mva;
-    // let im = zbase / (0.01 * item.i0_percent);
-    // let c = parallel as f64 / Complex { re, im };
+            let tap_m = 1.0
+                + (item.tap_pos.unwrap_or(0.0) - item.tap_neutral.unwrap_or(0.0))
+                    * 0.01
+                    * item.tap_step_percent.unwrap_or(0.0);
+            let zbase = v_base * v_base / item.sn_mva;
+            let z = zbase * vk;
+            let parallel = item.parallel;
 
-    // if c.is_nan() {
-    //     return v;
-    // }
-    // let port = Port2(vector![item.hv_bus, GND]);
-    // let y = Admittance(0.5 * c / tap_m.powi(2));
-    // let shunt = AdmittanceBranch { y, port, v_base };
-    // v.push(shunt);
-    // let port = Port2(vector![item.lv_bus, GND]);
-    // let y = Admittance(0.5 * c);
-    // let shunt = AdmittanceBranch { y, port, v_base };
-    // v.push(shunt);
-    // v
+            let re = zbase * vkr;
+            let im = (z.powi(2) - re.powi(2)).sqrt();
+            let port = Port2(vector![item.hv_bus.into(), item.lv_bus.into()]);
+            let y = 1.0 / (Complex { re, im } * parallel as f64);
+            let mut entity = cmd.spawn((
+                Transformer,
+                ElemIdx(idx),
+                Port2(vector![item.hv_bus as i64, item.lv_bus as i64]),
+            ));
+
+            let sc = AdmittanceBranch {
+                y: Admittance(y / tap_m),
+                port,
+                v_base: VBase(v_base),
+            };
+            let mut v = Vec::new();
+            v.push(sc);
+            v.push(AdmittanceBranch {
+                y: Admittance((1.0 - tap_m) * y / tap_m.powi(2)),
+                port: Port2(vector![item.hv_bus.into(), GND.into()]),
+                v_base: VBase(v_base),
+            });
+            v.push(AdmittanceBranch {
+                y: Admittance((1.0 - 1.0 / tap_m) * y),
+                port: Port2(vector![item.lv_bus.into(), GND.into()]),
+                v_base: VBase(v_base),
+            });
+            let re = zbase * (0.001 * item.pfe_kw) / item.sn_mva;
+            let im = zbase / (0.01 * item.i0_percent);
+            let c = parallel as f64 / Complex { re, im };
+
+            if c.is_nan() {
+                return;
+            }
+            let port = Port2(vector![item.hv_bus.into(), GND.into()]);
+            let y = Admittance(c / tap_m.powi(2));
+            let shunt1 = AdmittanceBranch {
+                y,
+                port,
+                v_base: VBase(v_base),
+            };
+
+            // let port = Port2(vector![item.lv_bus.into(), GND.into()]);
+            // let y = Admittance(0.5 * c);
+            // let shunt2 = AdmittanceBranch { y, port, v_base:VBase(v_base)};
+            entity.with_children(|p| {
+                p.spawn(shunt1);
+                //  p.spawn(shunt2);
+            });
+        });
 }
 
 fn processing_pq_elems(cmd: &mut Commands, net: &Network) {
@@ -325,8 +335,6 @@ fn process_switch_state(mut cmd: Commands, q: Query<(Entity, &Switch, &SwitchSta
     });
 }
 
-
-
 pub fn init_sw(mut world: World) {
     world.run_system_once(process_switch);
 }
@@ -334,6 +342,7 @@ pub fn init_pf(mut cmd: Commands, value: Res<PPNetwork>) {
     let net = value.as_ref();
     init_node_lookup(&value, &mut cmd);
     line_to_admit(&mut cmd, net);
+    trafo_to_admit(&mut cmd, net);
     processing_pq_elems(&mut cmd, net);
     processing_pv_nodes(&mut cmd, net);
     extgrid_to_extnode(&mut cmd, net);
@@ -347,6 +356,16 @@ fn init_node_lookup(value: &Res<PPNetwork>, cmd: &mut Commands) {
     }
     cmd.insert_resource(d);
 }
+impl TryFrom<&PowerGrid> for PFNetwork {
+
+    type Error = std::io::Error;
+    
+    fn try_from(value: &PowerGrid) -> Result<Self, Self::Error> {
+        let net = value.world().get_resource::<PPNetwork>().unwrap();
+        
+       
+    }
+}
 
 mod tests {
     use bevy_ecs::system::RunSystemOnce;
@@ -356,7 +375,7 @@ mod tests {
     use std::env;
 
     #[test]
-    fn test_load_csv_zip(){
+    fn test_load_csv_zip() {
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
         let folder = format!("{}/cases/IEEE118", dir);
         let name = folder.to_owned() + "/data.zip";
@@ -366,8 +385,8 @@ mod tests {
         println!("{}", net.bus.len());
         world.insert_resource(PPNetwork(net));
         world.run_system_once(init_pf);
-        let a = world.get_resource::<NodeLookup>();
-
-        println!("{:?}", a.unwrap().0.len());
+        let mut a = world.query::<(&Transformer,&Port2)>();
+        
+        println!("{:?}", a.iter(world).collect::<Vec<_>>().len());
     }
 }
