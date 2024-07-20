@@ -1,9 +1,9 @@
 use bevy_ecs::system::RunSystemOnce;
-use derive_more::{Deref, DerefMut};
-use network::DataOps;
+
 use network::PowerGrid;
 use network::GND;
 
+use crate::basic;
 use crate::basic::new_ecs::*;
 use crate::basic::system::PFNetwork;
 use crate::prelude::pandapower::*;
@@ -12,91 +12,14 @@ use bevy_hierarchy::prelude::*;
 use elements::*;
 use nalgebra::vector;
 use nalgebra::Complex;
-use std::collections::HashMap;
-use std::default;
+
 use std::f64::consts::PI;
+use std::fmt;
 
-use crate::prelude::ExtGridNode;
-use crate::prelude::PQNode;
-use crate::prelude::PVNode;
-
-#[derive(Debug, Component, Deref, DerefMut)]
-pub struct ElemIdx(pub usize);
-#[derive(Debug, Component, Deref, DerefMut)]
-pub struct PFNode(pub usize);
-
-#[derive(Default, Debug, Resource)]
-pub struct NodeLookup(pub HashMap<i64, Entity>);
-#[derive(Debug, Component)]
-pub struct AuxNode {
-    pub bus: i64,
-}
-#[derive(Debug, Component)]
-pub struct Line;
-#[derive(Debug, Component)]
-pub struct Transformer;
-
-#[derive(Debug, Resource)]
-pub struct PFCommonData {
-    pub wbase: f64,
-    pub sbase: f64,
-}
-
-#[derive(Debug, Clone, Copy, Default, Component)]
-pub struct PQLoad {
-    /// The complex power injected at the node.
-    pub s: Complex<f64>,
-    /// The bus identifier of the node.
-    pub bus: i64,
-}
-
-#[derive(Debug, Component)]
-pub enum NodeType {
-    PQ(PQNode),
-    PV(PVNode),
-    EXT(ExtGridNode),
-    AUX(AuxNode),
-}
-impl Default for NodeType {
-    fn default() -> Self {
-        NodeType::PQ(PQNode::default())
-    }
-}
-
-impl From<PQNode> for NodeType {
-    fn from(node: PQNode) -> Self {
-        NodeType::PQ(node)
-    }
-}
-
-impl From<PVNode> for NodeType {
-    fn from(node: PVNode) -> Self {
-        NodeType::PV(node)
-    }
-}
-
-impl From<ExtGridNode> for NodeType {
-    fn from(node: ExtGridNode) -> Self {
-        NodeType::EXT(node)
-    }
-}
-
-impl From<AuxNode> for NodeType {
-    fn from(node: AuxNode) -> Self {
-        NodeType::AUX(node)
-    }
-}
-/// Represents a switch in the network.
-#[derive(Default, Debug, Clone, Component)]
-pub struct Switch {
-    pub bus: i64,
-    pub element: i64,
-    pub et: SwitchType,
-    pub z_ohm: f64,
-}
-/// Represents a switch state in the network.
-#[derive(Default, Debug, Clone, Component, Deref, DerefMut)]
-pub struct SwitchState(pub bool);
+use elements::PQNode;
+use elements::PVNode;
+use elements::Switch;
+use elements::Transformer as Transformer;
 
 fn line_to_admit(cmd: &mut Commands, net: &Network) {
     let wbase = 2.0 * PI * net.f_hz;
@@ -179,17 +102,19 @@ fn trafo_to_admit(cmd: &mut Commands, net: &Network) {
                 port,
                 v_base: VBase(v_base),
             };
-            let mut v = Vec::new();
-            v.push(sc);
-            v.push(AdmittanceBranch {
-                y: Admittance((1.0 - tap_m) * y / tap_m.powi(2)),
-                port: Port2(vector![item.hv_bus.into(), GND.into()]),
-                v_base: VBase(v_base),
-            });
-            v.push(AdmittanceBranch {
-                y: Admittance((1.0 - 1.0 / tap_m) * y),
-                port: Port2(vector![item.lv_bus.into(), GND.into()]),
-                v_base: VBase(v_base),
+
+            entity.with_children(|p| {
+                p.spawn(sc);
+                p.spawn(AdmittanceBranch {
+                    y: Admittance((1.0 - tap_m) * y / tap_m.powi(2)),
+                    port: Port2(vector![item.hv_bus.into(), GND.into()]),
+                    v_base: VBase(v_base),
+                });
+                p.spawn(AdmittanceBranch {
+                    y: Admittance((1.0 - 1.0 / tap_m) * y),
+                    port: Port2(vector![item.lv_bus.into(), GND.into()]),
+                    v_base: VBase(v_base),
+                });
             });
             let re = zbase * (0.001 * item.pfe_kw) / item.sn_mva;
             let im = zbase / (0.01 * item.i0_percent);
@@ -303,10 +228,10 @@ fn process_switch(mut cmd: Commands, net: Res<PPNetwork>) {
         });
     }
 }
-
+#[allow(dead_code)]
 fn process_switch_state(mut cmd: Commands, q: Query<(Entity, &Switch, &SwitchState)>) {
     q.iter().for_each(|(entity, switch, closed)| {
-        let z_ohm = switch.z_ohm;
+        let _z_ohm = switch.z_ohm;
         let from = switch.bus;
         match switch.et {
             SwitchType::SwitchBusLine => {
@@ -324,7 +249,8 @@ fn process_switch_state(mut cmd: Commands, q: Query<(Entity, &Switch, &SwitchSta
                 if **closed {
                     cmd.entity(entity).with_children(|p| {
                         //we will merge 2 nodes
-                        //  p.spawn();
+                        let to = switch.element;
+                        p.spawn(MergeNode(from as usize, to as usize));
                     });
                 } else {
                     //do nothing
@@ -338,38 +264,129 @@ fn process_switch_state(mut cmd: Commands, q: Query<(Entity, &Switch, &SwitchSta
 pub fn init_sw(mut world: World) {
     world.run_system_once(process_switch);
 }
-pub fn init_pf(mut cmd: Commands, value: Res<PPNetwork>) {
-    let net = value.as_ref();
-    init_node_lookup(&value, &mut cmd);
-    line_to_admit(&mut cmd, net);
-    trafo_to_admit(&mut cmd, net);
-    processing_pq_elems(&mut cmd, net);
-    processing_pv_nodes(&mut cmd, net);
-    extgrid_to_extnode(&mut cmd, net);
+pub fn init_pf(world: &mut World) {
+    world.resource_scope::<PPNetwork, _>(|world, net: Mut<PPNetwork>| {
+        let net = &net;
+        world.insert_resource(PFCommonData {
+            wbase: 2.0 * PI * net.f_hz,
+            sbase: net.sn_mva,
+        });
+
+        init_node_lookup(net, world);
+        let mut cmd = world.commands();
+        line_to_admit(&mut cmd, net);
+        trafo_to_admit(&mut cmd, net);
+        processing_pq_elems(&mut cmd, net);
+        processing_pv_nodes(&mut cmd, net);
+        extgrid_to_extnode(&mut cmd, net);
+    });
 }
 
-fn init_node_lookup(value: &Res<PPNetwork>, cmd: &mut Commands) {
+fn init_node_lookup(value: &PPNetwork, world: &mut World) {
     let mut d = NodeLookup::default();
     for i in &value.bus {
-        let idx = cmd.spawn(PFNode(i.index as usize));
+        let idx = world.spawn(PFNode(i.index as usize));
         d.0.insert(i.index, idx.id());
     }
-    cmd.insert_resource(d);
+    world.insert_resource(d);
 }
-impl TryFrom<&PowerGrid> for PFNetwork {
 
-    type Error = std::io::Error;
-    
-    fn try_from(value: &PowerGrid) -> Result<Self, Self::Error> {
-        let net = value.world().get_resource::<PPNetwork>().unwrap();
-        
-       
+#[derive(Debug)]
+pub enum ParseError {
+    InvalidData,
+    ConversionError(String),
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ParseError::InvalidData => write!(f, "Invalid input data"),
+            ParseError::ConversionError(msg) => write!(f, "Conversion failed: {}", msg),
+        }
     }
 }
+impl std::error::Error for ParseError {}
 
+impl TryFrom<&mut PowerGrid> for PFNetwork {
+    type Error = ParseError;
+
+    fn try_from(value: &mut PowerGrid) -> Result<Self, Self::Error> {
+        use crate::basic::new_ecs::network::DataOps;
+        let world = value.world_mut();
+        if world.get_resource::<PPNetwork>().is_none() {
+            return Err(ParseError::ConversionError(
+                "Net resource not found".to_string(),
+            ));
+        }
+        world.run_system_once(init_pf);
+        let net = &world.get_resource::<PPNetwork>().unwrap();
+        let buses = net.bus.clone();
+        let v_base = net.bus[0].vn_kv;
+        let s_base = net.sn_mva;
+        let pq_loads = extract_node(world, |x| {
+            if let NodeType::PQ(v) = x {
+                Some(v.clone())
+            } else {
+                None
+            }
+        });
+        let pv_nodes = extract_node(world, |x| {
+            if let NodeType::PV(v) = x {
+                Some(v.clone())
+            } else {
+                None
+            }
+        });
+        let binding = extract_node(world, |x| {
+            if let NodeType::EXT(v) = x {
+                Some(v.clone())
+            } else {
+                None
+            }
+        });
+        let ext = binding
+            .get(0)
+            .ok_or_else(|| ParseError::ConversionError("No external node found".to_string()))?;
+        let ext = ext.clone();
+        let y_br: Vec<_> = world
+            .query::<(&Admittance, &Port2, &VBase)>()
+            .iter(world)
+            .map(|(a, p, vb)| basic::system::AdmittanceBranch {
+                y: basic::system::Admittance(a.0),
+                port: basic::system::Port2(p.0.cast()),
+                v_base: vb.0,
+            })
+            .collect();
+
+        let net = PFNetwork {
+            v_base,
+            s_base,
+            buses,
+            pq_loads,
+            pv_nodes,
+            ext,
+            y_br,
+        };
+        Ok(net)
+    }
+}
+fn extract_node<T, F>(world: &mut World, extractor: F) -> Vec<T>
+where
+    F: Fn(&NodeType) -> Option<T>,
+{
+    world
+        .query::<&NodeType>()
+        .iter(world)
+        .filter_map(extractor)
+        .collect()
+}
+#[allow(unused_imports)]
 mod tests {
     use bevy_ecs::system::RunSystemOnce;
+    use nalgebra::ComplexField;
     use network::{DataOps, PowerGrid};
+
+    use crate::basic::{self, system::RunPF};
 
     use super::*;
     use std::env;
@@ -385,8 +402,29 @@ mod tests {
         println!("{}", net.bus.len());
         world.insert_resource(PPNetwork(net));
         world.run_system_once(init_pf);
-        let mut a = world.query::<(&Transformer,&Port2)>();
-        
+        let mut a = world.query::<(&Transformer, &Port2)>();
+
         println!("{:?}", a.iter(world).collect::<Vec<_>>().len());
+    }
+
+    #[test]
+    fn test_to_pf_net() {
+        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let folder = format!("{}/cases/IEEE118", dir);
+        let name = folder.to_owned() + "/data.zip";
+        let net = load_csv_zip(&name).unwrap();
+
+        let mut pf_net = PowerGrid::default();
+        pf_net.world_mut().insert_resource(PPNetwork(net));
+        let net = PFNetwork::try_from(&mut pf_net).unwrap();
+        let v_init = net.create_v_init();
+        let tol = Some(1e-8);
+        let max_it = Some(10);
+        let (v, iter) = net.run_pf(v_init.clone(), max_it, tol);
+        println!("Vm,\t angle");
+        for (x, i) in v.iter().enumerate() {
+            println!("{} {:.5}, {:.5}", x, i.modulus(), i.argument().to_degrees());
+        }
+        println!("converged within {} iterations", iter);
     }
 }

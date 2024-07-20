@@ -51,7 +51,7 @@ fn create_incidence_mat(nodes: usize, y_br: &[Port2]) -> CooMatrix<Complex<f64>>
     }
     incidence_matrix
 }
-
+#[allow(non_snake_case)]
 fn main() {
     let file_path = test_ieee39::IEEE_39;
     let net: Network = serde_json::from_str(file_path).unwrap();

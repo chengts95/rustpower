@@ -524,6 +524,6 @@ mod tests {
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
         let folder = format!("{}/cases/IEEE118", dir);
         let name = folder.to_owned() + "/data.zip";
-        let net = load_csv_zip(&name).unwrap();
+        let _net = load_csv_zip(&name).unwrap();
     }
 }
