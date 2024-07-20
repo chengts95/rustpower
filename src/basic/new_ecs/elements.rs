@@ -1,11 +1,15 @@
 
+use std::collections::HashMap;
+
 use crate::io::pandapower;
 use bevy_ecs::prelude::*;
 use derive_more::{Deref, DerefMut};
 use nalgebra::Complex;
 use serde::{Deserialize, Serialize};
-
-
+pub use crate::prelude::ExtGridNode;
+pub use crate::prelude::PQNode as PQNode;
+pub use crate::prelude::PVNode as PVNode;
+pub use super::switch::*;
 #[derive(Debug, Component, Deref, DerefMut)]
 #[derive(Default)]
 pub struct VBase(pub f64);
@@ -35,16 +39,70 @@ pub struct AdmittanceBranch {
 }
 
 
-/// Represents a node with specified power and bus information in a power system.
-#[derive(Debug, Clone, Copy, Default, Component)]
-pub struct PQNode {
-    /// The complex power injected at the node.
-    pub s: Complex<f64>,
-    /// The bus identifier of the node.
-    pub bus: i64,
-}
+
 
 #[derive(Debug, Resource, Deref, DerefMut)]
 pub struct PPNetwork(pub pandapower::Network);
 
+
+#[derive(Debug, Component, Deref, DerefMut)]
+pub struct ElemIdx(pub usize);
+#[derive(Debug, Component, Deref, DerefMut)]
+pub struct PFNode(pub usize);
+
+#[derive(Default, Debug, Resource)]
+pub struct NodeLookup(pub HashMap<i64, Entity>);
+#[derive(Debug, Component)]
+pub struct AuxNode {
+    pub bus: i64,
+}
+#[derive(Debug, Component)]
+pub struct Line;
+#[derive(Debug, Component)]
+pub struct Transformer;
+
+#[derive(Debug, Resource)]
+pub struct PFCommonData {
+    pub wbase: f64,
+    pub sbase: f64,
+}
+
+
+
+#[derive(Debug, Component)]
+pub enum NodeType {
+    PQ(PQNode),
+    PV(PVNode),
+    EXT(ExtGridNode),
+    AUX(AuxNode),
+}
+impl Default for NodeType {
+    fn default() -> Self {
+        NodeType::PQ(PQNode::default())
+    }
+}
+
+impl From<PQNode> for NodeType {
+    fn from(node: PQNode) -> Self {
+        NodeType::PQ(node)
+    }
+}
+
+impl From<PVNode> for NodeType {
+    fn from(node: PVNode) -> Self {
+        NodeType::PV(node)
+    }
+}
+
+impl From<ExtGridNode> for NodeType {
+    fn from(node: ExtGridNode) -> Self {
+        NodeType::EXT(node)
+    }
+}
+
+impl From<AuxNode> for NodeType {
+    fn from(node: AuxNode) -> Self {
+        NodeType::AUX(node)
+    }
+}
 

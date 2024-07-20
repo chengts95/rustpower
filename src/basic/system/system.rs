@@ -200,21 +200,7 @@ fn create_premute_mat(
     t
 }
 
-fn create_yf_yt(
-    nodes: usize,
-    incidence_matrix: &CsrMatrix<Complex<f64>>,
-    y_br: &Vec<AdmittanceBranch>,
-) -> CsrMatrix<Complex64> {
-    let mut diag_admit = CsrMatrix::identity(y_br.len());
-    diag_admit
-        .values_mut()
-        .iter_mut()
-        .zip(y_br.iter())
-        .for_each(|(x, y)| *x = y.y.0);
 
-    let yf = diag_admit * incidence_matrix.transpose();
-    yf
-}
 
 /// A trait for running power flow analysis.
 pub trait RunPF {
@@ -426,14 +412,7 @@ mod tests {
         assert_eq!(nan, false, "invalid parameters {:?}", ybus.values());
     }
 
-    #[test]
-    fn test_yf_yt() {
-        let (pf, _pv, nodes, _) = test_system();
-
-        let incidence_matrix = create_incidence_mat(nodes, &pf.y_br);
-        let yf = create_yf_yt(nodes, &CsrMatrix::from(&incidence_matrix), &pf.y_br);
-        println!("{:?}", yf);
-    }
+ 
 
     #[test]
     fn test_node_reordering() {
