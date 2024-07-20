@@ -19,7 +19,7 @@ use std::fmt;
 use elements::PQNode;
 use elements::PVNode;
 use elements::Switch;
-use elements::Transformer as Transformer;
+use elements::Transformer;
 
 fn line_to_admit(cmd: &mut Commands, net: &Network) {
     let wbase = 2.0 * PI * net.f_hz;

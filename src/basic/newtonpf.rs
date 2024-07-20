@@ -5,10 +5,10 @@ use crate::basic::sparse::{
     conj::RealImage,
     stack::{csc_hstack, csc_vstack},
 };
-use num_traits::Zero;
 use nalgebra::*;
 use nalgebra_sparse::*;
 use num_complex::Complex64;
+use num_traits::Zero;
 
 /// Performs a Newton-Raphson power flow calculation.
 ///
@@ -76,13 +76,22 @@ pub fn newton_pf<Solver: Solve>(
         };
 
         let dx = &F;
-        update_v(&mut v_a, dx, n_bus, &mut v_m, npv, num_state, &mut v_norm, &mut v);
+        update_v(
+            &mut v_a,
+            dx,
+            n_bus,
+            &mut v_m,
+            npv,
+            num_state,
+            &mut v_norm,
+            &mut v,
+        );
 
         v.component_mul(&(Ybus * &v).conjugate())
             .sub_to(Sbus, &mut mis);
 
         assemble_f(&mut F, n_bus, &mis, num_state, npv);
-  
+
         if F.norm() < tol {
             return Ok((v, iterations));
         }
@@ -237,7 +246,6 @@ fn build_jacobian(
     J
 }
 
-
 /// Builds the Jacobian matrix using a cache.
 ///
 /// # Parameters
@@ -309,7 +317,7 @@ fn build_jacobian_cached(
                 j22,
             };
             cache.replace(icache);
-           
+
             J
         }
     }

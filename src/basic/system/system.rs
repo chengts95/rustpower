@@ -200,8 +200,6 @@ fn create_premute_mat(
     t
 }
 
-
-
 /// A trait for running power flow analysis.
 pub trait RunPF {
     /// Creates the nodal admittance matrix (Ybus) of the power flow network.
@@ -411,8 +409,6 @@ mod tests {
         let nan = ybus.values().iter().fold(false, |a, b| a | b.is_nan());
         assert_eq!(nan, false, "invalid parameters {:?}", ybus.values());
     }
-
- 
 
     #[test]
     fn test_node_reordering() {
