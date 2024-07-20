@@ -166,7 +166,9 @@ pub fn slice_csc_matrix_block_to<T: Copy + Clone + Scalar + ClosedAddAssign + nu
 ///
 /// A vector containing the indices of non-zero elements in the block.
 #[inline(always)]
-pub fn csc_matrix_block_nnz_indices<T: Copy + Clone + Scalar + ClosedAddAssign + num_traits::Zero>(
+pub fn csc_matrix_block_nnz_indices<
+    T: Copy + Clone + Scalar + ClosedAddAssign + num_traits::Zero,
+>(
     mat: &CscMatrix<T>,
     star_pos: (usize, usize),
     shape: (usize, usize),

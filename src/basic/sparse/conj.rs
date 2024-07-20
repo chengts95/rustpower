@@ -135,9 +135,9 @@ where
 // 测试模块
 #[cfg(test)]
 mod tests {
+    use super::*;
     use nalgebra::*;
     use nalgebra_sparse::{CooMatrix, CscMatrix};
-    use super::*;
 
     /// Tests the conjugate operation.
     #[test]

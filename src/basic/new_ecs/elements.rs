@@ -1,19 +1,16 @@
-
 use std::collections::HashMap;
 
+pub use super::switch::*;
 use crate::io::pandapower;
+pub use crate::prelude::ExtGridNode;
+pub use crate::prelude::PQNode;
+pub use crate::prelude::PVNode;
 use bevy_ecs::prelude::*;
 use derive_more::{Deref, DerefMut};
 use nalgebra::Complex;
 use serde::{Deserialize, Serialize};
-pub use crate::prelude::ExtGridNode;
-pub use crate::prelude::PQNode as PQNode;
-pub use crate::prelude::PVNode as PVNode;
-pub use super::switch::*;
-#[derive(Debug, Component, Deref, DerefMut)]
-#[derive(Default)]
+#[derive(Debug, Component, Deref, DerefMut, Default)]
 pub struct VBase(pub f64);
-
 
 /// Represents an admittance value in a power system.
 ///
@@ -38,12 +35,8 @@ pub struct AdmittanceBranch {
     pub v_base: VBase,
 }
 
-
-
-
 #[derive(Debug, Resource, Deref, DerefMut)]
 pub struct PPNetwork(pub pandapower::Network);
-
 
 #[derive(Debug, Component, Deref, DerefMut)]
 pub struct ElemIdx(pub usize);
@@ -66,8 +59,6 @@ pub struct PFCommonData {
     pub wbase: f64,
     pub sbase: f64,
 }
-
-
 
 #[derive(Debug, Component)]
 pub enum NodeType {
@@ -105,4 +96,3 @@ impl From<AuxNode> for NodeType {
         NodeType::AUX(node)
     }
 }
-

@@ -351,8 +351,8 @@ fn vstack<T: Clone + Scalar, U: SpMat<DT = T> + SpConvert<DT = T, S = U>>(
 // Test module
 #[cfg(test)]
 mod tests {
-    use nalgebra::*;
     use super::*;
+    use nalgebra::*;
 
     /// Tests the horizontal stacking of CSC matrices.
     #[test]
