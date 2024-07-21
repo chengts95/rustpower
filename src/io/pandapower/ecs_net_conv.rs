@@ -124,19 +124,23 @@ fn trafo_to_admit(cmd: &mut Commands, net: &Network) {
                 return;
             }
             let port = Port2(vector![item.hv_bus.into(), GND.into()]);
-            let y = Admittance(c / tap_m.powi(2));
+            let y = Admittance(0.5* c / tap_m.powi(2));
             let shunt1 = AdmittanceBranch {
                 y,
                 port,
                 v_base: VBase(v_base),
             };
 
-            // let port = Port2(vector![item.lv_bus.into(), GND.into()]);
-            // let y = Admittance(0.5 * c);
-            // let shunt2 = AdmittanceBranch { y, port, v_base:VBase(v_base)};
+            let port = Port2(vector![item.lv_bus.into(), GND.into()]);
+            let y = Admittance(0.5*c);
+            let shunt2 = AdmittanceBranch {
+                y,
+                port,
+                v_base: VBase(v_base),
+            };
             entity.with_children(|p| {
                 p.spawn(shunt1);
-                //  p.spawn(shunt2);
+                p.spawn(shunt2);
             });
         });
 }
@@ -160,7 +164,7 @@ fn processing_pq_elems(cmd: &mut Commands, net: &Network) {
         }
     }
     process_and_spawn_elements(cmd, &net.load, |item| load_to_pqnode(item));
-    process_and_spawn_elements(cmd, &net.shunt, |item| shunt_to_pqnode(item));
+    //process_and_spawn_elements(cmd, &net.shunt,  |item| shunt_to_pqnode(item));
     process_and_spawn_elements(cmd, &net.sgen, |item| sgen_to_pqnode(item));
 }
 
@@ -181,10 +185,20 @@ fn load_to_pqnode(item: &Load) -> PQNode {
     PQNode { s, bus }
 }
 /// Converts a shunt to its equivalent PQ nodes.
-fn shunt_to_pqnode(item: &Shunt) -> PQNode {
-    let s = Complex::new(item.p_mw, item.q_mvar);
-    let bus = item.bus;
-    PQNode { s, bus }
+// fn shunt_to_pqnode(item: &Shunt) -> PQNode {
+//     let s = Complex::new(item.p_mw, item.q_mvar);
+//     let bus = item.bus;
+//     PQNode { s, bus }
+// }
+/// Converts a shunt to its equivalent PQ nodes.
+fn shunt_to_admit(item: &Shunt) -> AdmittanceBranch {
+    let s = Complex::new(-item.p_mw, -item.q_mvar) * Complex::new(item.step as f64, 0.0);
+    let y = s / (item.vn_kv * item.vn_kv);
+    AdmittanceBranch {
+        y: Admittance(y),
+        port: Port2(vector![item.bus as i64, GND.into()]),
+        v_base: VBase(item.vn_kv),
+    }
 }
 
 /// Converts a shunt to its equivalent PQ nodes.
@@ -274,6 +288,10 @@ pub fn init_pf(world: &mut World) {
 
         init_node_lookup(net, world);
         let mut cmd = world.commands();
+        if let Some(shunts) = &net.shunt {
+            let shunts: Vec<_> = shunts.iter().map(|x| (EShunt,shunt_to_admit(x))).collect();
+            cmd.spawn_batch(shunts);
+        }
         line_to_admit(&mut cmd, net);
         trafo_to_admit(&mut cmd, net);
         processing_pq_elems(&mut cmd, net);
@@ -420,11 +438,6 @@ mod tests {
         let v_init = net.create_v_init();
         let tol = Some(1e-8);
         let max_it = Some(10);
-        let (v, iter) = net.run_pf(v_init.clone(), max_it, tol);
-        println!("Vm,\t angle");
-        for (x, i) in v.iter().enumerate() {
-            println!("{} {:.5}, {:.5}", x, i.modulus(), i.argument().to_degrees());
-        }
-        println!("converged within {} iterations", iter);
+        let (_v, _iter) = net.run_pf(v_init.clone(), max_it, tol);
     }
 }

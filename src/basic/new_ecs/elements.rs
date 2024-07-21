@@ -21,7 +21,7 @@ pub struct Admittance(pub Complex<f64>);
 /// Represents a port with two integer values.
 ///
 /// `Port2` is a structure holding two integer values typically used to denote a port in a system.
-#[derive(Component, Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Component, Deref, DerefMut, Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Port2(pub nalgebra::Vector2<i64>);
 
 /// Represents a branch with admittance and port information.
@@ -53,6 +53,8 @@ pub struct AuxNode {
 pub struct Line;
 #[derive(Debug, Component)]
 pub struct Transformer;
+#[derive(Debug, Component)]
+pub struct EShunt;
 
 #[derive(Debug, Resource)]
 pub struct PFCommonData {
