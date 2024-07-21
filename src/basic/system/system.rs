@@ -19,7 +19,7 @@ use crate::basic::solver::KLUSolver;
 pub const GND: i32 = -1;
 
 /// Represents a branch with admittance and port information.
-#[derive(Debug, Default, Component)]
+#[derive(Debug, Default,Clone, Component)]
 pub struct AdmittanceBranch {
     /// The admittance value of the branch.
     pub y: admittance::Admittance,
@@ -72,7 +72,7 @@ impl Default for ExtGridNode {
 }
 
 /// Represents a power flow network with base voltage and power, bus, load, PV node, external grid node, and branch information.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PFNetwork {
     /// The base voltage of the network.
     pub v_base: f64,
