@@ -58,14 +58,17 @@ fn extgrid_to_extnode(item: &ExtGrid) -> [ExtGridNode; 1] {
     [ExtGridNode { v, phase, bus }]
 }
 
-/// Converts a shunt to its equivalent PQ nodes.
-fn shunt_to_pqnode(item: &Shunt) -> [PQNode; 1] {
-    let s = Complex::new(item.p_mw, item.q_mvar);
-    let bus = item.bus;
-    [PQNode { s, bus }]
+/// Converts a shunt to its equivalent admittance.
+fn shunt_to_admit(item: &Shunt) -> [AdmittanceBranch;1] {
+    let s = Complex::new(item.p_mw, item.q_mvar) * Complex::new(item.step as f64, 0.0);
+    let y = s / (item.vn_kv * item.vn_kv);
+    [AdmittanceBranch {
+        y: Admittance(y),
+        port: Port2(vector![item.bus as i32, GND.into()]),
+        v_base: item.vn_kv,
+    }]
 }
-
-/// Converts a shunt to its equivalent PQ nodes.
+/// Converts a static generator to its equivalent PQ nodes.
 fn sgen_to_pqnode(item: &SGen) -> [PQNode; 1] {
     let s = Complex::new(-item.p_mw, -item.q_mvar);
     let bus = item.bus;
@@ -148,12 +151,13 @@ impl From<Network> for PFNetwork {
 
         let binding = value.trafo.unwrap_or(Vec::new());
         let b = binding.iter().flat_map(|x| trafo_to_admit(x).into_iter());
-        let y_br = a.chain(b).collect();
+        let binding = value.shunt.unwrap_or(Vec::new());
+        let shunts = binding.iter().flat_map(|x| shunt_to_admit(x).into_iter());
+        let y_br = a.chain(b).chain(shunts).collect();
 
         let ext = extgrid_to_extnode(&value.ext_grid.unwrap_or(Vec::new())[0])[0];
         let pq_loads = collect_pq_nodes(value.load, load_to_pqnode)
             .into_iter()
-            .chain(collect_pq_nodes(value.shunt, shunt_to_pqnode))
             .chain(collect_pq_nodes(value.sgen, sgen_to_pqnode))
             .collect();
 
