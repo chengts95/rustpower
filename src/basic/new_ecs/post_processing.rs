@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use bevy_app::prelude::*;
 use bevy_ecs::{prelude::*, system::RunSystemOnce};
 use bevy_hierarchy::prelude::*;
@@ -8,7 +6,10 @@ use nalgebra::*;
 use nalgebra_sparse::*;
 use num_complex::{Complex64, ComplexFloat};
 use num_traits::Zero;
+mod res_display;
+use res_display::*;
 use serde::{Deserialize, Serialize};
+use tabled::{settings::Style, Table};
 
 use crate::basic::{
     newton_pf,
@@ -36,7 +37,28 @@ struct LineResultData {
     va_to_degree: f64,    // Voltage angle at the 'to' bus (degrees)
     loading_percent: f64, // Line loading percentage (%)
 }
-
+impl Into<LineResTable> for &LineResultData {
+    fn into(self) -> LineResTable {
+        LineResTable {
+            from: 0,
+            to: 0,
+            p_from_mw: FloatWrapper::new(self.p_from_mw, 3),
+            q_from_mvar: FloatWrapper::new(self.q_from_mvar, 3),
+            p_to_mw: FloatWrapper::new(self.p_to_mw, 3),
+            q_to_mvar: FloatWrapper::new(self.q_to_mvar, 3),
+            pl_mw: FloatWrapper::new(self.pl_mw, 3),
+            ql_mvar: FloatWrapper::new(self.ql_mvar, 3),
+            i_from_ka: FloatWrapper::new(self.i_from_ka, 3),
+            i_to_ka: FloatWrapper::new(self.i_to_ka, 3),
+            i_ka: FloatWrapper::new(self.i_ka, 3),
+            vm_from_pu: FloatWrapper::new(self.vm_from_pu, 2),
+            va_from_degree: FloatWrapper::new(self.va_from_degree, 2),
+            vm_to_pu: FloatWrapper::new(self.vm_to_pu, 2),
+            va_to_degree: FloatWrapper::new(self.va_to_degree, 2),
+            loading_percent: FloatWrapper::new(self.loading_percent, 1),
+        }
+    }
+}
 /// Extracts bus results after power flow calculation.
 fn extract_res_bus(
     mut cmd: Commands,
@@ -59,23 +81,26 @@ fn extract_res_bus(
 
 /// Prints the results of the power flow for each bus.
 fn print_res_bus(q: Query<(&PFNode, &VBusResult, &SBusResult)>, common: Res<PFCommonData>) {
-    println!(
-        "{:<5}, {:<10}, {:<10}, {:<10}, {:<10}",
-        "Bus", "Vm", "Va", "P(MW)", "Q(MVar)"
-    );
-
-    q.iter()
+    let bus_res_table = q
+        .iter()
         .sort_by::<&PFNode>(|value_1, value_2| value_1.cmp(&value_2))
-        .for_each(|(node, v, s)| {
-            println!(
-                "{:<5}, {:<10.5}, {:<10.5}, {:<10.2}, {:<10.2}",
-                node.0,
-                v.0.modulus(),
-                v.0.argument().to_degrees(),
-                s.0.re * common.sbase,
-                s.0.im * common.sbase
-            );
+        .map(|(node, v, s)| {
+            let vm = v.0.modulus();
+            let angle = v.0.argument().to_degrees();
+            let p = s.0.re();
+            let q = s.0.im();
+            BusResTable {
+                Bus: node.0 as i32,
+                Vm: FloatWrapper::new(vm, 3),
+                Va: FloatWrapper::new(angle, 3),
+                P_mw: FloatWrapper::new(p, 5),
+                Q_mvar: FloatWrapper::new(q, 5),
+            }
         });
+    let table = Table::new(bus_res_table)
+        .with(Style::markdown())
+        .to_string();
+    println!("{table}");
 }
 
 /// Enumeration for the type of admittance in a power grid branch.
@@ -97,6 +122,8 @@ fn determine_branch(parent: &Port2, child: &Port2) -> AdmittanceType {
 }
 
 /// Extracts line results after power flow calculation.
+
+#[allow(unused_assignments)]
 fn extract_res_line(
     mut cmd: Commands,
     q: Query<(Entity, &Children, &Port2), With<Line>>,
@@ -114,7 +141,7 @@ fn extract_res_line(
         data.vm_to_pu = v_to.modulus();
         data.va_to_degree = v_to.argument().to_degrees();
 
-        let s_base = common.sbase;
+        let _s_base = common.sbase;
         let (mut i_f, mut i_t, mut i_l) = (Complex64::zero(), Complex64::zero(), Complex64::zero());
         let mut v_base = 0.0;
 
@@ -158,50 +185,35 @@ fn extract_res_line(
 
 /// Prints the results of the power flow for each line.
 fn print_res_line(q: Query<(&Port2, &LineResultData)>) {
-    println!(
-        "p_from_mw\tq_from_mvar\tp_to_mw\tq_to_mvar\tpl_mw\tql_mvar\ti_from_ka\ti_to_ka\ti_ka\tvm_from_pu\tva_from_degree\tvm_to_pu\tva_to_degree\tloading_percent"
-    );
-
-    q.iter().for_each(|(p, record)| {
-        print!("{}\t{}\t", p[0], p[1]);
-        println!(
-            "{:.5}\t{:.5}\t{:.5}\t{:.5}\t{:.5}\t{:.5}\t{:.5}\t{:.5}\t{:.5}\t{:.5}\t{:.5}\t{:.5}\t{:.5}\t{:.5}",
-            record.p_from_mw,
-            record.q_from_mvar,
-            record.p_to_mw,
-            record.q_to_mvar,
-            record.pl_mw,
-            record.ql_mvar,
-            record.i_from_ka,
-            record.i_to_ka,
-            record.i_ka,
-            record.vm_from_pu,
-            record.va_from_degree,
-            record.vm_to_pu,
-            record.va_to_degree,
-            record.loading_percent,
-        );
+    let table = q.iter().map(|(p, record)| {
+        let mut row_display: LineResTable = record.into();
+        row_display.from = p[0];
+        row_display.to = p[1];
+        row_display
     });
+
+    let table = Table::new(table).with(Style::markdown()).to_string();
+    println!("{table}");
 }
 
 /// Trait for post-processing after a power flow simulation.
 pub trait PostProcessing {
     /// Runs all post-processing steps.
     fn post_process(&mut self);
-    
+
     /// Processes and prints the bus results.
-    fn res_bus(&mut self);
-    
+    fn print_res_bus(&mut self);
+
     /// Processes and prints the line results.
-    fn res_line(&mut self);
+    fn print_res_line(&mut self);
 }
 
 impl PostProcessing for PowerGrid {
-    fn res_bus(&mut self) {
+    fn print_res_bus(&mut self) {
         self.world_mut().run_system_once(print_res_bus);
     }
 
-    fn res_line(&mut self) {
+    fn print_res_line(&mut self) {
         self.world_mut().run_system_once(print_res_line);
     }
 
@@ -213,6 +225,7 @@ impl PostProcessing for PowerGrid {
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
+    use super::*;
     use crate::basic::new_ecs::network::PowerFlow;
     use crate::{
         basic::{
@@ -223,7 +236,6 @@ mod tests {
     };
     use bevy_ecs::system::RunSystemOnce;
     use nalgebra::ComplexField;
-    use super::*;
     use std::env;
 
     /// Tests the ECS results for power flow.
@@ -249,7 +261,7 @@ mod tests {
         );
 
         pf_net.post_process();
-        pf_net.res_bus();
-        pf_net.res_line();
+        pf_net.print_res_bus();
+        pf_net.print_res_line();
     }
 }
