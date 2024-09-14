@@ -466,7 +466,12 @@ fn load_pandapower_element_json<T: serde::de::DeserializeOwned>(
 
 pub fn load_pandapower_json(file_path: &str) -> Network {
     let map: Map<String, Value> = load_json(file_path).unwrap();
-    let object: &Map<String, Value> = map.get("_object").and_then(|v| v.as_object()).unwrap();
+    load_pandapower_json_obj(&map)
+}
+
+pub fn load_pandapower_json_obj(json: &Map<String, Value>) -> Network {
+
+    let object: &Map<String, Value> = json.get("_object").and_then(|v| v.as_object()).unwrap();
 
     let mut net = Network::default();
     net.bus = load_pandapower_element_json(object, "bus").unwrap();

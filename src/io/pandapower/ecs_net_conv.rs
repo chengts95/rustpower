@@ -1,11 +1,9 @@
 use bevy_ecs::system::RunSystemOnce;
 
-use network::PowerGrid;
 use network::GND;
 
-use crate::basic;
 use crate::basic::new_ecs::*;
-use crate::basic::system::PFNetwork;
+
 use crate::prelude::pandapower::*;
 use bevy_ecs::prelude::*;
 use bevy_hierarchy::prelude::*;
@@ -124,7 +122,7 @@ fn trafo_to_admit(cmd: &mut Commands, net: &Network) {
                 return;
             }
             let port = Port2(vector![item.hv_bus.into(), GND.into()]);
-            let y = Admittance(0.5* c / tap_m.powi(2));
+            let y = Admittance(0.5 * c / tap_m.powi(2));
             let shunt1 = AdmittanceBranch {
                 y,
                 port,
@@ -132,7 +130,7 @@ fn trafo_to_admit(cmd: &mut Commands, net: &Network) {
             };
 
             let port = Port2(vector![item.lv_bus.into(), GND.into()]);
-            let y = Admittance(0.5*c);
+            let y = Admittance(0.5 * c);
             let shunt2 = AdmittanceBranch {
                 y,
                 port,
@@ -230,6 +228,7 @@ fn process_switch(mut cmd: Commands, net: Res<PPNetwork>) {
     let switch = net.switch.as_ref();
     if let Some(switch) = switch {
         switch.iter().enumerate().for_each(|(idx, x)| {
+            
             cmd.spawn((
                 Switch {
                     bus: x.bus,
@@ -238,41 +237,9 @@ fn process_switch(mut cmd: Commands, net: Res<PPNetwork>) {
                     z_ohm: x.z_ohm,
                 },
                 ElemIdx(idx),
-            ));
+                SwitchState(x.closed)));
         });
     }
-}
-#[allow(dead_code)]
-fn process_switch_state(mut cmd: Commands, q: Query<(Entity, &Switch, &SwitchState)>) {
-    q.iter().for_each(|(entity, switch, closed)| {
-        let _z_ohm = switch.z_ohm;
-        let from = switch.bus;
-        match switch.et {
-            SwitchType::SwitchBusLine => {
-                if **closed {
-                    //do nothing
-                } else {
-                    cmd.entity(entity).with_children(|p| {
-                        //we add an aux node to break this edge
-                        p.spawn(NodeType::from(AuxNode { bus: from }));
-                    });
-                }
-            }
-            SwitchType::SwitchBusTransformer => {}
-            SwitchType::SwitchTwoBuses => {
-                if **closed {
-                    cmd.entity(entity).with_children(|p| {
-                        //we will merge 2 nodes
-                        let to = switch.element;
-                        p.spawn(MergeNode(from as usize, to as usize));
-                    });
-                } else {
-                    //do nothing
-                }
-            }
-            SwitchType::SwitchBusTransformer3w | SwitchType::Unknown => {}
-        }
-    });
 }
 
 pub fn init_sw(mut world: World) {
@@ -289,7 +256,7 @@ pub fn init_pf(world: &mut World) {
         init_node_lookup(net, world);
         let mut cmd = world.commands();
         if let Some(shunts) = &net.shunt {
-            let shunts: Vec<_> = shunts.iter().map(|x| (EShunt,shunt_to_admit(x))).collect();
+            let shunts: Vec<_> = shunts.iter().map(|x| (EShunt, shunt_to_admit(x))).collect();
             cmd.spawn_batch(shunts);
         }
         line_to_admit(&mut cmd, net);
@@ -297,7 +264,13 @@ pub fn init_pf(world: &mut World) {
         processing_pq_elems(&mut cmd, net);
         processing_pv_nodes(&mut cmd, net);
         extgrid_to_extnode(&mut cmd, net);
+        world.flush_commands();
     });
+    world.run_system_once(process_switch);
+    world.run_system_once(process_switch_state);
+    if world.get_resource::<NodeMapping>().is_some() {
+        world.run_system_once(node_merge_split);
+    }
 }
 
 fn init_node_lookup(value: &PPNetwork, world: &mut World) {
@@ -309,95 +282,6 @@ fn init_node_lookup(value: &PPNetwork, world: &mut World) {
     world.insert_resource(d);
 }
 
-#[derive(Debug)]
-pub enum ParseError {
-    InvalidData,
-    ConversionError(String),
-}
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ParseError::InvalidData => write!(f, "Invalid input data"),
-            ParseError::ConversionError(msg) => write!(f, "Conversion failed: {}", msg),
-        }
-    }
-}
-impl std::error::Error for ParseError {}
-
-impl TryFrom<&mut PowerGrid> for PFNetwork {
-    type Error = ParseError;
-
-    fn try_from(value: &mut PowerGrid) -> Result<Self, Self::Error> {
-        use crate::basic::new_ecs::network::DataOps;
-        let world = value.world_mut();
-        if world.get_resource::<PPNetwork>().is_none() {
-            return Err(ParseError::ConversionError(
-                "Net resource not found".to_string(),
-            ));
-        }
-        world.run_system_once(init_pf);
-        let net = &world.get_resource::<PPNetwork>().unwrap();
-        let buses = net.bus.clone();
-        let v_base = net.bus[0].vn_kv;
-        let s_base = net.sn_mva;
-        let pq_loads = extract_node(world, |x| {
-            if let NodeType::PQ(v) = x {
-                Some(v.clone())
-            } else {
-                None
-            }
-        });
-        let pv_nodes = extract_node(world, |x| {
-            if let NodeType::PV(v) = x {
-                Some(v.clone())
-            } else {
-                None
-            }
-        });
-        let binding = extract_node(world, |x| {
-            if let NodeType::EXT(v) = x {
-                Some(v.clone())
-            } else {
-                None
-            }
-        });
-        let ext = binding
-            .get(0)
-            .ok_or_else(|| ParseError::ConversionError("No external node found".to_string()))?;
-        let ext = ext.clone();
-        let y_br: Vec<_> = world
-            .query::<(&Admittance, &Port2, &VBase)>()
-            .iter(world)
-            .map(|(a, p, vb)| basic::system::AdmittanceBranch {
-                y: basic::system::Admittance(a.0),
-                port: basic::system::Port2(p.0.cast()),
-                v_base: vb.0,
-            })
-            .collect();
-
-        let net = PFNetwork {
-            v_base,
-            s_base,
-            buses,
-            pq_loads,
-            pv_nodes,
-            ext,
-            y_br,
-        };
-        Ok(net)
-    }
-}
-fn extract_node<T, F>(world: &mut World, extractor: F) -> Vec<T>
-where
-    F: Fn(&NodeType) -> Option<T>,
-{
-    world
-        .query::<&NodeType>()
-        .iter(world)
-        .filter_map(extractor)
-        .collect()
-}
 #[allow(unused_imports)]
 mod tests {
     use bevy_ecs::system::RunSystemOnce;
@@ -423,21 +307,5 @@ mod tests {
         let mut a = world.query::<(&Transformer, &Port2)>();
 
         println!("{:?}", a.iter(world).collect::<Vec<_>>().len());
-    }
-
-    #[test]
-    fn test_to_pf_net() {
-        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-        let folder = format!("{}/cases/IEEE118", dir);
-        let name = folder.to_owned() + "/data.zip";
-        let net = load_csv_zip(&name).unwrap();
-
-        let mut pf_net = PowerGrid::default();
-        pf_net.world_mut().insert_resource(PPNetwork(net));
-        let net = PFNetwork::try_from(&mut pf_net).unwrap();
-        let v_init = net.create_v_init();
-        let tol = Some(1e-8);
-        let max_it = Some(10);
-        let (_v, _iter) = net.run_pf(v_init.clone(), max_it, tol);
     }
 }
