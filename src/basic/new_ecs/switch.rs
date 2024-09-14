@@ -285,7 +285,7 @@ mod tests {
         // println!("\n聚合矩阵 P：\n{}", p_matrix);
     }
     #[test]
-    fn test_ecs_pf() {
+    fn test_ecs_pf_switch() {
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
         let folder = format!("{}/cases/test/", dir);
         let name = folder.to_owned() + "/new_input_PFLV_modified.json";
@@ -302,9 +302,9 @@ mod tests {
         let node_mapping = pf_net.world().get_resource::<NodeMapping>().unwrap();
         let mut nodes : Vec<_> = node_mapping.keys().collect();
         nodes.sort();
-        println!("\n节点到新节点编号的映射：");
+        println!("\nNode mapping：");
         for &node in &nodes {
-            println!("原始节点 {} 映射到新节点 {}", node, node_mapping[&node]);
+            println!("Original Node {} map to Node {}", node, node_mapping[&node]);
         }
         pf_net.run_pf();
         assert_eq!(
