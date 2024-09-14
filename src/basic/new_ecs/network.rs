@@ -1,14 +1,14 @@
+use std::fmt;
+
 use bevy_app::prelude::*;
 use bevy_ecs::{prelude::*, system::RunSystemOnce};
 use nalgebra::*;
 use nalgebra_sparse::*;
 use num_complex::Complex64;
 
-use crate::basic::{
-    newton_pf,
-    solver::RSparseSolver,
-    system::{PFNetwork, RunPF},
-};
+use crate::{basic::{
+    self, newton_pf, solver::RSparseSolver, system::{PFNetwork, RunPF}
+}, io::pandapower::ecs_net_conv::init_pf};
 
 use super::elements::*;
 
@@ -196,6 +196,87 @@ impl DataOps for PowerGrid {
         self.world_mut().get_entity_mut(entity)
     }
 }
+
+
+#[derive(Debug)]
+pub enum ParseError {
+    InvalidData,
+    ConversionError(String),
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ParseError::InvalidData => write!(f, "Invalid input data"),
+            ParseError::ConversionError(msg) => write!(f, "Conversion failed: {}", msg),
+        }
+    }
+}
+impl std::error::Error for ParseError {}
+
+impl TryFrom<&mut PowerGrid> for PFNetwork {
+    type Error = ParseError;
+
+    fn try_from(value: &mut PowerGrid) -> Result<Self, Self::Error> {
+        use crate::basic::new_ecs::network::DataOps;
+        let world = value.world_mut();
+        if world.get_resource::<PPNetwork>().is_none() {
+            return Err(ParseError::ConversionError(
+                "Net resource not found".to_string(),
+            ));
+        }
+        world.run_system_once(init_pf);
+        let net = &world.get_resource::<PPNetwork>().unwrap();
+        let buses = net.bus.clone();
+        let v_base = net.bus[0].vn_kv;
+        let s_base = net.sn_mva;
+        let pq_loads = extract_node(world, |x| {
+            if let NodeType::PQ(v) = x {
+                Some(v.clone())
+            } else {
+                None
+            }
+        });
+        let pv_nodes = extract_node(world, |x| {
+            if let NodeType::PV(v) = x {
+                Some(v.clone())
+            } else {
+                None
+            }
+        });
+        let binding = extract_node(world, |x| {
+            if let NodeType::EXT(v) = x {
+                Some(v.clone())
+            } else {
+                None
+            }
+        });
+        let ext = binding
+            .get(0)
+            .ok_or_else(|| ParseError::ConversionError("No external node found".to_string()))?;
+        let ext = ext.clone();
+        let y_br: Vec<_> = world
+            .query::<(&Admittance, &Port2, &VBase)>()
+            .iter(world)
+            .map(|(a, p, vb)| basic::system::AdmittanceBranch {
+                y: basic::system::Admittance(a.0),
+                port: basic::system::Port2(p.0.cast()),
+                v_base: vb.0,
+            })
+            .collect();
+
+        let net = PFNetwork {
+            v_base,
+            s_base,
+            buses,
+            pq_loads,
+            pv_nodes,
+            ext,
+            y_br,
+        };
+        Ok(net)
+    }
+}
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
@@ -212,8 +293,6 @@ mod tests {
 
     use super::*;
     use std::env;
-
-    /// Test case for initializing and running a power flow network.
     #[test]
     fn test_to_pf_net() {
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -229,6 +308,7 @@ mod tests {
         let max_it = Some(10);
         let (_v, _iter) = net.run_pf(v_init.clone(), max_it, tol);
     }
+
 
     /// Test case for running power flow in the ECS system.
     #[test]

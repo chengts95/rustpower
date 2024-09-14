@@ -57,6 +57,6 @@ fn main() {
         true
     );
     pf_net.post_process();
-    pf_net.res_bus();
-    pf_net.res_line();
+    pf_net.print_res_bus();
+    pf_net.print_res_line();
 }
