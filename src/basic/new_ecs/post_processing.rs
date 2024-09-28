@@ -1,21 +1,13 @@
-use bevy_app::prelude::*;
 use bevy_ecs::{prelude::*, system::RunSystemOnce};
 use bevy_hierarchy::prelude::*;
-use csv::{Writer, WriterBuilder};
+
 use nalgebra::*;
-use nalgebra_sparse::*;
 use num_complex::{Complex64, ComplexFloat};
 use num_traits::Zero;
 mod res_display;
 use res_display::*;
 use serde::{Deserialize, Serialize};
 use tabled::{settings::Style, Table};
-
-use crate::basic::{
-    newton_pf,
-    solver::RSparseSolver,
-    system::{PFNetwork, RunPF},
-};
 
 use super::{elements::*, network::*};
 
@@ -62,18 +54,27 @@ impl Into<LineResTable> for &LineResultData {
 /// Extracts bus results after power flow calculation.
 fn extract_res_bus(
     mut cmd: Commands,
+    shunts: Query<(&Admittance, &Port2, &VBase), With<EShunt>>,
     nodes: Res<NodeLookup>,
     mat: Res<PowerFlowMat>,
     res: Res<PowerFlowResult>,
+    common: Res<PFCommonData>,
 ) {
     let cv = &mat.reorder * &res.v;
     let mis = &cv.component_mul(&(&mat.y_bus * &cv).conjugate());
     let mut sbus_res = -mis.clone();
-
     sbus_res = &mat.reorder.transpose() * sbus_res;
+
+    shunts.iter().for_each(|(a, b, vb)| {
+        let node = b.0[0] as usize;
+        let z_base = vb.0 * vb.0 / common.sbase;
+        let s_shunt = res.v[node] * (a.0 * z_base * res.v[node]).conjugate();
+        sbus_res[node] += s_shunt;
+    });
+
     for (idx, entity) in nodes.0.iter() {
         cmd.entity(*entity).insert((
-            SBusResult(sbus_res[*idx as usize]),
+            SBusResult(sbus_res[*idx as usize] * common.sbase),
             VBusResult(res.v[*idx as usize]),
         ));
     }
