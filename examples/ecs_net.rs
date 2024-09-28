@@ -1,6 +1,5 @@
 use std::env;
 
-use nalgebra::ComplexField;
 use new_ecs::{elements::PPNetwork, network::*, post_processing::*};
 use rustpower::{io::pandapower::*, prelude::*};
 
@@ -58,5 +57,5 @@ fn main() {
     );
     pf_net.post_process();
     pf_net.print_res_bus();
-    pf_net.print_res_line();
+    //pf_net.print_res_line();
 }

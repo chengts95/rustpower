@@ -10,7 +10,15 @@ use serde::{Deserialize, Serialize};
 use tabled::{settings::Style, Table};
 
 use super::{elements::*, network::*};
+/// Component storing the result of SBus power flow calculation.
+/// The result is a complex number representing the power demand in MW in the bus.
+#[derive(Debug, Component, Clone)]
+pub struct SBusResult(pub Complex64);
 
+/// Component storing the result of VBus power flow calculation.
+/// /// The result has a complex number representing the voltage magnitude in p.u.
+#[derive(Debug, Component, Clone)]
+pub struct VBusResult(pub Complex64);
 /// Data structure for storing results of power flow calculations for a line.
 #[derive(Component, Debug, Default, Serialize, Deserialize)]
 struct LineResultData {
@@ -81,7 +89,7 @@ fn extract_res_bus(
 }
 
 /// Prints the results of the power flow for each bus.
-fn print_res_bus(q: Query<(&PFNode, &VBusResult, &SBusResult)>, common: Res<PFCommonData>) {
+fn print_res_bus(q: Query<(&PFNode, &VBusResult, &SBusResult)>) {
     let bus_res_table = q
         .iter()
         .sort_by::<&PFNode>(|value_1, value_2| value_1.cmp(&value_2))

@@ -12,13 +12,18 @@ use nalgebra::vector;
 use nalgebra::Complex;
 
 use std::f64::consts::PI;
-use std::fmt;
 
 use elements::PQNode;
 use elements::PVNode;
 use elements::Switch;
 use elements::Transformer;
 
+/// Adds the admittance elements of lines to the ECS.
+/// 
+/// This function processes each line in the network, calculates admittance
+/// values based on the line's parameters, and spawns them into the ECS.
+/// It also adds shunt elements (if applicable) and handles the line's resistive
+/// and reactive components.
 fn line_to_admit(cmd: &mut Commands, net: &Network) {
     let wbase = 2.0 * PI * net.f_hz;
     let bus = &net.bus;
@@ -38,6 +43,7 @@ fn line_to_admit(cmd: &mut Commands, net: &Network) {
                 Port2(vector![line.from_bus, line.to_bus]),
             ));
 
+            // Adds shunt elements for the line if there is non-zero conductance or capacitance
             if line.g_us_per_km != 0.0 || line.c_nf_per_km != 0.0 {
                 let (mut shunt_f, mut shunt_t) =
                     (AdmittanceBranch::default(), AdmittanceBranch::default());
@@ -53,6 +59,7 @@ fn line_to_admit(cmd: &mut Commands, net: &Network) {
                 });
             }
 
+            // Adds the series admittance component based on the line's resistance and reactance
             let rl = line.r_ohm_per_km * line.length_km * (line.parallel as f64);
             let xl = line.x_ohm_per_km * line.length_km * (line.parallel as f64);
             let l = AdmittanceBranch {
@@ -65,7 +72,12 @@ fn line_to_admit(cmd: &mut Commands, net: &Network) {
             });
         });
 }
-/// Converts a transformer to its equivalent admittance branches.
+
+/// Converts a transformer to its equivalent admittance branches and spawns it into the ECS.
+///
+/// For each transformer in the network, this function calculates its series
+/// and shunt admittances, considering tap settings and transformer parameters.
+/// It then spawns the transformer and its corresponding branches into the ECS.
 fn trafo_to_admit(cmd: &mut Commands, net: &Network) {
     net.trafo
         .as_ref()
@@ -101,6 +113,7 @@ fn trafo_to_admit(cmd: &mut Commands, net: &Network) {
                 v_base: VBase(v_base),
             };
 
+            // Spawns the short-circuit branch and shunt branches due to tap changers
             entity.with_children(|p| {
                 p.spawn(sc);
                 p.spawn(AdmittanceBranch {
@@ -114,6 +127,8 @@ fn trafo_to_admit(cmd: &mut Commands, net: &Network) {
                     v_base: VBase(v_base),
                 });
             });
+
+            // Handle core losses and no-load current
             let re = zbase * (0.001 * item.pfe_kw) / item.sn_mva;
             let im = zbase / (0.01 * item.i0_percent);
             let c = parallel as f64 / Complex { re, im };
@@ -136,6 +151,7 @@ fn trafo_to_admit(cmd: &mut Commands, net: &Network) {
                 port,
                 v_base: VBase(v_base),
             };
+
             entity.with_children(|p| {
                 p.spawn(shunt1);
                 p.spawn(shunt2);
@@ -143,6 +159,7 @@ fn trafo_to_admit(cmd: &mut Commands, net: &Network) {
         });
 }
 
+/// Processes PQ elements (loads and generators) in the network and spawns them into the ECS.
 fn processing_pq_elems(cmd: &mut Commands, net: &Network) {
     fn process_and_spawn_elements<T>(
         cmd: &mut Commands,
@@ -162,10 +179,10 @@ fn processing_pq_elems(cmd: &mut Commands, net: &Network) {
         }
     }
     process_and_spawn_elements(cmd, &net.load, |item| load_to_pqnode(item));
-    //process_and_spawn_elements(cmd, &net.shunt,  |item| shunt_to_pqnode(item));
     process_and_spawn_elements(cmd, &net.sgen, |item| sgen_to_pqnode(item));
 }
 
+/// Processes PV nodes (generators) in the network and spawns them into the ECS.
 fn processing_pv_nodes(cmd: &mut Commands, net: &Network) {
     if let Some(elems) = &net.gen {
         let m: Vec<_> = elems
@@ -176,19 +193,15 @@ fn processing_pv_nodes(cmd: &mut Commands, net: &Network) {
         cmd.spawn_batch(m);
     }
 }
-/// Converts a load to its equivalent PQ nodes.
+
+/// Converts a load to its equivalent PQ node representation.
 fn load_to_pqnode(item: &Load) -> PQNode {
     let s = Complex::new(item.p_mw, item.q_mvar);
     let bus = item.bus;
     PQNode { s, bus }
 }
-/// Converts a shunt to its equivalent PQ nodes.
-// fn shunt_to_pqnode(item: &Shunt) -> PQNode {
-//     let s = Complex::new(item.p_mw, item.q_mvar);
-//     let bus = item.bus;
-//     PQNode { s, bus }
-// }
-/// Converts a shunt to its equivalent PQ nodes.
+
+/// Converts a shunt to its equivalent admittance branch.
 fn shunt_to_admit(item: &Shunt) -> AdmittanceBranch {
     let s = Complex::new(-item.p_mw, -item.q_mvar) * Complex::new(item.step as f64, 0.0);
     let y = s / (item.vn_kv * item.vn_kv);
@@ -199,21 +212,22 @@ fn shunt_to_admit(item: &Shunt) -> AdmittanceBranch {
     }
 }
 
-/// Converts a shunt to its equivalent PQ nodes.
+/// Converts a static generator to its equivalent PQ node.
 fn sgen_to_pqnode(item: &SGen) -> PQNode {
     let s = Complex::new(-item.p_mw, -item.q_mvar);
     let bus = item.bus;
     PQNode { s, bus }
 }
 
-/// Converts a generator to its equivalent PV nodes.
+/// Converts a generator to its equivalent PV node.
 fn gen_to_pvnode(item: &Gen) -> PVNode {
     let p = item.p_mw;
     let v = item.vm_pu;
     let bus = item.bus;
     PVNode { p, v, bus }
 }
-/// Converts an external grid to its equivalent external grid node.
+
+/// Converts an external grid to its equivalent external grid node and spawns it into the ECS.
 fn extgrid_to_extnode(cmd: &mut Commands, net: &Network) {
     let item = &net.ext_grid.as_ref().unwrap()[0];
     let bus = item.bus;
@@ -223,12 +237,11 @@ fn extgrid_to_extnode(cmd: &mut Commands, net: &Network) {
     cmd.spawn((NodeType::from(ExtGridNode { v, phase, bus }), ElemIdx(0)));
 }
 
-// Converts an external grid to its equivalent external grid node.
+/// Processes the switches in the network and spawns them into the ECS.
 fn process_switch(mut cmd: Commands, net: Res<PPNetwork>) {
     let switch = net.switch.as_ref();
     if let Some(switch) = switch {
         switch.iter().enumerate().for_each(|(idx, x)| {
-            
             cmd.spawn((
                 Switch {
                     bus: x.bus,
@@ -237,14 +250,13 @@ fn process_switch(mut cmd: Commands, net: Res<PPNetwork>) {
                     z_ohm: x.z_ohm,
                 },
                 ElemIdx(idx),
-                SwitchState(x.closed)));
+                SwitchState(x.closed),
+            ));
         });
     }
 }
 
-pub fn init_sw(mut world: World) {
-    world.run_system_once(process_switch);
-}
+/// Initializes the power flow analysis by spawning network elements into the ECS.
 pub fn init_pf(world: &mut World) {
     world.resource_scope::<PPNetwork, _>(|world, net: Mut<PPNetwork>| {
         let net = &net;
@@ -273,6 +285,7 @@ pub fn init_pf(world: &mut World) {
     }
 }
 
+/// Initializes the node lookup by mapping bus indices to ECS entities.
 fn init_node_lookup(value: &PPNetwork, world: &mut World) {
     let mut d = NodeLookup::default();
     for i in &value.bus {
@@ -294,6 +307,7 @@ mod tests {
     use std::env;
 
     #[test]
+    /// Test function for loading and running the power flow system using a CSV zip file.
     fn test_load_csv_zip() {
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
         let folder = format!("{}/cases/IEEE118", dir);

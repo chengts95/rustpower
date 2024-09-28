@@ -1,9 +1,8 @@
 use crate::io::pandapower::SwitchType;
 use bevy_ecs::prelude::*;
-use bevy_hierarchy::BuildChildren;
 use derive_more::{Deref, DerefMut};
 use nalgebra::{vector, Complex};
-use nalgebra_sparse::ops::Op;
+use nalgebra_sparse::CooMatrix;
 use std::collections::{HashMap, HashSet};
 
 use super::elements::*;
@@ -31,9 +30,9 @@ pub struct NodeMerge {
     rank: HashMap<u64, u64>,
 }
 
-#[derive(Default, Debug, Clone, Deref,DerefMut, Resource)]
+#[derive(Default, Debug, Clone, Deref, DerefMut, Resource)]
 /// 并查集结构的实现
-pub struct NodeMapping(HashMap<u64,u64>);
+pub struct NodeMapping(HashMap<u64, u64>);
 
 impl NodeMerge {
     pub fn new(nodes: &[u64]) -> Self {
@@ -104,8 +103,8 @@ pub fn process_switch_state(
     net: Res<PPNetwork>,
     q: Query<(Entity, &Switch, &SwitchState)>,
 ) {
-    let mut node_idx: Vec<u64> = nodes.0.keys().map(|x| *x as u64).collect();
-    let mut union_find: Option<NodeMerge> = if q.iter().len() > 0 {
+    let node_idx: Vec<u64> = nodes.0.keys().map(|x| *x as u64).collect();
+    let union_find: Option<NodeMerge> = if q.iter().len() > 0 {
         Some(NodeMerge::new(&node_idx))
     } else {
         None
@@ -121,10 +120,16 @@ pub fn process_switch_state(
                 let (node1, node2) = (switch.bus, switch.element);
                 if **closed {
                     if _z_ohm == 0.0 {
-                        union_find
-                            .as_mut()
-                            .unwrap()
-                            .union(node1 as u64, node2 as u64);
+                        // union_find
+                        //     .as_mut()
+                        //     .unwrap()
+                        //     .union(node1 as u64, node2 as u64);
+                        let v_base = net.bus[switch.bus as usize].vn_kv;
+                        cmd.entity(entity).insert(AdmittanceBranch {
+                            y: Admittance(Complex::new(1e6, 0.0)),
+                            port: Port2(vector![node1, node2]),
+                            v_base: VBase(v_base),
+                        });
                     } else {
                         let v_base = net.bus[switch.bus as usize].vn_kv;
                         cmd.entity(entity).insert(AdmittanceBranch {
@@ -144,23 +149,14 @@ pub fn process_switch_state(
     }
 }
 #[allow(dead_code)]
-pub fn node_merge_split(mut cmd: Commands, nodes: Res<NodeMapping>) {}
+pub fn node_merge_split(cmd: Commands, nodes: Res<NodeMapping>) {}
 
-fn build_aggregation_matrix(
-    nodes: &[u64],
-    node_mapping: &HashMap<u64, usize>,
-) -> nalgebra::DMatrix<u32> {
+fn build_aggregation_matrix(nodes: &[u64], node_mapping: &HashMap<u64, u64>) -> CooMatrix<u64> {
     let original_node_count = nodes.len();
     let new_node_count = node_mapping.values().collect::<HashSet<_>>().len();
-
-    let mut data = vec![0u32; original_node_count * new_node_count];
-
-    for (i, &node) in nodes.iter().enumerate() {
-        let new_node = node_mapping[&node];
-        data[i * new_node_count + new_node - 1] = 1; // 索引从0开始
-    }
-
-    nalgebra::DMatrix::from_row_slice(original_node_count, new_node_count, &data)
+    let mut mat = CooMatrix::new(original_node_count, new_node_count);
+    mat.push(0, 0, 1);
+    mat
 }
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -171,7 +167,7 @@ mod tests {
     use serde_json::{Map, Value};
 
     use crate::{
-        basic::new_ecs::network::*,
+        basic::new_ecs::{network::*, post_processing::PostProcessing},
         io::pandapower::{load_pandapower_json, load_pandapower_json_obj},
     };
 
@@ -239,51 +235,43 @@ mod tests {
             }
         }
 
-        // 检查节点的代表元
         assert_eq!(uf.find(2), uf.find(3));
         assert_eq!(uf.find(3), uf.find(4));
         assert_ne!(uf.find(5), uf.find(6));
         assert_eq!(uf.find(6), uf.find(7));
-
-        // 输出结果
-        println!("节点到代表元的映射（父节点）：");
-        for &node in &nodes {
-            println!(
-                "节点 {} 的代表元（根节点）是 {}",
-                node,
-                uf.parent.get(&node).unwrap()
-            );
-        }
-
-        // // 建立节点映射
-        // let mut root_to_new_id = HashMap::new();
-        // let mut node_mapping = HashMap::new();
-        // let mut new_node_id = 1;
-
-        // for &node in &nodes {
-        //     let root = uf.find(node);
-        //     if !root_to_new_id.contains_key(&root) {
-        //         root_to_new_id.insert(root, new_node_id);
-        //         new_node_id += 1;
-        //     }
-        //     node_mapping.insert(node, root_to_new_id[&root]);
-        // }
-        // println!("\n节点到新节点编号的映射：");
-        // for &node in &nodes {
-        //     println!("原始节点 {} 映射到新节点 {}", node, node_mapping[&node]);
-        // }
-        // // 检查节点映射
-        // assert_eq!(node_mapping[&1], 1);
-        // assert_eq!(node_mapping[&2], 2);
-        // assert_eq!(node_mapping[&3], 2);
-        // assert_eq!(node_mapping[&4], 2);
-        // assert_eq!(node_mapping[&5], 3);
-        // assert_eq!(node_mapping[&6], 4);
-        // assert_eq!(node_mapping[&7], 4);
-        // // 构建聚合矩阵（可选）
-        // let p_matrix = build_aggregation_matrix(&nodes, &node_mapping);
-        // println!("\n聚合矩阵 P：\n{}", p_matrix);
     }
+    #[test]
+    fn test_ecs_switch() {
+        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let folder = format!("{}/cases/test/", dir);
+        let name = folder.to_owned() + "/new_input_PFLV_modified.json";
+        let json = load_json(&name).unwrap();
+        let json: Map<String, Value> = json
+            .get("pp_network")
+            .and_then(|v| v.as_object())
+            .unwrap()
+            .clone();
+        let net = load_pandapower_json_obj(&json);
+        let mut pf_net = PowerGrid::default();
+        pf_net.world_mut().insert_resource(PPNetwork(net));
+        pf_net.init_pf_net();
+        let node_mapping = pf_net.world().get_resource::<NodeMapping>().unwrap();
+        let mut nodes: Vec<_> = node_mapping.keys().collect();
+        nodes.sort();
+
+        pf_net.run_pf();
+        pf_net.post_process();
+        pf_net.print_res_bus();
+        assert_eq!(
+            pf_net
+                .world()
+                .get_resource::<PowerFlowResult>()
+                .unwrap()
+                .converged,
+            true
+        );
+    }
+
     #[test]
     fn test_ecs_pf_switch() {
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -300,20 +288,10 @@ mod tests {
         pf_net.world_mut().insert_resource(PPNetwork(net));
         pf_net.init_pf_net();
         let node_mapping = pf_net.world().get_resource::<NodeMapping>().unwrap();
-        let mut nodes : Vec<_> = node_mapping.keys().collect();
+        let mut nodes: Vec<u64> = node_mapping.keys().map(|x| *x).collect();
         nodes.sort();
-        println!("\nNode mapping：");
-        for &node in &nodes {
-            println!("Original Node {} map to Node {}", node, node_mapping[&node]);
-        }
-        pf_net.run_pf();
-        assert_eq!(
-            pf_net
-                .world()
-                .get_resource::<PowerFlowResult>()
-                .unwrap()
-                .converged,
-            true
-        );
+
+        let p_matrix = build_aggregation_matrix(nodes.as_slice(), &node_mapping.0);
+        println!("\n聚合矩阵 P：\n{:?}", p_matrix);
     }
 }
