@@ -44,13 +44,7 @@ pub struct PowerGrid {
 #[derive(Debug, Resource, Clone)]
 pub struct ResPFNetwork(pub PFNetwork);
 
-/// Component storing the result of SBus power flow calculation.
-#[derive(Debug, Component, Clone)]
-pub struct SBusResult(pub Complex64);
 
-/// Component storing the result of VBus power flow calculation.
-#[derive(Debug, Component, Clone)]
-pub struct VBusResult(pub Complex64);
 
 /// Resource that holds the power flow configuration options, such as the initial voltage guess,
 /// maximum iterations, and tolerance for convergence.
