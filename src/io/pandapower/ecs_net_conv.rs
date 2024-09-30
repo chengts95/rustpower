@@ -1,4 +1,4 @@
-use bevy_ecs::system::RunSystemOnce;
+use bevy_ecs::schedule;
 
 use network::GND;
 
@@ -19,12 +19,12 @@ use elements::Switch;
 use elements::Transformer;
 
 /// Adds the admittance elements of lines to the ECS.
-/// 
+///
 /// This function processes each line in the network, calculates admittance
 /// values based on the line's parameters, and spawns them into the ECS.
 /// It also adds shunt elements (if applicable) and handles the line's resistive
 /// and reactive components.
-fn line_to_admit(cmd: &mut Commands, net: &Network) {
+fn line_to_admit(mut cmd: Commands, net: Res<PPNetwork>) {
     let wbase = 2.0 * PI * net.f_hz;
     let bus = &net.bus;
     net.line
@@ -78,7 +78,7 @@ fn line_to_admit(cmd: &mut Commands, net: &Network) {
 /// For each transformer in the network, this function calculates its series
 /// and shunt admittances, considering tap settings and transformer parameters.
 /// It then spawns the transformer and its corresponding branches into the ECS.
-fn trafo_to_admit(cmd: &mut Commands, net: &Network) {
+fn trafo_to_admit(mut cmd: Commands, net: Res<PPNetwork>) {
     net.trafo
         .as_ref()
         .unwrap_or(&Vec::new())
@@ -160,7 +160,7 @@ fn trafo_to_admit(cmd: &mut Commands, net: &Network) {
 }
 
 /// Processes PQ elements (loads and generators) in the network and spawns them into the ECS.
-fn processing_pq_elems(cmd: &mut Commands, net: &Network) {
+fn processing_pq_elems(mut cmd: Commands, net: Res<PPNetwork>) {
     fn process_and_spawn_elements<T>(
         cmd: &mut Commands,
         items: &Option<Vec<T>>,
@@ -178,12 +178,12 @@ fn processing_pq_elems(cmd: &mut Commands, net: &Network) {
             cmd.spawn_batch(pq_nodes.into_iter());
         }
     }
-    process_and_spawn_elements(cmd, &net.load, |item| load_to_pqnode(item));
-    process_and_spawn_elements(cmd, &net.sgen, |item| sgen_to_pqnode(item));
+    process_and_spawn_elements(&mut cmd, &net.load, |item| load_to_pqnode(item));
+    process_and_spawn_elements(&mut cmd, &net.sgen, |item| sgen_to_pqnode(item));
 }
 
 /// Processes PV nodes (generators) in the network and spawns them into the ECS.
-fn processing_pv_nodes(cmd: &mut Commands, net: &Network) {
+fn processing_pv_nodes(mut cmd: Commands, net: Res<PPNetwork>) {
     if let Some(elems) = &net.gen {
         let m: Vec<_> = elems
             .iter()
@@ -202,14 +202,25 @@ fn load_to_pqnode(item: &Load) -> PQNode {
 }
 
 /// Converts a shunt to its equivalent admittance branch.
-fn shunt_to_admit(item: &Shunt) -> AdmittanceBranch {
-    let s = Complex::new(-item.p_mw, -item.q_mvar) * Complex::new(item.step as f64, 0.0);
-    let y = s / (item.vn_kv * item.vn_kv);
-    AdmittanceBranch {
-        y: Admittance(y),
-        port: Port2(vector![item.bus as i64, GND.into()]),
-        v_base: VBase(item.vn_kv),
+fn shunt_to_admit(mut cmd: Commands, net: Res<PPNetwork>) {
+    fn shunt_internal(item: &Shunt) -> AdmittanceBranch {
+        let s = Complex::new(-item.p_mw, -item.q_mvar) * Complex::new(item.step as f64, 0.0);
+        let y = s / (item.vn_kv * item.vn_kv);
+        AdmittanceBranch {
+            y: Admittance(y),
+            port: Port2(vector![item.bus as i64, GND.into()]),
+            v_base: VBase(item.vn_kv),
+        }
     }
+    net.shunt
+        .as_ref()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .enumerate()
+        .for_each(|(idx, item)| {
+            let a = shunt_internal(item);
+            cmd.spawn((EShunt, a, ElemIdx(idx)));
+        });
 }
 
 /// Converts a static generator to its equivalent PQ node.
@@ -228,7 +239,7 @@ fn gen_to_pvnode(item: &Gen) -> PVNode {
 }
 
 /// Converts an external grid to its equivalent external grid node and spawns it into the ECS.
-fn extgrid_to_extnode(cmd: &mut Commands, net: &Network) {
+fn extgrid_to_extnode(mut cmd: Commands, net: Res<PPNetwork>) {
     let item = &net.ext_grid.as_ref().unwrap()[0];
     let bus = item.bus;
     let v = item.vm_pu;
@@ -256,43 +267,41 @@ fn process_switch(mut cmd: Commands, net: Res<PPNetwork>) {
     }
 }
 
+fn inital_setup(mut cmd: Commands, net: Res<PPNetwork>) {
+    cmd.insert_resource(PFCommonData {
+        wbase: 2.0 * PI * net.f_hz,
+        sbase: net.sn_mva,
+    });
+}
 /// Initializes the power flow analysis by spawning network elements into the ECS.
 pub fn init_pf(world: &mut World) {
-    world.resource_scope::<PPNetwork, _>(|world, net: Mut<PPNetwork>| {
-        let net = &net;
-        world.insert_resource(PFCommonData {
-            wbase: 2.0 * PI * net.f_hz,
-            sbase: net.sn_mva,
-        });
+    let mut schedule = Schedule::default();
+    schedule.set_executor_kind(schedule::ExecutorKind::MultiThreaded);
+    schedule.add_systems(
+        (
+            (inital_setup, init_node_lookup),
+            shunt_to_admit,
+            line_to_admit,
+            trafo_to_admit,
+            processing_pq_elems,
+            processing_pv_nodes,
+            extgrid_to_extnode,
+            (process_switch, process_switch_state).chain(),
+        )
+            .chain(),
+    );
 
-        init_node_lookup(net, world);
-        let mut cmd = world.commands();
-        if let Some(shunts) = &net.shunt {
-            let shunts: Vec<_> = shunts.iter().map(|x| (EShunt, shunt_to_admit(x))).collect();
-            cmd.spawn_batch(shunts);
-        }
-        line_to_admit(&mut cmd, net);
-        trafo_to_admit(&mut cmd, net);
-        processing_pq_elems(&mut cmd, net);
-        processing_pv_nodes(&mut cmd, net);
-        extgrid_to_extnode(&mut cmd, net);
-        world.flush_commands();
-    });
-    world.run_system_once(process_switch);
-    world.run_system_once(process_switch_state);
-    if world.get_resource::<NodeMapping>().is_some() {
-        world.run_system_once(node_merge_split);
-    }
+    schedule.run(world);
 }
 
 /// Initializes the node lookup by mapping bus indices to ECS entities.
-fn init_node_lookup(value: &PPNetwork, world: &mut World) {
+fn init_node_lookup(mut cmd: Commands, value: Res<PPNetwork>) {
     let mut d = NodeLookup::default();
     for i in &value.bus {
-        let idx = world.spawn(PFNode(i.index as usize));
+        let idx = cmd.spawn(PFNode(i.index as usize));
         d.0.insert(i.index, idx.id());
     }
-    world.insert_resource(d);
+    cmd.insert_resource(d);
 }
 
 #[allow(unused_imports)]

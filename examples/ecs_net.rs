@@ -57,5 +57,4 @@ fn main() {
     );
     pf_net.post_process();
     pf_net.print_res_bus();
-    //pf_net.print_res_line();
 }

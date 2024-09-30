@@ -6,6 +6,7 @@ use nalgebra_sparse::CooMatrix;
 use std::collections::{HashMap, HashSet};
 
 use super::elements::*;
+
 /// Represents a switch in the network.
 #[derive(Default, Debug, Clone, Component)]
 pub struct Switch {
@@ -19,22 +20,23 @@ pub struct Switch {
 #[derive(Default, Debug, Clone, Component, Deref, DerefMut)]
 pub struct SwitchState(pub bool);
 
-/// Merge 2 nodes
+/// Represents merging two nodes in the network.
 #[derive(Default, Debug, Clone, Component)]
 pub struct MergeNode(pub usize, pub usize);
 
+/// A union-find (disjoint set) structure for merging nodes.
 #[derive(Default, Debug, Clone)]
-/// 并查集结构的实现
 pub struct NodeMerge {
-    parent: HashMap<u64, u64>,
-    rank: HashMap<u64, u64>,
+    pub parent: HashMap<u64, u64>,
+    pub rank: HashMap<u64, u64>,
 }
 
+/// A mapping from old nodes to new nodes after merging, stored as a resource.
 #[derive(Default, Debug, Clone, Deref, DerefMut, Resource)]
-/// 并查集结构的实现
 pub struct NodeMapping(HashMap<u64, u64>);
 
 impl NodeMerge {
+    /// Creates a new union-find (disjoint set) structure for the given nodes.
     pub fn new(nodes: &[u64]) -> Self {
         let mut parent = HashMap::new();
         let mut rank = HashMap::new();
@@ -45,6 +47,7 @@ impl NodeMerge {
         NodeMerge { parent, rank }
     }
 
+    /// Finds the root of the node, with path compression.
     fn find(&mut self, node: u64) -> u64 {
         let mut root = node;
 
@@ -61,6 +64,7 @@ impl NodeMerge {
         root
     }
 
+    /// Unites two nodes by their roots.
     pub fn union(&mut self, node1: u64, node2: u64) {
         let root1 = self.find(node1);
         let root2 = self.find(node2);
@@ -77,8 +81,9 @@ impl NodeMerge {
             }
         }
     }
+
+    /// Generates a node mapping based on union-find results, starting with a given index.
     pub fn get_node_mapping(&self, starting_idx: u64) -> HashMap<u64, u64> {
-        // 建立节点映射
         let mut root_to_new_id = HashMap::new();
         let mut node_mapping = HashMap::new();
         let mut new_node_id = starting_idx;
@@ -96,6 +101,7 @@ impl NodeMerge {
     }
 }
 
+/// Processes the state of switches and updates network components accordingly.
 #[allow(dead_code)]
 pub fn process_switch_state(
     mut cmd: Commands,
@@ -120,10 +126,6 @@ pub fn process_switch_state(
                 let (node1, node2) = (switch.bus, switch.element);
                 if **closed {
                     if _z_ohm == 0.0 {
-                        // union_find
-                        //     .as_mut()
-                        //     .unwrap()
-                        //     .union(node1 as u64, node2 as u64);
                         let v_base = net.bus[switch.bus as usize].vn_kv;
                         cmd.entity(entity).insert(AdmittanceBranch {
                             y: Admittance(Complex::new(1e6, 0.0)),
@@ -148,19 +150,22 @@ pub fn process_switch_state(
         cmd.insert_resource(NodeMapping(union_find.unwrap().get_node_mapping(0)));
     }
 }
-#[allow(dead_code)]
-pub fn node_merge_split(cmd: Commands, nodes: Res<NodeMapping>) {}
 
+/// Placeholder function for future node merge or split logic.
+#[allow(dead_code)]
+pub fn node_merge_split(_cmd: Commands, _nodes: Res<NodeMapping>) {}
+#[allow(dead_code)]
+/// Builds an aggregation matrix based on the provided nodes and node mapping.
 fn build_aggregation_matrix(nodes: &[u64], node_mapping: &HashMap<u64, u64>) -> CooMatrix<u64> {
     let original_node_count = nodes.len();
     let new_node_count = node_mapping.values().collect::<HashSet<_>>().len();
     let mut mat = CooMatrix::new(original_node_count, new_node_count);
     mat.push(0, 0, 1);
-    mat
+    todo!()
 }
+
 #[cfg(test)]
 #[allow(unused_imports)]
-
 mod tests {
     use std::{env, fs};
 
@@ -172,22 +177,26 @@ mod tests {
     };
 
     use super::*;
+    
+    /// Loads a JSON object from a string.
     fn load_json_from_str(file_content: &str) -> Result<Map<String, Value>, std::io::Error> {
         let parsed: Value = serde_json::from_str(&file_content)?;
         let obj: Map<String, Value> = parsed.as_object().unwrap().clone();
         Ok(obj)
     }
 
+    /// Loads a JSON object from a file.
     fn load_json(file_path: &str) -> Result<Map<String, Value>, std::io::Error> {
         let file_content = fs::read_to_string(file_path)
-            .expect(format!("Error reading file network file").as_str());
+            .expect("Error reading network file");
         let obj = load_json_from_str(&file_content);
         obj
     }
+
     #[test]
+    /// Tests the node merging logic using union-find (disjoint set).
     fn test_node_merge() {
         let nodes = vec![1, 2, 3, 4, 5, 6, 7];
-        // 定义开关列表
         let switches = vec![
             Switch {
                 bus: 2,
@@ -215,7 +224,6 @@ mod tests {
             },
         ];
 
-        // 定义开关状态列表，与开关列表对应
         let switch_states = vec![
             SwitchState(true),
             SwitchState(true),
@@ -223,10 +231,8 @@ mod tests {
             SwitchState(true),
         ];
 
-        // 初始化并查集
         let mut uf = NodeMerge::new(&nodes);
 
-        // 处理开关数据
         for (switch, state) in switches.iter().zip(switch_states.iter()) {
             if **state {
                 if switch.et == SwitchType::SwitchTwoBuses {
@@ -240,7 +246,9 @@ mod tests {
         assert_ne!(uf.find(5), uf.find(6));
         assert_eq!(uf.find(6), uf.find(7));
     }
+
     #[test]
+    /// Tests the entire power flow ECS system, including switch processing.
     fn test_ecs_switch() {
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
         let folder = format!("{}/cases/test/", dir);
@@ -273,6 +281,7 @@ mod tests {
     }
 
     #[test]
+    /// Tests the power flow calculation and generation of aggregation matrix.
     fn test_ecs_pf_switch() {
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
         let folder = format!("{}/cases/test/", dir);
@@ -291,7 +300,7 @@ mod tests {
         let mut nodes: Vec<u64> = node_mapping.keys().map(|x| *x).collect();
         nodes.sort();
 
-        let p_matrix = build_aggregation_matrix(nodes.as_slice(), &node_mapping.0);
-        println!("\n聚合矩阵 P：\n{:?}", p_matrix);
+        // let p_matrix = build_aggregation_matrix(nodes.as_slice(), &node_mapping.0);
+        // println!("\nAggregation Matrix P:\n{:?}", p_matrix);
     }
 }

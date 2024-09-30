@@ -1,3 +1,9 @@
+use new_ecs::{
+    elements::PPNetwork,
+    network::{DataOps, PowerFlow, PowerFlowResult, PowerGrid},
+    post_processing::PostProcessing,
+};
+
 use rustpower::{io::pandapower::Network, prelude::*};
 
 #[macro_export]
@@ -39,13 +45,22 @@ macro_rules! timeit {
 fn main() {
     let file_path = test_ieee39::IEEE_39;
     let net: Network = serde_json::from_str(file_path).unwrap();
-    let pf = PFNetwork::from(net);
-    let v_init = pf.create_v_init();
-    let tol = Some(1e-8);
-    let max_it = Some(10);
+    let mut pf_net = PowerGrid::default();
+    pf_net.world_mut().insert_resource(PPNetwork(net));
+    pf_net.init_pf_net();
+    pf_net.run_pf();
+    assert_eq!(
+        pf_net
+            .world()
+            .get_resource::<PowerFlowResult>()
+            .unwrap()
+            .converged,
+        true
+    );
 
-    let _ = pf.run_pf(v_init.clone(), max_it, tol);
-
-    timeit!(pf_ieee39, 100, || _ =
-        (&pf).run_pf(v_init.clone(), max_it, tol));
+    timeit!(pf_ieee39, 100, || {
+        pf_net.run_pf();
+    });
+    pf_net.post_process();
+    pf_net.print_res_bus();
 }

@@ -6,11 +6,16 @@ use nalgebra::*;
 use nalgebra_sparse::*;
 use num_complex::Complex64;
 
-use crate::{basic::{
-    self, newton_pf, solver::RSparseSolver, system::{PFNetwork, RunPF}
-}, io::pandapower::ecs_net_conv::init_pf};
+use crate::{
+    basic::{
+        self, newton_pf,
+        solver::RSparseSolver,
+        system::PFNetwork,
+    },
+    io::pandapower::ecs_net_conv::init_pf,
+};
 
-use super::elements::*;
+use super::{elements::*, systems::init_states};
 
 /// Represents the ground node in the network.
 pub const GND: i64 = -1;
@@ -44,15 +49,12 @@ pub struct PowerGrid {
 #[derive(Debug, Resource, Clone)]
 pub struct ResPFNetwork(pub PFNetwork);
 
-
-
 /// Resource that holds the power flow configuration options, such as the initial voltage guess,
 /// maximum iterations, and tolerance for convergence.
 #[derive(Debug, Resource, Clone)]
 pub struct PowerFlowConfig {
-    pub v_init: DVector<Complex64>, // Initial voltage vector
-    pub max_it: Option<usize>,      // Maximum number of iterations
-    pub tol: Option<f64>,           // Tolerance for convergence
+    pub max_it: Option<usize>, // Maximum number of iterations
+    pub tol: Option<f64>,      // Tolerance for convergence
 }
 
 /// Resource for storing the results of power flow calculation, including the final voltage vector,
@@ -71,6 +73,7 @@ pub struct PowerFlowMat {
     pub reorder: CsrMatrix<Complex<f64>>, // Reordering matrix
     pub y_bus: CscMatrix<Complex<f64>>,   // Y-bus admittance matrix
     pub s_bus: DVector<Complex64>,        // S-bus power injections
+    pub v_bus_init: DVector<Complex64>,   // V-bus power injections
     pub npv: usize,                       // Number of PV buses
     pub npq: usize,                       // Number of PQ buses
 }
@@ -100,23 +103,18 @@ pub trait PowerFlow {
 impl PowerFlow for PowerGrid {
     fn init_pf_net(&mut self) {
         // Initialize the power flow network, prepare matrices, and store them as ECS resources.
-        let pf_net: PFNetwork = self.try_into().unwrap();
-        let v_init_bak = pf_net.create_v_init();
-        let (reorder, y_bus, s_bus, _, npv, npq) = pf_net.prepare_matrices(v_init_bak.clone());
-        let mat = PowerFlowMat {
-            reorder,
-            y_bus,
-            s_bus,
-            npv,
-            npq,
-        };
-        self.world_mut().insert_resource(mat);
+        if self.world_mut().get_resource::<PowerFlowMat>().is_some() {
+            panic!("Power Grid is already initialized");
+        }
         self.world_mut().insert_resource(PowerFlowConfig {
-            v_init: v_init_bak,
             max_it: None,
             tol: None,
         });
-        self.world_mut().insert_resource(ResPFNetwork(pf_net));
+        if self.world().get_resource::<PPNetwork>().is_some() {
+            self.world_mut().run_system_once(init_pf);
+        }
+
+        self.world_mut().run_system_once(init_states);
     }
 
     fn run_pf(&mut self) {
@@ -132,7 +130,7 @@ impl PowerFlow for PowerGrid {
 /// - `mat`: Power flow matrices resource.
 /// - `cfg`: Power flow configuration resource.
 fn ecs_run_pf(mut cmd: Commands, mat: Res<PowerFlowMat>, cfg: Res<PowerFlowConfig>) {
-    let v_init = &mat.reorder * &cfg.v_init;
+    let v_init = &mat.v_bus_init;
     let max_it = cfg.max_it;
     let tol = cfg.tol;
 
@@ -191,7 +189,6 @@ impl DataOps for PowerGrid {
     }
 }
 
-
 #[derive(Debug)]
 pub enum ParseError {
     InvalidData,
@@ -219,7 +216,7 @@ impl TryFrom<&mut PowerGrid> for PFNetwork {
                 "Net resource not found".to_string(),
             ));
         }
-        world.run_system_once(init_pf);
+
         let net = &world.get_resource::<PPNetwork>().unwrap();
         let buses = net.bus.clone();
         let v_base = net.bus[0].vn_kv;
@@ -287,6 +284,7 @@ mod tests {
 
     use super::*;
     use std::env;
+
     #[test]
     fn test_to_pf_net() {
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -296,13 +294,13 @@ mod tests {
 
         let mut pf_net = PowerGrid::default();
         pf_net.world_mut().insert_resource(PPNetwork(net));
+        pf_net.init_pf_net();
         let net = PFNetwork::try_from(&mut pf_net).unwrap();
         let v_init = net.create_v_init();
         let tol = Some(1e-8);
         let max_it = Some(10);
         let (_v, _iter) = net.run_pf(v_init.clone(), max_it, tol);
     }
-
 
     /// Test case for running power flow in the ECS system.
     #[test]
