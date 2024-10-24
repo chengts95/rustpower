@@ -2,10 +2,10 @@ use crate::io::pandapower::SwitchType;
 use bevy_ecs::prelude::*;
 use derive_more::{Deref, DerefMut};
 use nalgebra::{vector, Complex};
-use nalgebra_sparse::CooMatrix;
+use nalgebra_sparse::{CooMatrix, CscMatrix};
 use std::collections::{HashMap, HashSet};
 
-use super::elements::*;
+use super::{elements::*, network::PowerFlowMat};
 
 /// Represents a switch in the network.
 #[derive(Default, Debug, Clone, Component)]
@@ -110,7 +110,7 @@ pub fn process_switch_state(
     q: Query<(Entity, &Switch, &SwitchState)>,
 ) {
     let node_idx: Vec<u64> = nodes.0.keys().map(|x| *x as u64).collect();
-    let union_find: Option<NodeMerge> = if q.iter().len() > 0 {
+    let mut union_find: Option<NodeMerge> = if q.iter().len() > 0 {
         Some(NodeMerge::new(&node_idx))
     } else {
         None
@@ -126,12 +126,16 @@ pub fn process_switch_state(
                 let (node1, node2) = (switch.bus, switch.element);
                 if **closed {
                     if _z_ohm == 0.0 {
-                        let v_base = net.bus[switch.bus as usize].vn_kv;
-                        cmd.entity(entity).insert(AdmittanceBranch {
-                            y: Admittance(Complex::new(1e6, 0.0)),
-                            port: Port2(vector![node1, node2]),
-                            v_base: VBase(v_base),
-                        });
+                        union_find
+                            .as_mut()
+                            .unwrap()
+                            .union(node1 as u64, node2 as u64);
+                        // let v_base = net.bus[switch.bus as usize].vn_kv;
+                        // cmd.entity(entity).insert(AdmittanceBranch {
+                        //     y: Admittance(Complex::new(1e6, 0.0)),
+                        //     port: Port2(vector![node1, node2]),
+                        //     v_base: VBase(v_base),
+                        // });
                     } else {
                         let v_base = net.bus[switch.bus as usize].vn_kv;
                         cmd.entity(entity).insert(AdmittanceBranch {
@@ -155,13 +159,88 @@ pub fn process_switch_state(
 #[allow(dead_code)]
 pub fn node_merge_split(_cmd: Commands, _nodes: Res<NodeMapping>) {}
 #[allow(dead_code)]
+
 /// Builds an aggregation matrix based on the provided nodes and node mapping.
-fn build_aggregation_matrix(nodes: &[u64], node_mapping: &HashMap<u64, u64>) -> CooMatrix<u64> {
+fn build_aggregation_matrix(node_mapping: &HashMap<u64, u64>) -> CooMatrix<u64> {
+    let mut nodes: Vec<_> = node_mapping.keys().collect();
+    nodes.sort();
     let original_node_count = nodes.len();
     let new_node_count = node_mapping.values().collect::<HashSet<_>>().len();
+
+    // Initialize the COO matrix
     let mut mat = CooMatrix::new(original_node_count, new_node_count);
-    mat.push(0, 0, 1);
-    todo!()
+
+    // Iterate over the nodes and apply the mapping
+    for (i, &node) in nodes.iter().enumerate() {
+        // Get the mapped new node, default to the original node if not in mapping
+        let new_node = node_mapping.get(&node).unwrap_or(&node);
+        // Push the value 1 to the corresponding location
+        mat.push(i, *new_node as usize, 1);
+    }
+
+    mat
+}
+/// Builds an aggregation matrix based on the provided nodes and node mapping.
+// fn build_aggregation_matrix_masked(
+//     node_mapping: &HashMap<u64, u64>,
+//     mask: &[bool],
+// ) -> CooMatrix<u64> {
+//     let mut nodes: Vec<_> = node_mapping.keys().collect();
+//     nodes.sort();
+//     let original_node_count = nodes.len();
+//     let new_node_count = node_mapping.values().collect::<HashSet<_>>().len();
+
+//     // Initialize the COO matrix
+//     let mut mat = CooMatrix::new(original_node_count, new_node_count);
+
+//     // Iterate over the nodes and apply the mapping
+//     for (i, &node) in nodes.iter().enumerate() {
+//         // Get the mapped new node, default to the original node if not in mapping
+//         let new_node = node_mapping.get(&node).unwrap_or(&node);
+      
+//         // Push the value 1 to the corresponding location
+//         mat.push(i, *new_node as usize,  mask[i] as u64);
+        
+//     }
+
+//     mat
+// }
+fn node_aggregation_system(a: Res<PowerFlowMat>, node_mapping: Res<NodeMapping>, nodelut:Res<NodeLookup>, node_types:Query<&NodeType>) {
+    let coo = build_aggregation_matrix(&node_mapping.0);
+    let mut nodes: Vec<_> = node_mapping.keys().map(|k| k.clone()).collect();
+
+    nodes.sort();
+    let mut mask = nalgebra::DVector::identity(nodes.len());
+    for i in 0..mask.len(){
+        if [12,28,30].contains(&i){
+            mask[i] = 0;
+        }
+    }
+    // for (i, &node) in nodes.iter().enumerate() {
+    //     let new_node = nodelut.0.get(&(node as i64)).unwrap();
+    //     let node_type = node_types.get(*new_node).unwrap();
+        
+       
+    // }
+
+    let (pattern, values) = CscMatrix::from(&coo).into_pattern_and_values();
+    let mut csc = unsafe {
+        CscMatrix::try_from_pattern_and_values(pattern, values.iter().map(|x| *x as f64).collect())
+            .unwrap_unchecked()
+    };
+
+   // let mut binding = csc.transpose_as_csr();
+    let iter = csc.filter(predicate);
+    for mut  i in iter{
+        println!("{:?}",i.rows_and_values_mut());
+    }
+    let v = nalgebra::DVectorView::from_slice(nodes.as_slice(), nodes.len());
+    let vec = nalgebra::DVector::from(v).cast::<f64>();
+    let original_node_count = nodes.len();
+
+    // for i in csc.triplet_iter() {
+    //     println!("{:?}", i);
+    // }
 }
 
 #[cfg(test)]
@@ -169,6 +248,7 @@ fn build_aggregation_matrix(nodes: &[u64], node_mapping: &HashMap<u64, u64>) -> 
 mod tests {
     use std::{env, fs};
 
+    use bevy_ecs::system::RunSystemOnce;
     use serde_json::{Map, Value};
 
     use crate::{
@@ -177,7 +257,7 @@ mod tests {
     };
 
     use super::*;
-    
+
     /// Loads a JSON object from a string.
     fn load_json_from_str(file_content: &str) -> Result<Map<String, Value>, std::io::Error> {
         let parsed: Value = serde_json::from_str(&file_content)?;
@@ -187,8 +267,7 @@ mod tests {
 
     /// Loads a JSON object from a file.
     fn load_json(file_path: &str) -> Result<Map<String, Value>, std::io::Error> {
-        let file_content = fs::read_to_string(file_path)
-            .expect("Error reading network file");
+        let file_content = fs::read_to_string(file_path).expect("Error reading network file");
         let obj = load_json_from_str(&file_content);
         obj
     }
@@ -263,10 +342,7 @@ mod tests {
         let mut pf_net = PowerGrid::default();
         pf_net.world_mut().insert_resource(PPNetwork(net));
         pf_net.init_pf_net();
-        let node_mapping = pf_net.world().get_resource::<NodeMapping>().unwrap();
-        let mut nodes: Vec<_> = node_mapping.keys().collect();
-        nodes.sort();
-
+        pf_net.world_mut().run_system_once(node_aggregation_system);
         pf_net.run_pf();
         pf_net.post_process();
         pf_net.print_res_bus();
