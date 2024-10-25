@@ -1,8 +1,9 @@
-use crate::io::pandapower::SwitchType;
+use crate::{basic::sparse::cast::Cast, io::pandapower::SwitchType};
 use bevy_ecs::prelude::*;
 use derive_more::{Deref, DerefMut};
-use nalgebra::{vector, Complex};
+use nalgebra::{vector, Complex, DMatrix, DMatrixView, DVector};
 use nalgebra_sparse::{CooMatrix, CscMatrix};
+use num_traits::Zero;
 use std::collections::{HashMap, HashSet};
 
 use super::{elements::*, network::PowerFlowMat};
@@ -197,50 +198,104 @@ fn build_aggregation_matrix(node_mapping: &HashMap<u64, u64>) -> CooMatrix<u64> 
 //     for (i, &node) in nodes.iter().enumerate() {
 //         // Get the mapped new node, default to the original node if not in mapping
 //         let new_node = node_mapping.get(&node).unwrap_or(&node);
-      
+
 //         // Push the value 1 to the corresponding location
 //         mat.push(i, *new_node as usize,  mask[i] as u64);
-        
+
 //     }
 
 //     mat
 // }
-fn node_aggregation_system(a: Res<PowerFlowMat>, node_mapping: Res<NodeMapping>, nodelut:Res<NodeLookup>, node_types:Query<&NodeType>) {
+
+fn build_reverse_mapping(node_mapping: &HashMap<u64, u64>) -> HashMap<u64, Vec<u64>> {
+    let mut reverse_mapping: HashMap<u64, Vec<u64>> = HashMap::with_capacity(node_mapping.len());
+
+    for (&original_node, &merged_node) in node_mapping {
+        reverse_mapping
+            .entry(merged_node)
+            .or_insert_with(Vec::new)
+            .push(original_node);
+    }
+
+    reverse_mapping
+}
+
+// 假设 `node_mapping` 是 HashMap<u64, u64> 类型
+fn set_mask_for_merged_nodes(
+    node_mapping: &HashMap<u64, u64>,
+    current_node_order: &[u64],
+    mats_npv: usize,
+    mats_npq: usize,
+) -> DVector<bool> {
+    // 定义节点类型区域索引
+    let ext_idx = mats_npv + mats_npq;
+    let pv_nodes = &current_node_order[0..mats_npv];
+    let pq_nodes = &current_node_order[mats_npv..ext_idx];
+    let ext_nodes = &current_node_order[ext_idx..];
+
+    // 创建反向映射，键为合并节点，值为合并前的节点集合
+    let reverse_mapping = build_reverse_mapping(node_mapping);
+
+    // 初始化一个 mask 向量，初始值全为 0
+    let mut mask = DVector::from_element(current_node_order.len(), false);
+
+    // 查找并设置合并节点的 mask 优先级
+    for (_, original_nodes) in &reverse_mapping {
+        // 查找最高优先级的节点：ext > pv > pq (按最小编号)
+        let prioritized_node = original_nodes
+            .iter()
+            .find(|&&node| ext_nodes.contains(&node))
+            .or_else(|| {
+                original_nodes
+                    .iter()
+                    .find(|&&node| pv_nodes.contains(&node))
+            })
+            .or_else(|| {
+                original_nodes
+                    .iter()
+                    .min_by_key(|&&node| pq_nodes.contains(&node) as u64)
+            });
+
+        // 设置 mask，找到的节点按优先级设为 1
+        if let Some(&node) = prioritized_node {
+            mask[node as usize] = true;
+        }
+    }
+
+    mask
+}
+
+fn node_aggregation_system(
+    node_mapping: Res<NodeMapping>,
+    mats: Res<PowerFlowMat>,
+) -> (CscMatrix<f64>, CscMatrix<f64>) {
     let coo = build_aggregation_matrix(&node_mapping.0);
     let mut nodes: Vec<_> = node_mapping.keys().map(|k| k.clone()).collect();
 
     nodes.sort();
-    let mut mask = nalgebra::DVector::identity(nodes.len());
-    for i in 0..mask.len(){
-        if [12,28,30].contains(&i){
-            mask[i] = 0;
-        }
-    }
-    // for (i, &node) in nodes.iter().enumerate() {
-    //     let new_node = nodelut.0.get(&(node as i64)).unwrap();
-    //     let node_type = node_types.get(*new_node).unwrap();
-        
-       
-    // }
+
+    let current_node_order =
+        (&mats.reorder * DVector::from_vec(nodes).cast::<Complex<f64>>()).map(|x| x.re as u64);
+
+    let mask = set_mask_for_merged_nodes(
+        &node_mapping,
+        current_node_order.as_slice(),
+        mats.npv,
+        mats.npq,
+    );
 
     let (pattern, values) = CscMatrix::from(&coo).into_pattern_and_values();
-    let mut csc = unsafe {
+    let pre_select_mat = unsafe {
         CscMatrix::try_from_pattern_and_values(pattern, values.iter().map(|x| *x as f64).collect())
             .unwrap_unchecked()
     };
 
-   // let mut binding = csc.transpose_as_csr();
-    let iter = csc.filter(predicate);
-    for mut  i in iter{
-        println!("{:?}",i.rows_and_values_mut());
-    }
-    let v = nalgebra::DVectorView::from_slice(nodes.as_slice(), nodes.len());
-    let vec = nalgebra::DVector::from(v).cast::<f64>();
-    let original_node_count = nodes.len();
+    // let mut binding = csc.transpose_as_csr();
+    let pre_select_mat_for_voltages = pre_select_mat.filter(|r, _c, _v| {
+        return mask[r];
+    });
 
-    // for i in csc.triplet_iter() {
-    //     println!("{:?}", i);
-    // }
+    (pre_select_mat, pre_select_mat_for_voltages)
 }
 
 #[cfg(test)]
@@ -252,7 +307,10 @@ mod tests {
     use serde_json::{Map, Value};
 
     use crate::{
-        basic::new_ecs::{network::*, post_processing::PostProcessing},
+        basic::{
+            new_ecs::{network::*, post_processing::PostProcessing},
+            sparse::conj::RealImage,
+        },
         io::pandapower::{load_pandapower_json, load_pandapower_json_obj},
     };
 
@@ -328,7 +386,7 @@ mod tests {
 
     #[test]
     /// Tests the entire power flow ECS system, including switch processing.
-    fn test_ecs_switch() {
+    fn test_node_agg_mat() {
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
         let folder = format!("{}/cases/test/", dir);
         let name = folder.to_owned() + "/new_input_PFLV_modified.json";
@@ -342,18 +400,79 @@ mod tests {
         let mut pf_net = PowerGrid::default();
         pf_net.world_mut().insert_resource(PPNetwork(net));
         pf_net.init_pf_net();
-        pf_net.world_mut().run_system_once(node_aggregation_system);
-        pf_net.run_pf();
-        pf_net.post_process();
-        pf_net.print_res_bus();
+
+        // 3. 运行系统并获取结果矩阵 `mat` 和 `mat_v`
+        let (mat, mat_v) = pf_net.world_mut().run_system_once(node_aggregation_system);
+
+        // 4. 获取节点映射
+        let node_mapping = pf_net.world().get_resource::<NodeMapping>().unwrap();
+        let mats = pf_net.world().get_resource::<PowerFlowMat>().unwrap();
+        let mut nodes: Vec<_> = node_mapping.keys().cloned().collect();
+        nodes.sort();
+
+        // 5. 设置测试节点和目标节点
+        let merged_nodes = [12, 28, 30];
+        let target_node = 0; // 合并的目标节点
+
+        // 6. 构造节点向量并与 `mat_v` 相乘，验证 `mat_v` 的合并效果
+        let input_vector = DVector::from_iterator(nodes.len(), nodes.iter().map(|&x| x as f64));
+        let result_vector_v = &mat_v.clone().transpose_as_csr() * &input_vector;
+
+        // 确保向量维度符合预期
         assert_eq!(
-            pf_net
-                .world()
-                .get_resource::<PowerFlowResult>()
-                .unwrap()
-                .converged,
-            true
+            result_vector_v.len(),
+            nodes.len() - merged_nodes.len(),
+            "Result vector dimension mismatch"
         );
+
+        // 检查 `mat_v` 乘完向量后的合并效果
+        for node in &merged_nodes {
+            assert_eq!(
+                result_vector_v.map(|x| x as i32).as_slice().contains(node),
+                false,
+                "Node {} should be zero after merging in mat_v",
+                node
+            );
+        }
+        let result = &mat.clone().transpose()
+            * mats.reorder.clone().transpose_as_csc().real()
+            * &input_vector;
+        println!("result: {}", result);
+        // 7. 检查 `mat` 的合并效果，确保节点 `0` 是 `12 + 28 + 30` 的累加
+        let result_vector = &mat.transpose_as_csr() * &input_vector;
+        let expected_sum: f64 = merged_nodes.iter().map(|&n| n as f64).sum();
+
+        assert_eq!(
+            result_vector[target_node], expected_sum,
+            "Node 0 should equal the sum of nodes 12, 28, 30 in mat"
+        );
+        println!("All node merges and calculations are correct!");
+    }
+
+    #[test]
+    /// Tests the entire power flow ECS system, including switch processing.
+    fn test_node_agg_pf_mats() {
+        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let folder = format!("{}/cases/test/", dir);
+        let name = folder.to_owned() + "/new_input_PFLV_modified.json";
+        let json = load_json(&name).unwrap();
+        let json: Map<String, Value> = json
+            .get("pp_network")
+            .and_then(|v| v.as_object())
+            .unwrap()
+            .clone();
+        let net = load_pandapower_json_obj(&json);
+        let mut pf_net = PowerGrid::default();
+        pf_net.world_mut().insert_resource(PPNetwork(net));
+        pf_net.init_pf_net();
+
+        // 3. 运行系统并获取结果矩阵 `mat` 和 `mat_v`
+        let (mat, mat_v) = pf_net.world_mut().run_system_once(node_aggregation_system);
+
+        // 4. 获取节点映射
+        let node_mapping = pf_net.world().get_resource::<NodeMapping>().unwrap();
+        let mut nodes: Vec<_> = node_mapping.keys().cloned().collect();
+        nodes.sort();
     }
 
     #[test]
