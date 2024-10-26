@@ -253,7 +253,7 @@ fn set_mask_for_merged_nodes(
             .or_else(|| {
                 original_nodes
                     .iter()
-                    .min_by_key(|&&node| pq_nodes.contains(&node) as u64)
+                    .min_by_key(|&&node| node )
             });
 
         // 设置 mask，找到的节点按优先级设为 1
