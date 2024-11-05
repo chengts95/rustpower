@@ -82,9 +82,9 @@ fn create_y_bus(
 pub fn init_states(world: &mut World) {
     let (_inci_mat, y_bus) = world.run_system_once(create_y_bus);
     let cfg = world.run_system_once(init_bus_status);
-    let y_bus = (&cfg.reorder * y_bus * &cfg.reorder.transpose()).transpose_as_csc();
-    let s_bus = &cfg.reorder * &cfg.s_bus;
-    let v_bus_init = &cfg.reorder * &cfg.v_bus_init;
+    let y_bus =  y_bus.transpose_as_csc();
+    let s_bus =  cfg.s_bus;
+    let v_bus_init = cfg.v_bus_init;
     world.insert_resource(PowerFlowMat {
         reorder: cfg.reorder,
         y_bus,
