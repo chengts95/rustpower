@@ -1,5 +1,5 @@
 use nalgebra::*;
-use nalgebra_sparse::CscMatrix;
+use nalgebra_sparse::{CscMatrix, CsrMatrix};
 
 /// Trait for computing the conjugate of a matrix.
 pub(crate) trait Conjugate {
@@ -131,6 +131,72 @@ where
         (real_mat, imag_mat)
     }
 }
+
+
+impl<T: SimdRealField> RealImage for CsrMatrix<Complex<T>>
+where
+    Complex<T>: SimdComplexField,
+{
+    type Mat = CsrMatrix<<Complex<T> as SimdComplexField>::SimdRealField>;
+
+    fn real(&self) -> Self::Mat {
+        let values = unsafe {
+            let data = ViewStorage::<_, Dyn, U1, U1, Dyn>::from_raw_parts(
+                self.values().as_ptr(),
+                (nalgebra::Dyn(self.nnz()), U1),
+                (U1, nalgebra::Dyn(self.nnz())),
+            );
+            Matrix::from_data_statically_unchecked(data)
+        };
+        let v = values.map(|e| e.simd_real());
+        let real_mat = unsafe {
+            CsrMatrix::try_from_pattern_and_values(self.pattern().clone(), v.as_slice().to_vec())
+                .unwrap_unchecked()
+        };
+        real_mat
+    }
+
+    fn imag(&self) -> Self::Mat {
+        let values = unsafe {
+            let data = ViewStorage::<_, Dyn, U1, U1, Dyn>::from_raw_parts(
+                self.values().as_ptr(),
+                (nalgebra::Dyn(self.nnz()), U1),
+                (U1, nalgebra::Dyn(self.nnz())),
+            );
+            Matrix::from_data_statically_unchecked(data)
+        };
+        let v = values.map(|e| e.simd_imaginary());
+        let imag_mat = unsafe {
+            CsrMatrix::try_from_pattern_and_values(self.pattern().clone(), v.as_slice().to_vec())
+                .unwrap_unchecked()
+        };
+        imag_mat
+    }
+
+    fn real_imag(&self) -> (Self::Mat, Self::Mat) {
+        let values = unsafe {
+            let data = ViewStorage::<_, Dyn, U1, U1, Dyn>::from_raw_parts(
+                self.values().as_ptr(),
+                (nalgebra::Dyn(self.nnz()), U1),
+                (U1, nalgebra::Dyn(self.nnz())),
+            );
+            Matrix::from_data_statically_unchecked(data)
+        };
+        let v1 = values.map(|e| e.simd_real());
+        let v2 = values.map(|e| e.simd_imaginary());
+        let real_mat = unsafe {
+            CsrMatrix::try_from_pattern_and_values(self.pattern().clone(), v1.as_slice().to_vec())
+                .unwrap_unchecked()
+        };
+        let imag_mat = unsafe {
+            CsrMatrix::try_from_pattern_and_values(self.pattern().clone(), v2.as_slice().to_vec())
+                .unwrap_unchecked()
+        };
+
+        (real_mat, imag_mat)
+    }
+}
+
 
 // 测试模块
 #[cfg(test)]
