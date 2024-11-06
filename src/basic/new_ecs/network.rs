@@ -1,17 +1,13 @@
 use std::fmt;
 
 use bevy_app::prelude::*;
-use bevy_ecs::{prelude::*, system::RunSystemOnce};
+use bevy_ecs::{prelude::*, schedule, system::RunSystemOnce};
 use nalgebra::*;
 use nalgebra_sparse::*;
 use num_complex::Complex64;
 
 use crate::{
-    basic::{
-        self, newton_pf,
-        solver::RSparseSolver,
-        system::PFNetwork,
-    },
+    basic::{self, newton_pf, solver::RSparseSolver, system::PFNetwork},
     io::pandapower::ecs_net_conv::init_pf,
 };
 
@@ -103,18 +99,23 @@ pub trait PowerFlow {
 impl PowerFlow for PowerGrid {
     fn init_pf_net(&mut self) {
         // Initialize the power flow network, prepare matrices, and store them as ECS resources.
-        if self.world_mut().get_resource::<PowerFlowMat>().is_some() {
-            panic!("Power Grid is already initialized");
-        }
+
         self.world_mut().insert_resource(PowerFlowConfig {
             max_it: None,
             tol: None,
         });
-        if self.world().get_resource::<PPNetwork>().is_some() {
-            self.world_mut().run_system_once(init_pf);
-        }
+        let mut schedule = Schedule::default();
+        schedule.set_executor_kind(schedule::ExecutorKind::SingleThreaded);
+        schedule.add_systems(
+            (
+                init_pf.run_if(resource_exists::<PPNetwork>),
+                init_states.run_if(not(resource_exists::<PowerFlowMat>)),
+                apply_permutation,
+            )
+                .chain(),
+        );
 
-        self.world_mut().run_system_once(init_states);
+        schedule.run(self.world_mut());
     }
 
     fn run_pf(&mut self) {
@@ -123,7 +124,16 @@ impl PowerFlow for PowerGrid {
     }
 }
 
-/// ECS system that runs the power flow calculation based on the current configuration and matrices.
+fn apply_permutation(mut mat: ResMut<PowerFlowMat>) {
+    let reorder = &mat.reorder.clone().transpose_as_csc();
+    let y_bus = &mat.y_bus;
+    let reordered_y_bus = reorder.transpose() * y_bus * reorder;
+    mat.s_bus = reorder * &mat.s_bus;
+    mat.v_bus_init = reorder * &mat.v_bus_init;
+    mat.y_bus = reordered_y_bus;
+}
+
+/// ECS system that runs the p ower flow calculation based on the current configuration and matrices.
 ///
 /// # Parameters
 /// - `cmd`: Command buffer to insert the result resource.
