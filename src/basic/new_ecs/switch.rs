@@ -230,7 +230,6 @@ fn set_mask_for_merged_nodes(
     // 定义节点类型区域索引
     let ext_idx = mats_npv + mats_npq;
     let pv_nodes = &current_node_order[0..mats_npv];
-    let pq_nodes = &current_node_order[mats_npv..ext_idx];
     let ext_nodes = &current_node_order[ext_idx..];
 
     // 创建反向映射，键为合并节点，值为合并前的节点集合
@@ -250,11 +249,7 @@ fn set_mask_for_merged_nodes(
                     .iter()
                     .find(|&&node| pv_nodes.contains(&node))
             })
-            .or_else(|| {
-                original_nodes
-                    .iter()
-                    .min_by_key(|&&node| node )
-            });
+            .or_else(|| original_nodes.iter().min_by_key(|&&node| node as u64));
 
         // 设置 mask，找到的节点按优先级设为 1
         if let Some(&node) = prioritized_node {
@@ -406,7 +401,7 @@ mod tests {
 
         // 4. 获取节点映射
         let node_mapping = pf_net.world().get_resource::<NodeMapping>().unwrap();
-        let mats = pf_net.world().get_resource::<PowerFlowMat>().unwrap();
+
         let mut nodes: Vec<_> = node_mapping.keys().cloned().collect();
         nodes.sort();
 
@@ -434,10 +429,7 @@ mod tests {
                 node
             );
         }
-        let result = &mat.clone().transpose()
-            * mats.reorder.clone().transpose_as_csc().real()
-            * &input_vector;
-        println!("result: {}", result);
+
         // 7. 检查 `mat` 的合并效果，确保节点 `0` 是 `12 + 28 + 30` 的累加
         let result_vector = &mat.transpose_as_csr() * &input_vector;
         let expected_sum: f64 = merged_nodes.iter().map(|&n| n as f64).sum();
@@ -471,8 +463,29 @@ mod tests {
 
         // 4. 获取节点映射
         let node_mapping = pf_net.world().get_resource::<NodeMapping>().unwrap();
+
+        let mats = pf_net.world().get_resource::<PowerFlowMat>().unwrap();
+        println!(
+            "s1: {:?},{:?}",
+            (mat_v.nrows(), mat_v.ncols()),
+            (mats.reorder.nrows(), mats.reorder.ncols())
+        );
+
         let mut nodes: Vec<_> = node_mapping.keys().cloned().collect();
         nodes.sort();
+        let input_vector = DVector::from_iterator(nodes.len(), nodes.iter().map(|&x| x as f64));
+        let m2 = &mat_v.clone().transpose() * &input_vector;
+
+        let (npv,npq,nodes) = (mats.npv,mats.npq,mats.v_bus_init.len());
+        let reordered_v_before = &mats.reorder.real() * &input_vector;
+        let reordered_v_before =reordered_v_before.map(|x| x as u64);
+        let ext_idx = npv + npq;
+        let pv_nodes = &reordered_v_before.as_slice()[0..npv];
+        let pv_nodes = &reordered_v_before.as_slice()[npv..npq];
+        let ext_nodes = &reordered_v_before.as_slice()[ext_idx..];
+        println!("result: {} {}", m2, reordered_v_before);
+
+
     }
 
     #[test]
