@@ -1,3 +1,5 @@
+use std::clone;
+
 use bevy_ecs::{prelude::*, system::RunSystemOnce};
 use bevy_hierarchy::prelude::*;
 
@@ -8,6 +10,8 @@ mod res_display;
 use res_display::*;
 use serde::{Deserialize, Serialize};
 use tabled::{settings::Style, Table};
+
+use crate::basic::sparse::cast::Cast;
 
 use super::{elements::*, network::*};
 /// Component storing the result of SBus power flow calculation.
@@ -64,14 +68,26 @@ fn extract_res_bus(
     mut cmd: Commands,
     shunts: Query<(&Admittance, &Port2, &VBase), With<EShunt>>,
     nodes: Res<NodeLookup>,
+    node_agg: Option<Res<NodeAggRes>>,
     mat: Res<PowerFlowMat>,
     res: Res<PowerFlowResult>,
     common: Res<PFCommonData>,
 ) {
-    let cv = &mat.reorder * &res.v;
-    let mis = &cv.component_mul(&(&mat.y_bus * &cv).conjugate());
-    let mut sbus_res = -mis.clone();
-    sbus_res = &mat.reorder.transpose() * sbus_res;
+    //Step 1: restore order before split results to original bus
+    let cv = &res.v;
+    let mis = &cv.component_mul(&(&mat.y_bus * cv).conjugate());
+    let sbus_res = -mis.clone();
+    let sbus_res = &mat.reorder.transpose() * sbus_res;
+    let v = &mat.reorder.transpose() * &res.v;
+    //Step 2: apply results to original bus
+    let v = match &node_agg {
+        Some(node_agg) => &node_agg.merge_mat.cast() * &v,
+        None => v,
+    };
+    let mut sbus_res = match &node_agg {
+        Some(node_agg) => &node_agg.merge_mat.cast() * &sbus_res,
+        None =>  sbus_res,
+    };
 
     shunts.iter().for_each(|(a, b, vb)| {
         let node = b.0[0] as usize;
@@ -83,7 +99,7 @@ fn extract_res_bus(
     for (idx, entity) in nodes.0.iter() {
         cmd.entity(*entity).insert((
             SBusResult(sbus_res[*idx as usize] * common.sbase),
-            VBusResult(res.v[*idx as usize]),
+            VBusResult(v[*idx as usize]),
         ));
     }
 }
@@ -135,15 +151,22 @@ fn determine_branch(parent: &Port2, child: &Port2) -> AdmittanceType {
 #[allow(unused_assignments)]
 fn extract_res_line(
     mut cmd: Commands,
+    node_agg: Option<Res<NodeAggRes>>,
     q: Query<(Entity, &Children, &Port2), With<Line>>,
     admit: Query<(&Admittance, &VBase, &Port2), With<Parent>>,
     results: Res<PowerFlowResult>,
     common: Res<PFCommonData>,
+    mat: Res<PowerFlowMat>,
 ) {
+    let v = &mat.reorder.transpose() * &results.v;
+    let v = match node_agg {
+        Some(agg) => &agg.merge_mat.cast() * v,
+        None => v,
+    };
     q.iter().for_each(|(e, children, p)| {
         let mut data = LineResultData::default();
-        let v_from = results.v[p[0] as usize];
-        let v_to = results.v[p[1] as usize];
+        let v_from = v[p[0] as usize];
+        let v_to = v[p[1] as usize];
 
         data.vm_from_pu = v_from.modulus();
         data.va_from_degree = v_from.argument().to_degrees();

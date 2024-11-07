@@ -22,6 +22,13 @@ pub struct Switch {
     pub z_ohm: f64,
 }
 
+/// Represents a switch in the network.
+#[derive(Default, Debug, Clone, Resource)]
+pub struct NodeAggRes {
+    pub merge_mat: CscMatrix<f64>,
+    pub merge_mat_v: CscMatrix<f64>,
+}
+
 /// Represents a switch state in the network.
 #[derive(Default, Debug, Clone, Component, Deref, DerefMut)]
 pub struct SwitchState(pub bool);
@@ -297,6 +304,44 @@ fn node_aggregation_system(
 
     (pre_select_mat, pre_select_mat_for_voltages)
 }
+fn handle_node_merge(
+    In(agg_mats): In<(CscMatrix<f64>, CscMatrix<f64>)>,
+    // we can also have regular system parameters
+    node_mapping: Res<NodeMapping>,
+    pf_mats: ResMut<PowerFlowMat>,
+    mut cmd: Commands,
+) {
+    // Step 3: Run system and retrieve result matrices
+    let (mat, mat_v) = agg_mats;
+
+    let nodes = get_sorted_nodes(&node_mapping);
+    let input_vector = DVector::from_iterator(nodes.len(), nodes.iter().map(|&x| x as f64));
+    let merged_v_vector = calculate_merged_vector(&mat_v, &input_vector);
+
+    // Step 5: Extract PV, PQ, EXT nodes from the reordered structure
+    let mats = &pf_mats;
+    let (pv_nodes, pq_nodes, ext_nodes) = extract_pv_pq_ext_nodes(mats, &input_vector);
+
+    // Step 6: Filter and remap nodes, verify that only nodes 12, 28, 30 are merged
+    let (pv, pq, ext, _old_to_new) = filter_and_remap_nodes(
+        pv_nodes,
+        pq_nodes,
+        ext_nodes,
+        merged_v_vector.as_slice(),
+        mats.v_bus_init.len(),
+    );
+
+    // Step 7: Verify that the total number of nodes is now 28
+    let new_total_nodes = merged_v_vector.len();
+
+    // Step 8: Update PowerFlowMat and verify permutation matrix dimensions
+    let mut mats = pf_mats;
+    update_power_flow_matrix(&mut mats, pv, pq, ext, &mat, new_total_nodes);
+    cmd.insert_resource(NodeAggRes {
+        merge_mat: mat,
+        merge_mat_v: mat_v,
+    });
+}
 
 fn get_sorted_nodes(node_mapping: &NodeMapping) -> Vec<u64> {
     let mut nodes: Vec<_> = node_mapping.keys().cloned().collect();
@@ -560,18 +605,21 @@ mod tests {
         pf_net.world_mut().insert_resource(PPNetwork(net));
         pf_net.init_pf_net();
 
-        // 3. 运行系统并获取结果矩阵 `mat` 和 `mat_v`
+        // Step 3: Run system and retrieve result matrices
         let (mat, mat_v) = pf_net.world_mut().run_system_once(node_aggregation_system);
 
+        // Step 4: Retrieve node mapping and generate input vector
         let node_mapping = pf_net.world().get_resource::<NodeMapping>().unwrap();
         let nodes = get_sorted_nodes(node_mapping);
         let input_vector = DVector::from_iterator(nodes.len(), nodes.iter().map(|&x| x as f64));
         let merged_v_vector = calculate_merged_vector(&mat_v, &input_vector);
 
+        // Step 5: Extract PV, PQ, EXT nodes from the reordered structure
         let mats = pf_net.world().get_resource::<PowerFlowMat>().unwrap();
         let (pv_nodes, pq_nodes, ext_nodes) = extract_pv_pq_ext_nodes(mats, &input_vector);
 
-        let (pv, pq, ext, _old_to_new) = filter_and_remap_nodes(
+        // Step 6: Filter and remap nodes, verify that only nodes 12, 28, 30 are merged
+        let (pv, pq, ext, old_to_new) = filter_and_remap_nodes(
             pv_nodes,
             pq_nodes,
             ext_nodes,
@@ -579,10 +627,58 @@ mod tests {
             mats.v_bus_init.len(),
         );
 
-        let new_total_nodes = merged_v_vector.len();
+        // Check that nodes 12, 28, 30 have been merged (old_to_new contains -1 for these)
+        assert_eq!(old_to_new[12], -1, "Node 12 was not merged correctly.");
+        assert_eq!(old_to_new[28], -1, "Node 28 was not merged correctly.");
+        assert_eq!(old_to_new[30], -1, "Node 30 was not merged correctly.");
 
-        let mut mats = pf_net.world_mut().get_resource_mut::<PowerFlowMat>().unwrap();
+        // Step 7: Verify that the total number of nodes is now 28
+        let new_total_nodes = merged_v_vector.len();
+        assert_eq!(
+            new_total_nodes, 28,
+            "Total nodes after merging should be 28."
+        );
+
+        // Verify that nodes 29 and 30 are swapped in the reordered structure
+        let reordered_v_before = &mats.reorder.real() * &input_vector;
+        let reordered_v_before = reordered_v_before.map(|x| x as i64);
+        assert_eq!(
+            reordered_v_before[29], 30,
+            "Node 29 should map to position 30 after reordering."
+        );
+        assert_eq!(
+            reordered_v_before[30], 29,
+            "Node 30 should map to position 29 after reordering."
+        );
+
+        // Step 8: Update PowerFlowMat and verify permutation matrix dimensions
+        let mut mats = pf_net
+            .world_mut()
+            .get_resource_mut::<PowerFlowMat>()
+            .unwrap();
         update_power_flow_matrix(&mut mats, pv, pq, ext, &mat, new_total_nodes);
+        assert_eq!(
+            mats.reorder.nrows(),
+            new_total_nodes,
+            "Reorder matrix row count should match new total nodes."
+        );
+        assert_eq!(
+            mats.reorder.ncols(),
+            new_total_nodes,
+            "Reorder matrix column count should match new total nodes."
+        );
+
+        // Step 9: Check resulting matrices (optional, for further verification)
+        assert_eq!(
+            mats.y_bus.nrows(),
+            new_total_nodes,
+            "Y bus matrix should have dimensions matching new total nodes."
+        );
+        assert_eq!(
+            mats.v_bus_init.nrows(),
+            new_total_nodes,
+            "V bus init matrix should have dimensions matching new total nodes."
+        );
     }
 
     #[test]
@@ -601,10 +697,13 @@ mod tests {
         let mut pf_net = PowerGrid::default();
         pf_net.world_mut().insert_resource(PPNetwork(net));
         pf_net.init_pf_net();
-        let node_mapping = pf_net.world().get_resource::<NodeMapping>().unwrap();
-        let mut nodes: Vec<u64> = node_mapping.keys().map(|x| *x).collect();
-        nodes.sort();
+        let mut node_process_schedule = Schedule::default();
 
+        node_process_schedule.add_systems(node_aggregation_system.pipe(handle_node_merge));
+        node_process_schedule.run(pf_net.world_mut());
+        pf_net.run_pf();
+        pf_net.post_process();
+        pf_net.print_res_bus();
         // let p_matrix = build_aggregation_matrix(nodes.as_slice(), &node_mapping.0);
         // println!("\nAggregation Matrix P:\n{:?}", p_matrix);
     }
