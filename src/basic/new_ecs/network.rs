@@ -127,12 +127,22 @@ impl PowerFlow for PowerGrid {
 fn apply_permutation(mut mat: ResMut<PowerFlowMat>) {
     let reorder = &mat.reorder.clone().transpose_as_csc();
     let y_bus = &mat.y_bus;
-    let reordered_y_bus = reorder.transpose() * y_bus * reorder;
+    let rt = reorder.transpose();
+    let reordered_y_bus = &rt * y_bus * reorder;
+    mat.s_bus = &rt * &mat.s_bus;
+    mat.v_bus_init = &rt * &mat.v_bus_init;
+    mat.y_bus = reordered_y_bus;
+}
+#[allow(unused)]
+fn apply_inversed_permutation(mut mat: ResMut<PowerFlowMat>) {
+    let reorder = &mat.reorder.clone().transpose_as_csc();
+    let y_bus = &mat.y_bus;
+    let rt = reorder.transpose();
+    let reordered_y_bus = reorder * y_bus * &rt;
     mat.s_bus = reorder * &mat.s_bus;
     mat.v_bus_init = reorder * &mat.v_bus_init;
     mat.y_bus = reordered_y_bus;
 }
-
 /// ECS system that runs the p ower flow calculation based on the current configuration and matrices.
 ///
 /// # Parameters
@@ -163,7 +173,8 @@ fn ecs_run_pf(mut cmd: Commands, mat: Res<PowerFlowMat>, cfg: Res<PowerFlowConfi
     // Handle the results of the power flow calculation.
     match v {
         Ok((v, iterations)) => {
-            let v = mat.reorder.transpose() * v;
+            //let v = mat.reorder.transpose() * v;
+            let v = v;
             cmd.insert_resource(PowerFlowResult {
                 v,
                 iterations,
@@ -171,7 +182,8 @@ fn ecs_run_pf(mut cmd: Commands, mat: Res<PowerFlowMat>, cfg: Res<PowerFlowConfi
             });
         }
         Err((_err, v_err)) => {
-            let v = mat.reorder.transpose() * v_err;
+            // let v = mat.reorder.transpose() * v_err;
+            let v = v_err;
             cmd.insert_resource(PowerFlowResult {
                 v,
                 iterations: 0,
