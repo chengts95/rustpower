@@ -10,10 +10,9 @@ use num_traits::Zero;
 use std::collections::{HashMap, HashSet};
 
 use self::sparse::conj::RealImage;
-
 use super::{elements::*, network::PowerFlowMat, systems::create_permutation_matrix};
 
-/// Represents a switch in the network.
+/// Network switch representation.
 #[derive(Default, Debug, Clone, Component)]
 pub struct Switch {
     pub bus: i64,
@@ -22,7 +21,7 @@ pub struct Switch {
     pub z_ohm: f64,
 }
 
-/// Represents a switch in the network.
+/// Node aggregation result as a matrix resource.
 #[derive(Default, Debug, Clone, Resource)]
 pub struct NodeAggRes {
     pub merge_mat: CscMatrix<f64>,
@@ -37,19 +36,19 @@ pub struct SwitchState(pub bool);
 #[derive(Default, Debug, Clone, Component)]
 pub struct MergeNode(pub usize, pub usize);
 
-/// A union-find (disjoint set) structure for merging nodes.
+/// Union-Find structure for node merging.
 #[derive(Default, Debug, Clone)]
 pub struct NodeMerge {
     pub parent: HashMap<u64, u64>,
     pub rank: HashMap<u64, u64>,
 }
 
-/// A mapping from old nodes to new nodes after merging, stored as a resource.
+/// Mapping of original nodes to merged nodes.
 #[derive(Default, Debug, Clone, Deref, DerefMut, Resource)]
 pub struct NodeMapping(HashMap<u64, u64>);
 
 impl NodeMerge {
-    /// Creates a new union-find (disjoint set) structure for the given nodes.
+    /// Initializes Union-Find structure for specified nodes.
     pub fn new(nodes: &[u64]) -> Self {
         let mut parent = HashMap::new();
         let mut rank = HashMap::new();
@@ -60,10 +59,9 @@ impl NodeMerge {
         NodeMerge { parent, rank }
     }
 
-    /// Finds the root of the node, with path compression.
+    /// Path-compression-based root finding.
     fn find(&mut self, node: u64) -> u64 {
         let mut root = node;
-
         while self.parent[&root] != root {
             root = self.parent[&root];
         }
@@ -77,7 +75,7 @@ impl NodeMerge {
         root
     }
 
-    /// Unites two nodes by their roots.
+    /// Merges two nodes by their roots.
     pub fn union(&mut self, node1: u64, node2: u64) {
         let root1 = self.find(node1);
         let root2 = self.find(node2);
@@ -95,7 +93,7 @@ impl NodeMerge {
         }
     }
 
-    /// Generates a node mapping based on union-find results, starting with a given index.
+    /// Generates node mapping based on union-find results.
     pub fn get_node_mapping(&self, starting_idx: u64) -> HashMap<u64, u64> {
         let mut root_to_new_id = HashMap::new();
         let mut node_mapping = HashMap::new();
@@ -103,7 +101,7 @@ impl NodeMerge {
         let mut nodes: Vec<_> = self.parent.keys().collect();
         nodes.sort();
         for &node in &nodes {
-            let root = self.parent.get(&(*node as u64)).unwrap();
+            let root = self.parent[&node];
             if !root_to_new_id.contains_key(&root) {
                 root_to_new_id.insert(root, new_node_id);
                 new_node_id += 1;
@@ -114,7 +112,7 @@ impl NodeMerge {
     }
 }
 
-/// Processes the state of switches and updates network components accordingly.
+/// Processes switch state and updates components.
 #[allow(dead_code)]
 pub fn process_switch_state(
     mut cmd: Commands,
@@ -122,8 +120,8 @@ pub fn process_switch_state(
     net: Res<PPNetwork>,
     q: Query<(Entity, &Switch, &SwitchState)>,
 ) {
-    let node_idx: Vec<u64> = nodes.0.keys().map(|x| *x as u64).collect();
-    let mut union_find: Option<NodeMerge> = if q.iter().len() > 0 {
+    let node_idx: Vec<u64> = nodes.0.keys().map(|&x| x as u64).collect();
+    let mut union_find: Option<NodeMerge> = if q.iter().count() > 0 {
         Some(NodeMerge::new(&node_idx))
     } else {
         None
@@ -131,301 +129,224 @@ pub fn process_switch_state(
 
     q.iter().for_each(|(entity, switch, closed)| {
         let _z_ohm = switch.z_ohm;
-
         match switch.et {
-            SwitchType::SwitchBusLine => todo!(),
-            SwitchType::SwitchBusTransformer => todo!(),
-            SwitchType::SwitchTwoBuses => {
-                let (node1, node2) = (switch.bus, switch.element);
-                if **closed {
-                    if _z_ohm == 0.0 {
-                        union_find
-                            .as_mut()
-                            .unwrap()
-                            .union(node1 as u64, node2 as u64);
-                        // let v_base = net.bus[switch.bus as usize].vn_kv;
-                        // cmd.entity(entity).insert(AdmittanceBranch {
-                        //     y: Admittance(Complex::new(1e6, 0.0)),
-                        //     port: Port2(vector![node1, node2]),
-                        //     v_base: VBase(v_base),
-                        // });
-                    } else {
-                        let v_base = net.bus[switch.bus as usize].vn_kv;
-                        cmd.entity(entity).insert(AdmittanceBranch {
-                            y: Admittance(Complex::new(_z_ohm, 0.0)),
-                            port: Port2(vector![node1, node2]),
-                            v_base: VBase(v_base),
-                        });
-                    }
-                }
+            SwitchType::SwitchTwoBuses if **closed && _z_ohm == 0.0 => {
+                union_find
+                    .as_mut()
+                    .unwrap()
+                    .union(switch.bus as u64, switch.element as u64);
             }
-            SwitchType::SwitchBusTransformer3w | SwitchType::Unknown => {}
+            SwitchType::SwitchTwoBuses if **closed => {
+                let v_base = net.bus[switch.bus as usize].vn_kv;
+                cmd.entity(entity).insert(AdmittanceBranch {
+                    y: Admittance(Complex::new(_z_ohm, 0.0)),
+                    port: Port2(vector![switch.bus, switch.element]),
+                    v_base: VBase(v_base),
+                });
+            }
+            _ => {}
         }
     });
 
-    if union_find.is_some() {
-        cmd.insert_resource(NodeMapping(union_find.unwrap().get_node_mapping(0)));
+    if let Some(union_find) = union_find {
+        cmd.insert_resource(NodeMapping(union_find.get_node_mapping(0)));
     }
 }
 
-/// Placeholder function for future node merge or split logic.
-#[allow(dead_code)]
-pub fn node_merge_split(_cmd: Commands, _nodes: Res<NodeMapping>) {}
-#[allow(dead_code)]
-
-/// Builds an aggregation matrix based on the provided nodes and node mapping.
+/// Builds the aggregation matrix based on node mapping.
 fn build_aggregation_matrix(node_mapping: &HashMap<u64, u64>) -> CooMatrix<u64> {
     let mut nodes: Vec<_> = node_mapping.keys().collect();
     nodes.sort();
     let original_node_count = nodes.len();
     let new_node_count = node_mapping.values().collect::<HashSet<_>>().len();
 
-    // Initialize the COO matrix
     let mut mat = CooMatrix::new(original_node_count, new_node_count);
-
-    // Iterate over the nodes and apply the mapping
     for (i, &node) in nodes.iter().enumerate() {
-        // Get the mapped new node, default to the original node if not in mapping
         let new_node = node_mapping.get(&node).unwrap_or(&node);
-        // Push the value 1 to the corresponding location
         mat.push(i, *new_node as usize, 1);
     }
-
     mat
 }
-/// Builds an aggregation matrix based on the provided nodes and node mapping.
-// fn build_aggregation_matrix_masked(
-//     node_mapping: &HashMap<u64, u64>,
-//     mask: &[bool],
-// ) -> CooMatrix<u64> {
-//     let mut nodes: Vec<_> = node_mapping.keys().collect();
-//     nodes.sort();
-//     let original_node_count = nodes.len();
-//     let new_node_count = node_mapping.values().collect::<HashSet<_>>().len();
 
-//     // Initialize the COO matrix
-//     let mut mat = CooMatrix::new(original_node_count, new_node_count);
-
-//     // Iterate over the nodes and apply the mapping
-//     for (i, &node) in nodes.iter().enumerate() {
-//         // Get the mapped new node, default to the original node if not in mapping
-//         let new_node = node_mapping.get(&node).unwrap_or(&node);
-
-//         // Push the value 1 to the corresponding location
-//         mat.push(i, *new_node as usize,  mask[i] as u64);
-
-//     }
-
-//     mat
-// }
-
+/// Creates a reverse mapping from merged nodes to their original nodes.
 fn build_reverse_mapping(node_mapping: &HashMap<u64, u64>) -> HashMap<u64, Vec<u64>> {
-    let mut reverse_mapping: HashMap<u64, Vec<u64>> = HashMap::with_capacity(node_mapping.len());
-
+    let mut reverse_mapping: HashMap<u64, Vec<u64>> = HashMap::new();
     for (&original_node, &merged_node) in node_mapping {
-        reverse_mapping
-            .entry(merged_node)
-            .or_insert_with(Vec::new)
-            .push(original_node);
+        reverse_mapping.entry(merged_node).or_default().push(original_node);
     }
-
     reverse_mapping
 }
 
-// 假设 `node_mapping` 是 HashMap<u64, u64> 类型
+/// Sets mask for merged nodes based on node types.
 fn set_mask_for_merged_nodes(
     node_mapping: &HashMap<u64, u64>,
     current_node_order: &[u64],
     mats_npv: usize,
     mats_npq: usize,
 ) -> DVector<bool> {
-    // 定义节点类型区域索引
     let ext_idx = mats_npv + mats_npq;
-    let pv_nodes = &current_node_order[0..mats_npv];
-    let ext_nodes = &current_node_order[ext_idx..];
-    let pv_nodes: HashSet<_> = pv_nodes.iter().cloned().collect();
-    // 创建反向映射，键为合并节点，值为合并前的节点集合
+    let pv_nodes: HashSet<_> = current_node_order[0..mats_npv].iter().copied().collect();
+    let ext_nodes: HashSet<_> = current_node_order[ext_idx..].iter().copied().collect();
     let reverse_mapping = build_reverse_mapping(node_mapping);
-
-    // 初始化一个 mask 向量，初始值全为 0
     let mut mask = DVector::from_element(current_node_order.len(), false);
 
-    // 查找并设置合并节点的 mask 优先级
-    for (_, original_nodes) in &reverse_mapping {
-        // 查找最高优先级的节点：ext > pv > pq (按最小编号)
+    for original_nodes in reverse_mapping.values() {
         let prioritized_node = original_nodes
             .iter()
             .find(|&&node| ext_nodes.contains(&node))
-            .or_else(|| {
-                original_nodes
-                    .iter()
-                    .find(|&&node| pv_nodes.contains(&node))
-            })
-            .or_else(|| original_nodes.iter().min_by_key(|&&node| node as u64));
-
-        // 设置 mask，找到的节点按优先级设为 1
+            .or_else(|| original_nodes.iter().find(|&&node| pv_nodes.contains(&node)))
+            .or_else(|| original_nodes.iter().min());
         if let Some(&node) = prioritized_node {
             mask[node as usize] = true;
         }
     }
-
     mask
 }
 
+/// Executes the node aggregation process.
 fn node_aggregation_system(
     node_mapping: Res<NodeMapping>,
     mats: Res<PowerFlowMat>,
 ) -> (CscMatrix<f64>, CscMatrix<f64>) {
     let coo = build_aggregation_matrix(&node_mapping.0);
-    let mut nodes: Vec<_> = node_mapping.keys().map(|k| k.clone()).collect();
-
-    nodes.sort();
-
-    let current_node_order =
-        (&mats.reorder * DVector::from_vec(nodes).cast::<Complex<f64>>()).map(|x| x.re as u64);
-
-    let mask = set_mask_for_merged_nodes(
-        &node_mapping,
-        current_node_order.as_slice(),
-        mats.npv,
-        mats.npq,
-    );
-
+    let nodes: Vec<_> = node_mapping.keys().copied().collect();
+    let current_node_order = (&mats.reorder * DVector::from_vec(nodes).cast::<Complex<f64>>())
+        .map(|x| x.re as u64);
+    let mask = set_mask_for_merged_nodes(&node_mapping, current_node_order.as_slice(), mats.npv, mats.npq);
     let (pattern, values) = CscMatrix::from(&coo).into_pattern_and_values();
+
     let pre_select_mat = unsafe {
-        CscMatrix::try_from_pattern_and_values(pattern, values.iter().map(|x| *x as f64).collect())
-            .unwrap_unchecked()
+        CscMatrix::try_from_pattern_and_values(pattern, values.iter().copied().map(|x| x as f64).collect()).unwrap_unchecked()
     };
 
-    // let mut binding = csc.transpose_as_csr();
-    let pre_select_mat_for_voltages = pre_select_mat.filter(|r, _c, _v| {
-        return mask[r];
-    });
-
+    let pre_select_mat_for_voltages = pre_select_mat.filter(|r, _, _| mask[r]);
     (pre_select_mat, pre_select_mat_for_voltages)
 }
+
+/// Updates PowerFlow matrix with the new merged node mappings.
+/// 
 fn handle_node_merge(
-    In(agg_mats): In<(CscMatrix<f64>, CscMatrix<f64>)>,
-    // we can also have regular system parameters
-    node_mapping: Res<NodeMapping>,
-    pf_mats: ResMut<PowerFlowMat>,
-    mut cmd: Commands,
+In(agg_mats): In<(CscMatrix<f64>, CscMatrix<f64>)>,
+// we can also have regular system parameters
+node_mapping: Res<NodeMapping>,
+pf_mats: ResMut<PowerFlowMat>,
+mut cmd: Commands,
 ) {
-    // Step 3: Run system and retrieve result matrices
-    let (mat, mat_v) = agg_mats;
+// Step 3: Run system and retrieve result matrices
+let (mat, mat_v) = agg_mats;
 
-    let nodes = get_sorted_nodes(&node_mapping);
-    let input_vector = DVector::from_iterator(nodes.len(), nodes.iter().map(|&x| x as f64));
-    let merged_v_vector = calculate_merged_vector(&mat_v, &input_vector);
+let nodes = get_sorted_nodes(&node_mapping);
+let input_vector = DVector::from_iterator(nodes.len(), nodes.iter().map(|&x| x as f64));
+let merged_v_vector = calculate_merged_vector(&mat_v, &input_vector);
 
-    // Step 5: Extract PV, PQ, EXT nodes from the reordered structure
-    let mats = &pf_mats;
-    let (pv_nodes, pq_nodes, ext_nodes) = extract_pv_pq_ext_nodes(mats, &input_vector);
+// Step 5: Extract PV, PQ, EXT nodes from the reordered structure
+let mats = &pf_mats;
+let (pv_nodes, pq_nodes, ext_nodes) = extract_pv_pq_ext_nodes(mats, &input_vector);
 
-    // Step 6: Filter and remap nodes, verify that only nodes 12, 28, 30 are merged
-    let (pv, pq, ext, _old_to_new) = filter_and_remap_nodes(
-        pv_nodes,
-        pq_nodes,
-        ext_nodes,
-        merged_v_vector.as_slice(),
-        mats.v_bus_init.len(),
-    );
+// Step 6: Filter and remap nodes, verify that only nodes 12, 28, 30 are merged
+let (pv, pq, ext, _old_to_new) = filter_and_remap_nodes(
+    pv_nodes,
+    pq_nodes,
+    ext_nodes,
+    merged_v_vector.as_slice(),
+    mats.v_bus_init.len(),
+);
 
-    // Step 7: Verify that the total number of nodes is now 28
-    let new_total_nodes = merged_v_vector.len();
+// Step 7: Verify that the total number of nodes is now 28
+let new_total_nodes = merged_v_vector.len();
 
-    // Step 8: Update PowerFlowMat and verify permutation matrix dimensions
-    let mut mats = pf_mats;
-    update_power_flow_matrix(&mut mats, pv, pq, ext, &mat, new_total_nodes);
-    cmd.insert_resource(NodeAggRes {
-        merge_mat: mat,
-        merge_mat_v: mat_v,
-    });
+// Step 8: Update PowerFlowMat and verify permutation matrix dimensions
+let mut mats = pf_mats;
+update_power_flow_matrix(&mut mats, pv, pq, ext, &mat,  &mat_v,new_total_nodes);
+cmd.insert_resource(NodeAggRes {
+    merge_mat: mat,
+    merge_mat_v: mat_v,
+});
 }
 
 fn get_sorted_nodes(node_mapping: &NodeMapping) -> Vec<u64> {
-    let mut nodes: Vec<_> = node_mapping.keys().cloned().collect();
-    nodes.sort_unstable();
-    nodes
+let mut nodes: Vec<_> = node_mapping.keys().cloned().collect();
+nodes.sort_unstable();
+nodes
 }
 
 fn calculate_merged_vector(mat_v: &CscMatrix<f64>, input_vector: &DVector<f64>) -> DVector<i64> {
-    (&mat_v.clone().transpose() * input_vector).map(|x| x as i64)
+(&mat_v.clone().transpose() * input_vector).map(|x| x as i64)
 }
 
 fn extract_pv_pq_ext_nodes(
-    mats: &PowerFlowMat,
-    input_vector: &DVector<f64>,
+mats: &PowerFlowMat,
+input_vector: &DVector<f64>,
 ) -> (Vec<i64>, Vec<i64>, Vec<i64>) {
-    let reordered_v_before = &mats.reorder.real() * input_vector;
-    let reordered_v_before = reordered_v_before.map(|x| x as i64);
+let reordered_v_before = &mats.reorder.real() * input_vector;
+let reordered_v_before = reordered_v_before.map(|x| x as i64);
 
-    let (npv, npq, total_nodes) = (mats.npv, mats.npq, mats.v_bus_init.len());
-    let ext_idx = npv + npq;
+let (npv, npq, total_nodes) = (mats.npv, mats.npq, mats.v_bus_init.len());
+let ext_idx = npv + npq;
 
-    let pv_nodes = reordered_v_before.as_slice()[0..npv].to_vec();
-    let pq_nodes = reordered_v_before.as_slice()[npv..npq].to_vec();
-    let ext_nodes = reordered_v_before.as_slice()[ext_idx..].to_vec();
+let pv_nodes = reordered_v_before.as_slice()[0..npv].to_vec();
+let pq_nodes = reordered_v_before.as_slice()[npv..npq].to_vec();
+let ext_nodes = reordered_v_before.as_slice()[ext_idx..].to_vec();
 
-    (pv_nodes, pq_nodes, ext_nodes)
+(pv_nodes, pq_nodes, ext_nodes)
 }
 
 fn filter_and_remap_nodes(
-    pv_nodes: Vec<i64>,
-    pq_nodes: Vec<i64>,
-    ext_nodes: Vec<i64>,
-    merged_v_vector: &[i64],
-    total_nodes: usize,
+pv_nodes: Vec<i64>,
+pq_nodes: Vec<i64>,
+ext_nodes: Vec<i64>,
+merged_v_vector: &[i64],
+total_nodes: usize,
 ) -> (Vec<i64>, Vec<i64>, Vec<i64>, Vec<i64>) {
-    let merged_v_set: HashSet<_> = merged_v_vector.iter().cloned().collect();
-    let pv_nodes_set: HashSet<_> = pv_nodes.iter().cloned().collect();
-    let pq_nodes_set: HashSet<_> = pq_nodes.iter().cloned().collect();
-    let ext_nodes_set: HashSet<_> = ext_nodes.iter().cloned().collect();
+let merged_v_set: HashSet<_> = merged_v_vector.iter().cloned().collect();
+let pv_nodes_set: HashSet<_> = pv_nodes.iter().cloned().collect();
+let pq_nodes_set: HashSet<_> = pq_nodes.iter().cloned().collect();
+let ext_nodes_set: HashSet<_> = ext_nodes.iter().cloned().collect();
 
-    let pv = pv_nodes_set
-        .intersection(&merged_v_set)
-        .cloned()
-        .collect::<Vec<_>>();
-    let pq = pq_nodes_set
-        .intersection(&merged_v_set)
-        .cloned()
-        .collect::<Vec<_>>();
-    let ext = ext_nodes_set
-        .intersection(&merged_v_set)
-        .cloned()
-        .collect::<Vec<_>>();
+let pv = pv_nodes_set
+    .intersection(&merged_v_set)
+    .cloned()
+    .collect::<Vec<_>>();
+let pq = pq_nodes_set
+    .intersection(&merged_v_set)
+    .cloned()
+    .collect::<Vec<_>>();
+let ext = ext_nodes_set
+    .intersection(&merged_v_set)
+    .cloned()
+    .collect::<Vec<_>>();
 
-    if ext.is_empty() {
-        panic!("cannot find ext grid after merge!");
-    }
-
-    let mut pv = pv.iter().cloned().collect::<Vec<_>>();
-    let mut pq = pq.iter().cloned().collect::<Vec<_>>();
-    let mut ext = ext.iter().cloned().collect::<Vec<_>>();
-    pv.sort_unstable();
-    pq.sort_unstable();
-    ext.sort_unstable();
-
-    // Remap nodes to new indices
-    let mut old_to_new = vec![-1; total_nodes];
-    for (new_idx, &old_idx) in merged_v_vector.iter().enumerate() {
-        old_to_new[old_idx as usize] = new_idx as i64;
-    }
-
-    pv.iter_mut()
-        .chain(pq.iter_mut())
-        .chain(ext.iter_mut())
-        .for_each(|x| *x = old_to_new[*x as usize]);
-
-    (pv, pq, ext, old_to_new)
+if ext.is_empty() {
+    panic!("cannot find ext grid after merge!");
 }
 
+let mut pv = pv.iter().cloned().collect::<Vec<_>>();
+let mut pq = pq.iter().cloned().collect::<Vec<_>>();
+let mut ext = ext.iter().cloned().collect::<Vec<_>>();
+pv.sort_unstable();
+pq.sort_unstable();
+ext.sort_unstable();
+
+// Remap nodes to new indices
+let mut old_to_new = vec![-1; total_nodes];
+for (new_idx, &old_idx) in merged_v_vector.iter().enumerate() {
+    old_to_new[old_idx as usize] = new_idx as i64;
+}
+
+pv.iter_mut()
+    .chain(pq.iter_mut())
+    .chain(ext.iter_mut())
+    .for_each(|x| *x = old_to_new[*x as usize]);
+
+(pv, pq, ext, old_to_new)
+}
 fn update_power_flow_matrix(
     mats: &mut PowerFlowMat,
     pv: Vec<i64>,
     pq: Vec<i64>,
     ext: Vec<i64>,
     mat: &CscMatrix<f64>,
+    mat_v: &CscMatrix<f64>,
     new_total_nodes: usize,
 ) {
     let permutation_matrix = create_permutation_matrix(&pv, &pq, &ext, new_total_nodes);
@@ -434,9 +355,8 @@ fn update_power_flow_matrix(
     mats.npv = pv.len();
     mats.y_bus = mat.transpose().cast() * &mats.y_bus * &mat.cast();
     mats.s_bus = mat.transpose().cast() * &mats.s_bus;
-    mats.v_bus_init = mat.transpose().cast() * &mats.v_bus_init;
+    mats.v_bus_init = mat_v.transpose().cast() * &mats.v_bus_init;
 }
-
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
@@ -656,7 +576,7 @@ mod tests {
             .world_mut()
             .get_resource_mut::<PowerFlowMat>()
             .unwrap();
-        update_power_flow_matrix(&mut mats, pv, pq, ext, &mat, new_total_nodes);
+        update_power_flow_matrix(&mut mats, pv, pq, ext, &mat, &mat_v, new_total_nodes);
         assert_eq!(
             mats.reorder.nrows(),
             new_total_nodes,
@@ -701,10 +621,11 @@ mod tests {
 
         node_process_schedule.add_systems(node_aggregation_system.pipe(handle_node_merge));
         node_process_schedule.run(pf_net.world_mut());
+        let mat = pf_net.world().resource::<PowerFlowMat>();
+        println!("{:?}", mat.v_bus_init);
         pf_net.run_pf();
         pf_net.post_process();
         pf_net.print_res_bus();
-        // let p_matrix = build_aggregation_matrix(nodes.as_slice(), &node_mapping.0);
-        // println!("\nAggregation Matrix P:\n{:?}", p_matrix);
+
     }
 }
