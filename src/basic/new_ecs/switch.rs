@@ -1,12 +1,17 @@
-use crate::{basic::sparse::cast::Cast, io::pandapower::SwitchType};
+use crate::{
+    basic::sparse::{self, cast::Cast},
+    io::pandapower::SwitchType,
+};
 use bevy_ecs::prelude::*;
 use derive_more::{Deref, DerefMut};
 use nalgebra::{vector, Complex, DMatrix, DMatrixView, DVector};
-use nalgebra_sparse::{CooMatrix, CscMatrix};
+use nalgebra_sparse::{CooMatrix, CscMatrix, CsrMatrix};
 use num_traits::Zero;
 use std::collections::{HashMap, HashSet};
 
-use super::{elements::*, network::PowerFlowMat};
+use self::sparse::conj::RealImage;
+
+use super::{elements::*, network::PowerFlowMat, systems::create_permutation_matrix};
 
 /// Represents a switch in the network.
 #[derive(Default, Debug, Clone, Component)]
@@ -231,7 +236,7 @@ fn set_mask_for_merged_nodes(
     let ext_idx = mats_npv + mats_npq;
     let pv_nodes = &current_node_order[0..mats_npv];
     let ext_nodes = &current_node_order[ext_idx..];
-
+    let pv_nodes: HashSet<_> = pv_nodes.iter().cloned().collect();
     // 创建反向映射，键为合并节点，值为合并前的节点集合
     let reverse_mapping = build_reverse_mapping(node_mapping);
 
@@ -293,18 +298,115 @@ fn node_aggregation_system(
     (pre_select_mat, pre_select_mat_for_voltages)
 }
 
+fn get_sorted_nodes(node_mapping: &NodeMapping) -> Vec<u64> {
+    let mut nodes: Vec<_> = node_mapping.keys().cloned().collect();
+    nodes.sort_unstable();
+    nodes
+}
+
+fn calculate_merged_vector(mat_v: &CscMatrix<f64>, input_vector: &DVector<f64>) -> DVector<i64> {
+    (&mat_v.clone().transpose() * input_vector).map(|x| x as i64)
+}
+
+fn extract_pv_pq_ext_nodes(
+    mats: &PowerFlowMat,
+    input_vector: &DVector<f64>,
+) -> (Vec<i64>, Vec<i64>, Vec<i64>) {
+    let reordered_v_before = &mats.reorder.real() * input_vector;
+    let reordered_v_before = reordered_v_before.map(|x| x as i64);
+
+    let (npv, npq, total_nodes) = (mats.npv, mats.npq, mats.v_bus_init.len());
+    let ext_idx = npv + npq;
+
+    let pv_nodes = reordered_v_before.as_slice()[0..npv].to_vec();
+    let pq_nodes = reordered_v_before.as_slice()[npv..npq].to_vec();
+    let ext_nodes = reordered_v_before.as_slice()[ext_idx..].to_vec();
+
+    (pv_nodes, pq_nodes, ext_nodes)
+}
+
+fn filter_and_remap_nodes(
+    pv_nodes: Vec<i64>,
+    pq_nodes: Vec<i64>,
+    ext_nodes: Vec<i64>,
+    merged_v_vector: &[i64],
+    total_nodes: usize,
+) -> (Vec<i64>, Vec<i64>, Vec<i64>, Vec<i64>) {
+    let merged_v_set: HashSet<_> = merged_v_vector.iter().cloned().collect();
+    let pv_nodes_set: HashSet<_> = pv_nodes.iter().cloned().collect();
+    let pq_nodes_set: HashSet<_> = pq_nodes.iter().cloned().collect();
+    let ext_nodes_set: HashSet<_> = ext_nodes.iter().cloned().collect();
+
+    let pv = pv_nodes_set
+        .intersection(&merged_v_set)
+        .cloned()
+        .collect::<Vec<_>>();
+    let pq = pq_nodes_set
+        .intersection(&merged_v_set)
+        .cloned()
+        .collect::<Vec<_>>();
+    let ext = ext_nodes_set
+        .intersection(&merged_v_set)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if ext.is_empty() {
+        panic!("cannot find ext grid after merge!");
+    }
+
+    let mut pv = pv.iter().cloned().collect::<Vec<_>>();
+    let mut pq = pq.iter().cloned().collect::<Vec<_>>();
+    let mut ext = ext.iter().cloned().collect::<Vec<_>>();
+    pv.sort_unstable();
+    pq.sort_unstable();
+    ext.sort_unstable();
+
+    // Remap nodes to new indices
+    let mut old_to_new = vec![-1; total_nodes];
+    for (new_idx, &old_idx) in merged_v_vector.iter().enumerate() {
+        old_to_new[old_idx as usize] = new_idx as i64;
+    }
+
+    pv.iter_mut()
+        .chain(pq.iter_mut())
+        .chain(ext.iter_mut())
+        .for_each(|x| *x = old_to_new[*x as usize]);
+
+    (pv, pq, ext, old_to_new)
+}
+
+fn update_power_flow_matrix(
+    mats: &mut PowerFlowMat,
+    pv: Vec<i64>,
+    pq: Vec<i64>,
+    ext: Vec<i64>,
+    mat: &CscMatrix<f64>,
+    new_total_nodes: usize,
+) {
+    let permutation_matrix = create_permutation_matrix(&pv, &pq, &ext, new_total_nodes);
+    mats.reorder = sparse::cast::Cast::<_>::cast(&CsrMatrix::from(&permutation_matrix));
+    mats.npq = pq.len();
+    mats.npv = pv.len();
+    mats.y_bus = mat.transpose().cast() * &mats.y_bus * &mat.cast();
+    mats.s_bus = mat.transpose().cast() * &mats.s_bus;
+    mats.v_bus_init = mat.transpose().cast() * &mats.v_bus_init;
+}
+
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
     use std::{env, fs};
 
     use bevy_ecs::system::RunSystemOnce;
+    use nalgebra_sparse::CsrMatrix;
     use serde_json::{Map, Value};
 
     use crate::{
         basic::{
-            new_ecs::{network::*, post_processing::PostProcessing},
-            sparse::conj::RealImage,
+            new_ecs::{
+                network::*, post_processing::PostProcessing, systems::create_permutation_matrix,
+            },
+            sparse::{self, conj::RealImage},
         },
         io::pandapower::{load_pandapower_json, load_pandapower_json_obj},
     };
@@ -461,31 +563,26 @@ mod tests {
         // 3. 运行系统并获取结果矩阵 `mat` 和 `mat_v`
         let (mat, mat_v) = pf_net.world_mut().run_system_once(node_aggregation_system);
 
-        // 4. 获取节点映射
         let node_mapping = pf_net.world().get_resource::<NodeMapping>().unwrap();
+        let nodes = get_sorted_nodes(node_mapping);
+        let input_vector = DVector::from_iterator(nodes.len(), nodes.iter().map(|&x| x as f64));
+        let merged_v_vector = calculate_merged_vector(&mat_v, &input_vector);
 
         let mats = pf_net.world().get_resource::<PowerFlowMat>().unwrap();
-        println!(
-            "s1: {:?},{:?}",
-            (mat_v.nrows(), mat_v.ncols()),
-            (mats.reorder.nrows(), mats.reorder.ncols())
+        let (pv_nodes, pq_nodes, ext_nodes) = extract_pv_pq_ext_nodes(mats, &input_vector);
+
+        let (pv, pq, ext, _old_to_new) = filter_and_remap_nodes(
+            pv_nodes,
+            pq_nodes,
+            ext_nodes,
+            merged_v_vector.as_slice(),
+            mats.v_bus_init.len(),
         );
 
-        let mut nodes: Vec<_> = node_mapping.keys().cloned().collect();
-        nodes.sort();
-        let input_vector = DVector::from_iterator(nodes.len(), nodes.iter().map(|&x| x as f64));
-        let m2 = &mat_v.clone().transpose() * &input_vector;
+        let new_total_nodes = merged_v_vector.len();
 
-        let (npv,npq,nodes) = (mats.npv,mats.npq,mats.v_bus_init.len());
-        let reordered_v_before = &mats.reorder.real() * &input_vector;
-        let reordered_v_before =reordered_v_before.map(|x| x as u64);
-        let ext_idx = npv + npq;
-        let pv_nodes = &reordered_v_before.as_slice()[0..npv];
-        let pv_nodes = &reordered_v_before.as_slice()[npv..npq];
-        let ext_nodes = &reordered_v_before.as_slice()[ext_idx..];
-        println!("result: {} {}", m2, reordered_v_before);
-
-
+        let mut mats = pf_net.world_mut().get_resource_mut::<PowerFlowMat>().unwrap();
+        update_power_flow_matrix(&mut mats, pv, pq, ext, &mat, new_total_nodes);
     }
 
     #[test]
