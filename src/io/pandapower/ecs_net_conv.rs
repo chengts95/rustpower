@@ -1,3 +1,6 @@
+use bevy_app::App;
+use bevy_app::Plugin;
+use bevy_app::Startup;
 use bevy_ecs::schedule;
 
 use network::GND;
@@ -294,6 +297,31 @@ pub fn init_pf(world: &mut World) {
     schedule.run(world);
 }
 
+pub struct PandaPowerStartupPlugin;
+
+#[derive(Debug, SystemSet, Hash, PartialEq, Eq, Clone, Copy)]
+pub struct PandaPowerInit;
+
+impl Plugin for PandaPowerStartupPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            Startup,
+            (
+                (inital_setup, init_node_lookup),
+                shunt_to_admit,
+                line_to_admit,
+                trafo_to_admit,
+                processing_pq_elems,
+                processing_pv_nodes,
+                extgrid_to_extnode,
+                (process_switch, process_switch_state).chain(),
+            )
+                .chain()
+                .in_set(PandaPowerInit),
+        );
+        app.configure_sets(Startup, PandaPowerInit.run_if(resource_exists::<PPNetwork>));
+    }
+}
 /// Initializes the node lookup by mapping bus indices to ECS entities.
 fn init_node_lookup(mut cmd: Commands, value: Res<PPNetwork>) {
     let mut d = NodeLookup::default();
