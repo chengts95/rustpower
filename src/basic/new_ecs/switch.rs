@@ -12,40 +12,40 @@ use self::sparse::conj::RealImage;
 use super::{elements::*, network::PowerFlowMat, systems::create_permutation_matrix};
 
 /// Represents a network switch in the power flow network.
-/// 
+///
 /// A switch connects two buses or a bus and an element, and can have a given impedance (z_ohm).
 /// The switch state is defined by its type (`SwitchType`), the connected buses, and its impedance.
 #[derive(Default, Debug, Clone, Component)]
 pub struct Switch {
-    pub bus: i64,      // Identifier for the bus connected by the switch.
-    pub element: i64,  // Identifier for the element connected by the switch.
+    pub bus: i64,       // Identifier for the bus connected by the switch.
+    pub element: i64,   // Identifier for the element connected by the switch.
     pub et: SwitchType, // Switch type that defines its behavior.
     pub z_ohm: f64,     // Impedance in ohms for the switch connection.
 }
 
 /// Represents the result of node aggregation as a resource in matrix form.
-/// 
+///
 /// This structure holds the merged node matrices (`merge_mat` and `merge_mat_v`) after performing the node aggregation process.
 #[derive(Default, Debug, Clone, Resource)]
 pub struct NodeAggRes {
-    pub merge_mat: CscMatrix<f64>,    // Aggregation matrix for the merged nodes.
-    pub merge_mat_v: CscMatrix<f64>,  // Aggregation matrix for voltage values.
+    pub merge_mat: CscMatrix<f64>, // Aggregation matrix for the merged nodes.
+    pub merge_mat_v: CscMatrix<f64>, // Aggregation matrix for voltage values.
 }
 
 /// Represents the state of a switch (either open or closed).
-/// 
+///
 /// The state (`true` for closed and `false` for open) is wrapped in the `SwitchState` component.
 #[derive(Default, Debug, Clone, Component, Deref, DerefMut)]
 pub struct SwitchState(pub bool);
 
 /// Represents the merging of two nodes in the power network.
-/// 
+///
 /// Each `MergeNode` instance represents a pair of nodes to be merged.
 #[derive(Default, Debug, Clone, Component)]
 pub struct MergeNode(pub usize, pub usize);
 
 /// Implements a Union-Find structure for efficiently merging nodes in the network.
-/// 
+///
 /// This structure is used to manage merging of nodes and to keep track of their relationships.
 #[derive(Default, Debug, Clone)]
 pub struct NodeMerge {
@@ -59,9 +59,9 @@ pub struct NodeMapping(HashMap<u64, u64>);
 
 impl NodeMerge {
     /// Initializes the Union-Find structure for the given nodes.
-    /// 
+    ///
     /// Each node starts as its own parent and has a rank of 0.
-    /// 
+    ///
     /// # Arguments
     /// * `nodes` - A list of nodes to initialize in the union-find structure.
     pub fn new(nodes: &[u64]) -> Self {
@@ -75,10 +75,10 @@ impl NodeMerge {
     }
 
     /// Finds the root of a node using path compression for efficiency.
-    /// 
+    ///
     /// # Arguments
     /// * `node` - The node whose root is to be found.
-    /// 
+    ///
     /// # Returns
     /// * The root of the specified node.
     fn find(&mut self, node: u64) -> u64 {
@@ -97,7 +97,7 @@ impl NodeMerge {
     }
 
     /// Merges two nodes by their roots based on rank.
-    /// 
+    ///
     /// # Arguments
     /// * `node1` - The first node to merge.
     /// * `node2` - The second node to merge.
@@ -119,10 +119,10 @@ impl NodeMerge {
     }
 
     /// Generates a mapping of original nodes to their merged nodes.
-    /// 
+    ///
     /// # Arguments
     /// * `starting_idx` - The starting index for assigning new merged node IDs.
-    /// 
+    ///
     /// # Returns
     /// * A hashmap mapping original nodes to their merged counterparts.
     pub fn get_node_mapping(&self, starting_idx: u64) -> HashMap<u64, u64> {
@@ -144,7 +144,7 @@ impl NodeMerge {
 }
 
 /// Processes the state of switches and updates network components accordingly.
-/// 
+///
 /// This function performs node merging or adds admittance branches based on the state of switches.
 #[allow(dead_code)]
 pub fn process_switch_state(
@@ -168,7 +168,6 @@ pub fn process_switch_state(
                     .as_mut()
                     .unwrap()
                     .union(switch.bus as u64, switch.element as u64);
-
             }
             SwitchType::SwitchTwoBuses if **closed => {
                 let v_base = net.bus[switch.bus as usize].vn_kv;
@@ -188,34 +187,25 @@ pub fn process_switch_state(
 }
 
 /// Processes the state of switches and updates network components accordingly.
-/// 
+///
 /// This function adds admittance branches based on the state of switches, no ideal switch.
 #[allow(dead_code)]
 pub fn process_switch_state_admit(
     mut cmd: Commands,
-    nodes: Res<NodeLookup>,
     net: Res<PPNetwork>,
     q: Query<(Entity, &Switch, &SwitchState)>,
 ) {
-    let node_idx: Vec<u64> = nodes.0.keys().map(|&x| x as u64).collect();
-    let mut union_find: Option<NodeMerge> = if q.iter().count() > 0 {
-        Some(NodeMerge::new(&node_idx))
-    } else {
-        None
-    };
-
     q.iter().for_each(|(entity, switch, closed)| {
         let _z_ohm = switch.z_ohm;
         match switch.et {
             SwitchType::SwitchTwoBuses if **closed && _z_ohm == 0.0 => {
                 let (node1, node2) = (switch.bus, switch.element);
-                    let v_base = net.bus[switch.bus as usize].vn_kv;
-                    cmd.entity(entity).insert(AdmittanceBranch {
-                        y: Admittance(Complex::new(1e6, 0.0)),
-                        port: Port2(vector![node1, node2]),
-                        v_base: VBase(v_base),
-                    });
-
+                let v_base = net.bus[switch.bus as usize].vn_kv;
+                cmd.entity(entity).insert(AdmittanceBranch {
+                    y: Admittance(Complex::new(1e6, 0.0)),
+                    port: Port2(vector![node1, node2]),
+                    v_base: VBase(v_base),
+                });
             }
             SwitchType::SwitchTwoBuses if **closed => {
                 let v_base = net.bus[switch.bus as usize].vn_kv;
@@ -228,18 +218,13 @@ pub fn process_switch_state_admit(
             _ => {}
         }
     });
-
-    if let Some(union_find) = union_find {
-        cmd.insert_resource(NodeMapping(union_find.get_node_mapping(0)));
-    }
 }
 
-
 /// Builds an aggregation matrix based on the provided node mapping.
-/// 
+///
 /// # Arguments
 /// * `node_mapping` - A mapping from original nodes to their merged counterparts.
-/// 
+///
 /// # Returns
 /// * A COO matrix representing the node aggregation.
 fn build_aggregation_matrix(node_mapping: &HashMap<u64, u64>) -> CooMatrix<u64> {
@@ -257,10 +242,10 @@ fn build_aggregation_matrix(node_mapping: &HashMap<u64, u64>) -> CooMatrix<u64> 
 }
 
 /// Creates a reverse mapping from merged nodes to their original nodes.
-/// 
+///
 /// # Arguments
 /// * `node_mapping` - A mapping from original nodes to their merged counterparts.
-/// 
+///
 /// # Returns
 /// * A hashmap that maps merged nodes back to their original nodes.
 fn build_reverse_mapping(node_mapping: &HashMap<u64, u64>) -> HashMap<u64, Vec<u64>> {
@@ -275,13 +260,13 @@ fn build_reverse_mapping(node_mapping: &HashMap<u64, u64>) -> HashMap<u64, Vec<u
 }
 
 /// Sets a mask for merged nodes based on node types (PV, PQ, EXT).
-/// 
+///
 /// # Arguments
 /// * `node_mapping` - A mapping from original nodes to their merged counterparts.
 /// * `current_node_order` - A slice representing the current order of nodes.
 /// * `mats_npv` - Number of PV nodes.
 /// * `mats_npq` - Number of PQ nodes.
-/// 
+///
 /// # Returns
 /// * A vector representing the mask for merged nodes.
 fn set_mask_for_merged_nodes(
@@ -314,19 +299,20 @@ fn set_mask_for_merged_nodes(
 }
 
 /// Executes the node aggregation process and returns the aggregation matrices.
-/// 
+///
 /// # Arguments
 /// * `node_mapping` - Resource containing the mapping of nodes.
 /// * `mats` - Power flow matrix resource.
-/// 
+///
 /// # Returns
 /// * A tuple containing two CSC matrices, one for aggregation and one for voltage values.
-fn node_aggregation_system(
+pub fn node_aggregation_system(
     node_mapping: Res<NodeMapping>,
     mats: Res<PowerFlowMat>,
 ) -> (CscMatrix<f64>, CscMatrix<f64>) {
     let coo = build_aggregation_matrix(&node_mapping.0);
-    let nodes: Vec<_> = node_mapping.keys().copied().collect();
+    let mut nodes: Vec<_> = node_mapping.keys().copied().collect();
+    nodes.sort_unstable();
     let current_node_order =
         (&mats.reorder * DVector::from_vec(nodes).cast::<Complex<f64>>()).map(|x| x.re as u64);
     let mask = set_mask_for_merged_nodes(
@@ -335,6 +321,7 @@ fn node_aggregation_system(
         mats.npv,
         mats.npq,
     );
+ 
     let (pattern, values) = CscMatrix::from(&coo).into_pattern_and_values();
 
     let pre_select_mat = unsafe {
@@ -350,13 +337,13 @@ fn node_aggregation_system(
 }
 
 /// Updates the power flow matrix with the new merged node mappings.
-/// 
+///
 /// # Arguments
 /// * `agg_mats` - Input aggregation matrices.
 /// * `node_mapping` - Node mapping resource.
 /// * `pf_mats` - Power flow matrix resource to be updated.
 /// * `cmd` - Commands to interact with the ECS.
-fn handle_node_merge(
+pub fn handle_node_merge(
     In(agg_mats): In<(CscMatrix<f64>, CscMatrix<f64>)>,
     node_mapping: Res<NodeMapping>,
     pf_mats: ResMut<PowerFlowMat>,
@@ -389,10 +376,10 @@ fn handle_node_merge(
 }
 
 /// Sorts the nodes based on their keys from the `NodeMapping`.
-/// 
+///
 /// # Arguments
 /// * `node_mapping` - The node mapping to be sorted.
-/// 
+///
 /// # Returns
 /// * A sorted vector of node keys.
 fn get_sorted_nodes(node_mapping: &NodeMapping) -> Vec<u64> {
@@ -402,11 +389,11 @@ fn get_sorted_nodes(node_mapping: &NodeMapping) -> Vec<u64> {
 }
 
 /// Calculates the merged vector based on the given aggregation matrix and input vector.
-/// 
+///
 /// # Arguments
 /// * `mat_v` - The aggregation matrix for voltages.
 /// * `input_vector` - The input vector representing nodes.
-/// 
+///
 /// # Returns
 /// * A vector containing the merged node indices.
 fn calculate_merged_vector(mat_v: &CscMatrix<f64>, input_vector: &DVector<f64>) -> DVector<i64> {
@@ -414,11 +401,11 @@ fn calculate_merged_vector(mat_v: &CscMatrix<f64>, input_vector: &DVector<f64>) 
 }
 
 /// Extracts PV, PQ, and EXT nodes from the reordered structure.
-/// 
+///
 /// # Arguments
 /// * `mats` - Power flow matrix resource.
 /// * `input_vector` - The vector representing the current node structure.
-/// 
+///
 /// # Returns
 /// * A tuple containing PV nodes, PQ nodes, and EXT nodes as vectors.
 fn extract_pv_pq_ext_nodes(
@@ -439,14 +426,14 @@ fn extract_pv_pq_ext_nodes(
 }
 
 /// Filters and remaps the nodes based on the given merged vector and total node count.
-/// 
+///
 /// # Arguments
 /// * `pv_nodes` - PV nodes vector.
 /// * `pq_nodes` - PQ nodes vector.
 /// * `ext_nodes` - EXT nodes vector.
 /// * `merged_v_vector` - The vector containing merged node indices.
 /// * `total_nodes` - The total number of nodes before merging.
-/// 
+///
 /// # Returns
 /// * A tuple containing the filtered PV, PQ, EXT nodes, and the mapping from old to new indices.
 fn filter_and_remap_nodes(
@@ -499,7 +486,7 @@ fn filter_and_remap_nodes(
 }
 
 /// Updates the power flow matrix based on the new node structure after aggregation.
-/// 
+///
 /// # Arguments
 /// * `mats` - Power flow matrix resource to be updated.
 /// * `pv` - PV nodes vector.
