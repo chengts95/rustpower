@@ -124,7 +124,7 @@ impl PowerFlow for PowerGrid {
     }
 }
 
-fn apply_permutation(mut mat: ResMut<PowerFlowMat>) {
+pub fn apply_permutation(mut mat: ResMut<PowerFlowMat>) {
     let reorder = &mat.reorder.clone().transpose_as_csc();
     let y_bus = &mat.y_bus;
     let rt = reorder.transpose();
@@ -149,7 +149,7 @@ fn apply_inversed_permutation(mut mat: ResMut<PowerFlowMat>) {
 /// - `cmd`: Command buffer to insert the result resource.
 /// - `mat`: Power flow matrices resource.
 /// - `cfg`: Power flow configuration resource.
-fn ecs_run_pf(mut cmd: Commands, mat: Res<PowerFlowMat>, cfg: Res<PowerFlowConfig>) {
+pub fn ecs_run_pf(mut cmd: Commands, mat: Res<PowerFlowMat>, cfg: Res<PowerFlowConfig>) {
     let v_init = &mat.v_bus_init;
     let max_it = cfg.max_it;
     let tol = cfg.tol;

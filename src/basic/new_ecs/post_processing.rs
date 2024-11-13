@@ -1,5 +1,4 @@
-use std::clone;
-
+use bevy_app::App;
 use bevy_ecs::{prelude::*, system::RunSystemOnce};
 use bevy_hierarchy::prelude::*;
 
@@ -86,7 +85,7 @@ fn extract_res_bus(
     };
     let mut sbus_res = match &node_agg {
         Some(node_agg) => &node_agg.merge_mat.cast() * &sbus_res,
-        None =>  sbus_res,
+        None => sbus_res,
     };
 
     shunts.iter().for_each(|(a, b, vb)| {
@@ -254,6 +253,22 @@ impl PostProcessing for PowerGrid {
         self.world_mut().run_system_once(extract_res_line);
     }
 }
+
+impl PostProcessing for App {
+    fn print_res_bus(&mut self) {
+        self.world_mut().run_system_once(print_res_bus);
+    }
+
+    fn print_res_line(&mut self) {
+        self.world_mut().run_system_once(print_res_line);
+    }
+
+    fn post_process(&mut self) {
+        self.world_mut().run_system_once(extract_res_bus);
+        self.world_mut().run_system_once(extract_res_line);
+    }
+}
+
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
