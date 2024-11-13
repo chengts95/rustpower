@@ -132,7 +132,6 @@ where
     }
 }
 
-
 impl<T: SimdRealField> RealImage for CsrMatrix<Complex<T>>
 where
     Complex<T>: SimdComplexField,
@@ -196,7 +195,6 @@ where
         (real_mat, imag_mat)
     }
 }
-
 
 // 测试模块
 #[cfg(test)]

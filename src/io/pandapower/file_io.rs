@@ -470,7 +470,6 @@ pub fn load_pandapower_json(file_path: &str) -> Network {
 }
 
 pub fn load_pandapower_json_obj(json: &Map<String, Value>) -> Network {
-
     let object: &Map<String, Value> = json.get("_object").and_then(|v| v.as_object()).unwrap();
 
     let mut net = Network::default();

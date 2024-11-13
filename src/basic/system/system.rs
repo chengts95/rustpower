@@ -19,7 +19,7 @@ use crate::basic::solver::KLUSolver;
 pub const GND: i32 = -1;
 
 /// Represents a branch with admittance and port information.
-#[derive(Debug, Default,Clone, Component)]
+#[derive(Debug, Default, Clone, Component)]
 pub struct AdmittanceBranch {
     /// The admittance value of the branch.
     pub y: admittance::Admittance,
