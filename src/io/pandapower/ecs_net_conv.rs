@@ -253,7 +253,7 @@ fn extgrid_to_extnode(mut cmd: Commands, net: Res<PPNetwork>) {
 }
 
 /// Processes the switches in the network and spawns them into the ECS.
-fn process_switch(mut cmd: Commands, net: Res<PPNetwork>) {
+pub fn process_switch(mut cmd: Commands, net: Res<PPNetwork>) {
     let switch = net.switch.as_ref();
     if let Some(switch) = switch {
         switch.iter().enumerate().for_each(|(idx, x)| {
@@ -290,7 +290,7 @@ pub fn init_pf(world: &mut World) {
             processing_pq_elems,
             processing_pv_nodes,
             extgrid_to_extnode,
-            (process_switch, process_switch_state).chain(),
+            process_switch,
         )
             .chain(),
     );

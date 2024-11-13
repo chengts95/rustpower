@@ -8,7 +8,7 @@ use num_complex::Complex64;
 
 use crate::{
     basic::{self, newton_pf, solver::RSparseSolver, system::PFNetwork},
-    io::pandapower::ecs_net_conv::init_pf,
+    io::pandapower::ecs_net_conv::*,
 };
 
 use super::{elements::*, systems::init_states};
@@ -108,7 +108,9 @@ impl PowerFlow for PowerGrid {
         schedule.set_executor_kind(schedule::ExecutorKind::SingleThreaded);
         schedule.add_systems(
             (
-                init_pf.run_if(resource_exists::<PPNetwork>),
+                (init_pf)
+                    .run_if(resource_exists::<PPNetwork>),
+                process_switch_state,
                 init_states.run_if(not(resource_exists::<PowerFlowMat>)),
                 apply_permutation,
             )
