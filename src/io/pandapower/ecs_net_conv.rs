@@ -4,6 +4,7 @@ use bevy_app::Startup;
 use bevy_ecs::schedule;
 
 use network::GND;
+use plugin::PFInitStage;
 
 use crate::basic::new_ecs::*;
 
@@ -319,7 +320,12 @@ impl Plugin for PandaPowerStartupPlugin {
                 .chain()
                 .in_set(PandaPowerInit),
         );
-        app.configure_sets(Startup, PandaPowerInit.run_if(resource_exists::<PPNetwork>));
+        app.configure_sets(
+            Startup,
+            PandaPowerInit
+                .run_if(resource_exists::<PPNetwork>)
+                .before(PFInitStage),
+        );
     }
 }
 /// Initializes the node lookup by mapping bus indices to ECS entities.
