@@ -37,7 +37,12 @@ use super::{elements::*, network::PowerFlowMat};
 /// let nodes = 5;
 /// let permutation_matrix = create_permutation_matrix(pv, pq, ext, nodes);
 /// ```
-pub(crate) fn create_permutation_matrix(pv: &[i64], pq: &[i64], ext: &[i64], nodes: usize) -> CooMatrix<i64> {
+pub(crate) fn create_permutation_matrix(
+    pv: &[i64],
+    pq: &[i64],
+    ext: &[i64],
+    nodes: usize,
+) -> CooMatrix<i64> {
     let row_indices: Vec<usize> = (0..nodes).collect();
     let mut col_indices: Vec<usize> = (0..nodes).collect();
     let values = vec![1; nodes];
@@ -54,13 +59,8 @@ pub(crate) fn create_permutation_matrix(pv: &[i64], pq: &[i64], ext: &[i64], nod
         col_indices[i] = ext[i - n_bus] as usize;
     }
 
-    CooMatrix::try_from_triplets(
-        nodes,
-        nodes,
-        row_indices,
-        col_indices,
-        values,
-    ).expect("Failed to create permutation matrix")
+    CooMatrix::try_from_triplets(nodes, nodes, row_indices, col_indices, values)
+        .expect("Failed to create permutation matrix")
 }
 
 /// Creates the Y-bus matrix for the power flow network.
