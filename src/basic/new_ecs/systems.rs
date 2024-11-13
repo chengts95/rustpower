@@ -28,21 +28,14 @@ use super::{elements::*, network::PowerFlowMat};
 ///
 /// This function will panic if the indices provided in `pv`, `pq`, or `ext` are out of bounds.
 ///
-/// # Example
-///
-/// ```
-/// let pv = &[0, 1];
-/// let pq = &[2, 3];
-/// let ext = &[4];
-/// let nodes = 5;
-/// let permutation_matrix = create_permutation_matrix(pv, pq, ext, nodes);
-/// ```
+
 pub(crate) fn create_permutation_matrix(
     pv: &[i64],
     pq: &[i64],
     ext: &[i64],
     nodes: usize,
 ) -> CooMatrix<i64> {
+
     let row_indices: Vec<usize> = (0..nodes).collect();
     let mut col_indices: Vec<usize> = (0..nodes).collect();
     let values = vec![1; nodes];
