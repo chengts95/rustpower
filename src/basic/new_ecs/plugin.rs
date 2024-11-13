@@ -41,7 +41,7 @@ mod test {
 
     use std::env;
 
-    use crate::io::pandapower::load_csv_zip;
+    use crate::{basic::new_ecs::{elements::PPNetwork, post_processing::PostProcessing}, io::pandapower::load_csv_zip};
 
     use super::*;
 
