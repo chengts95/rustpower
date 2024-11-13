@@ -59,7 +59,7 @@ fn extgrid_to_extnode(item: &ExtGrid) -> [ExtGridNode; 1] {
 }
 
 /// Converts a shunt to its equivalent admittance.
-fn shunt_to_admit(item: &Shunt) -> [AdmittanceBranch;1] {
+fn shunt_to_admit(item: &Shunt) -> [AdmittanceBranch; 1] {
     let s = Complex::new(-item.p_mw, -item.q_mvar) * Complex::new(item.step as f64, 0.0);
     let y = s / (item.vn_kv * item.vn_kv);
     [AdmittanceBranch {

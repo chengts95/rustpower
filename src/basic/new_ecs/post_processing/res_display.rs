@@ -1,5 +1,5 @@
-use tabled::Tabled;
 use std::fmt;
+use tabled::Tabled;
 /// A wrapper around a float that limits the number of decimal places when printed.
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
 pub(crate) struct FloatWrapper {
@@ -15,7 +15,10 @@ impl FloatWrapper {
 }
 impl Default for FloatWrapper {
     fn default() -> Self {
-        Self { value: Default::default(), precision: 3 }
+        Self {
+            value: Default::default(),
+            precision: 3,
+        }
     }
 }
 
@@ -48,22 +51,22 @@ pub(crate) struct BusResTable {
 
 /// Data structure for storing results of power flow calculations for a line, with limited decimal precision for output.
 #[derive(Debug, Default, Tabled)]
-#[allow(non_snake_case)] 
+#[allow(non_snake_case)]
 pub struct LineResTable {
     pub(crate) from: i64,
     pub(crate) to: i64,
     pub(crate) p_from_mw: FloatWrapper, // Active power from the 'from' bus (MW)
     pub(crate) q_from_mvar: FloatWrapper, // Reactive power from the 'from' bus (MVAr)
-    pub(crate) p_to_mw: FloatWrapper, // Active power to the 'to' bus (MW)
+    pub(crate) p_to_mw: FloatWrapper,   // Active power to the 'to' bus (MW)
     pub(crate) q_to_mvar: FloatWrapper, // Reactive power to the 'to' bus (MVAr)
-    pub(crate) pl_mw: FloatWrapper, // Line active power loss (MW)
-    pub(crate) ql_mvar: FloatWrapper, // Line reactive power loss (MVAr)
+    pub(crate) pl_mw: FloatWrapper,     // Line active power loss (MW)
+    pub(crate) ql_mvar: FloatWrapper,   // Line reactive power loss (MVAr)
     pub(crate) i_from_ka: FloatWrapper, // Current from the 'from' bus (kA)
-    pub(crate) i_to_ka: FloatWrapper, // Current to the 'to' bus (kA)
-    pub(crate) i_ka: FloatWrapper, // Line current (kA)
+    pub(crate) i_to_ka: FloatWrapper,   // Current to the 'to' bus (kA)
+    pub(crate) i_ka: FloatWrapper,      // Line current (kA)
     pub(crate) vm_from_pu: FloatWrapper, // Voltage magnitude at the 'from' bus (p.u.)
     pub(crate) va_from_degree: FloatWrapper, // Voltage angle at the 'from' bus (degrees)
-    pub(crate) vm_to_pu: FloatWrapper, // Voltage magnitude at the 'to' bus (p.u.)
+    pub(crate) vm_to_pu: FloatWrapper,  // Voltage magnitude at the 'to' bus (p.u.)
     pub(crate) va_to_degree: FloatWrapper, // Voltage angle at the 'to' bus (degrees)
     pub(crate) loading_percent: FloatWrapper, // Line loading percentage (%)
 }
