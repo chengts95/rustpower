@@ -224,7 +224,7 @@ impl From<&str> for SwitchType {
 }
 
 /// Represents a network.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize,Clone)]
 pub struct Network {
     pub gen: Option<Vec<Gen>>,
     pub bus: Vec<Bus>,
