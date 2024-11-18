@@ -115,8 +115,8 @@ fn print_res_bus(q: Query<(&PFNode, &VBusResult, &SBusResult)>) {
             let q = s.0.im();
             BusResTable {
                 Bus: node.0 as i32,
-                Vm: FloatWrapper::new(vm, 3),
-                Va: FloatWrapper::new(angle, 3),
+                Vm: FloatWrapper::new(vm, 5),
+                Va: FloatWrapper::new(angle, 5),
                 P_mw: FloatWrapper::new(p, 5),
                 Q_mvar: FloatWrapper::new(q, 5),
             }
