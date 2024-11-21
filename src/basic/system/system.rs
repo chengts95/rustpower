@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 #[allow(unused_imports)]
 use std::{f64::consts::PI, str::FromStr};
 
@@ -6,6 +7,7 @@ use crate::basic::newtonpf::newton_pf;
 #[allow(unused_imports)]
 use crate::basic::solver::RSparseSolver;
 use crate::io::pandapower::*;
+use bevy_ecs::component::Component;
 use nalgebra::*;
 use nalgebra_sparse::*;
 use num_complex::Complex64;
@@ -18,17 +20,18 @@ use crate::basic::solver::KLUSolver;
 pub const GND: i32 = -1;
 
 /// Represents a branch with admittance and port information.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Component)]
 pub struct AdmittanceBranch {
     /// The admittance value of the branch.
     pub y: admittance::Admittance,
     /// The port information of the branch.
     pub port: admittance::Port2,
+    /// base voltage for per-unit values
     pub v_base: f64,
 }
 
 /// Represents a node with specified power and bus information in a power system.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Component)]
 pub struct PQNode {
     /// The complex power injected at the node.
     pub s: Complex<f64>,
@@ -37,7 +40,7 @@ pub struct PQNode {
 }
 
 /// Represents a node with specified active power, voltage, and bus information in a power system.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Component)]
 pub struct PVNode {
     /// The active power injected at the node.
     pub p: f64,
@@ -48,7 +51,7 @@ pub struct PVNode {
 }
 
 /// Represents an external grid node with voltage, phase, and bus information.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Component)]
 pub struct ExtGridNode {
     /// The voltage magnitude at the external grid node.
     pub v: f64,
@@ -68,9 +71,13 @@ impl Default for ExtGridNode {
         }
     }
 }
-
+#[deprecated(
+    since = "0.2.0",
+    note = "This struct is deprecated.
+     Use `default_app()` to create a bevy App with default plugins or `PowerGrid` instead."
+)]
 /// Represents a power flow network with base voltage and power, bus, load, PV node, external grid node, and branch information.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PFNetwork {
     /// The base voltage of the network.
     pub v_base: f64,
@@ -87,8 +94,6 @@ pub struct PFNetwork {
     /// The list of branches with admittance and port information in the network.
     pub y_br: Vec<AdmittanceBranch>,
 }
-
-
 
 /// Creates the nodal admittance matrix (Ybus) of the power flow network.
 ///
@@ -227,7 +232,7 @@ pub trait RunPF {
         v_init: DVector<Complex64>,
         max_it: Option<usize>,
         tol: Option<f64>,
-    ) -> (DVector<Complex64>,usize);
+    ) -> (DVector<Complex64>, usize);
 }
 
 impl RunPF for PFNetwork {
@@ -271,7 +276,7 @@ impl RunPF for PFNetwork {
         v_init: DVector<Complex64>,
         max_it: Option<usize>,
         tol: Option<f64>,
-    ) -> (DVector<Complex64>,usize) {
+    ) -> (DVector<Complex64>, usize) {
         let (reorder, Ybus, Sbus, v_init, npv, npq) = self.prepare_matrices(v_init);
 
         #[cfg(feature = "klu")]
@@ -282,7 +287,7 @@ impl RunPF for PFNetwork {
         let (v, iter) = v.unwrap();
         let x = reorder.transpose() * &v;
 
-        (x,iter)
+        (x, iter)
     }
 }
 
@@ -388,7 +393,7 @@ mod tests {
                 .iter()
                 .map(|x| Complex64::from_str(&x.replace(" ", "")).unwrap()),
         );
-        let (v,_) = pf.run_pf(v_init, Some(10), Some(1e-6));
+        let (v, _) = pf.run_pf(v_init, Some(10), Some(1e-6));
         for i in 0..v.len() {
             assert!(
                 (v[i] - v_actual[i]).norm() < 1e-3,

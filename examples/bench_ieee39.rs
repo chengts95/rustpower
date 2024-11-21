@@ -1,4 +1,4 @@
-use nalgebra::ComplexField;
+#![allow(deprecated)]
 use rustpower::{io::pandapower::Network, prelude::*};
 
 #[macro_export]
@@ -36,6 +36,7 @@ macro_rules! timeit {
     }};
 }
 
+#[allow(non_snake_case)]
 fn main() {
     let file_path = test_ieee39::IEEE_39;
     let net: Network = serde_json::from_str(file_path).unwrap();
@@ -44,10 +45,8 @@ fn main() {
     let tol = Some(1e-8);
     let max_it = Some(10);
 
-    let (v,_) = pf.run_pf(v_init.clone(), max_it, tol);
-    println!("Vm,\t angle");
-    for i in v.iter() {
-        println!("{:.5}, {:.5}", i.modulus(), i.argument().to_degrees());
-    }
-    timeit!(pf_ieee39,100,|| _ = (&pf).run_pf(v_init.clone(), max_it, tol));
+    let _ = pf.run_pf(v_init.clone(), max_it, tol);
+
+    timeit!(pf_ieee39, 100, || _ =
+        (&pf).run_pf(v_init.clone(), max_it, tol));
 }
