@@ -1,8 +1,10 @@
-#![allow(deprecated)]
-use std::env;
+use ecs::{
+    elements::PPNetwork,
+    network::{DataOps, PowerFlow, PowerFlowResult, PowerGrid},
+    post_processing::PostProcessing,
+};
 
-use nalgebra::ComplexField;
-use rustpower::{io::pandapower::*, prelude::*};
+use rustpower::{io::pandapower::Network, prelude::*};
 
 #[macro_export]
 macro_rules! timeit {
@@ -39,21 +41,26 @@ macro_rules! timeit {
     }};
 }
 
+#[allow(non_snake_case)]
 fn main() {
-    let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let zipfile = format!("{}/cases/pegase9241/data.zip", dir);
-    let net = load_csv_zip(&zipfile).unwrap();
-    let pf = PFNetwork::from(net);
-    let v_init = pf.create_v_init();
-    let tol = Some(1e-6);
-    let max_it = Some(10);
-    let (v, iter) = pf.run_pf(v_init.clone(), max_it, tol);
+    let file_path = test_ieee39::IEEE_39;
+    let net: Network = serde_json::from_str(file_path).unwrap();
+    let mut pf_net = PowerGrid::default();
+    pf_net.world_mut().insert_resource(PPNetwork(net));
+    pf_net.init_pf_net();
+    pf_net.run_pf();
+    assert_eq!(
+        pf_net
+            .world()
+            .get_resource::<PowerFlowResult>()
+            .unwrap()
+            .converged,
+        true
+    );
 
-    println!("Vm,\t angle");
-    for (x, i) in v.iter().enumerate() {
-        println!("{} {:.5}, {:.5}", x, i.modulus(), i.argument().to_degrees());
-    }
-    println!("converged within {} iterations", iter);
-    timeit!(pegase9241, 10, || _ =
-        (&pf).run_pf(v_init.clone(), max_it, tol));
+    timeit!(pf_ieee39, 100, || {
+        pf_net.run_pf();
+    });
+    pf_net.post_process();
+    pf_net.print_res_bus();
 }

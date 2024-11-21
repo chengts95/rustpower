@@ -1,86 +1,125 @@
 # RustPower
 
-RustPower is a power flow calculation library written in Rust, designed to perform steady-state analysis on electrical power systems.
+RustPower is a cutting-edge power flow calculation library written in Rust, specifically designed for steady-state analysis of electrical power systems. With the introduction of **ECS-based architecture** in version 0.2.0, RustPower offers unparalleled modularity and extensibility.
 
-## Current Features
+---
 
-- Calculation of nodal admittance matrix (Ybus)
-- Nodal power injection vector calculation (Sbus)
-- Power flow analysis using Newton-Raphson method
-- Supports for pandapower network Json files via Serde (todo:CSV parsing)
-- Handles external grid nodes and transformer elements
-- RSparse and KLU solver* (preferred but optional )
+## **What's New in 0.2.0**
+- **World's First ECS-Based Power Flow Solver**:  
+  RustPower now adopts the **Entity-Component-System (ECS)** architecture using Bevy, enabling modular design and extensibility for domain-specific applications such as:
+  - Time-series simulations.
+  - Real-time monitoring.
+  - Custom plugin development.  
+  The legacy `PFNetwork` is now deprecated but remains available as a demo for the basic Newton-Raphson solver.
 
-\* Need to set "SUITESPARSE_DIR" to the installed folder on Windows. The KLU feature is disabled by default.
+- **Post-Processing Trait**:  
+  Added a flexible post-processing trait to manage simulation results, allowing users to handle data as if working with a dataframe. This demonstrates Rust's compositional design philosophy and makes ECS highly effective for handling large datasets.
 
-## Comparison with Existing Tools 
+- **Experimental Switch Handling**:  
+  Introduced two optional methods for modeling switch elements:
+  1. **Admittance-Based Method**: Adjusts admittance matrices.
+  2. **Node-Merging Method**: Merges connected nodes for simplified modeling.  
+  These are implemented as plugins and can be enabled as needed.
 
-PyPower and PandaPower: These tools use traditional ways to build admittance matrices. They perform dynamic slicing in each iteration to extract vectors and matrices for PQ and PV nodes. While this approach is general, it can lead to performance bottlenecks when dealing with large-scale power systems.
+---
 
-This Program: By using some simple linear algebra methods, this program constructs the required vectors and matrices during initialization, avoiding the need for dynamic slicing of PV, PQ, Ext nodes in each iteration. Based on experience with real-time EMT simulation, I believe it will never become necessary to check individual column in the jacobian matrix during its construction. This not only simplifies the code logic but also significantly improves computational efficiency beyond the benefits brought by Rust and KLU.
-Currently, on IEEE 39-Bus system, this program takes around 300 microseconds (with KLU) and 500 microseconds (with RSparse solver) to finish 3 iterations, which is 10 times faster than Python and Numba-based implementation.
+## **Key Features**
+- High-performance power flow computation with Newton-Raphson.
+- Modular and extensible design using ECS for future-proof applications.
+- Support for `pandapower` JSON network files (with experimental CSV support).
+- Handles external grid nodes, transformers, and switch elements.
+- Includes both RSparse and KLU solvers (KLU requires `SUITESPARSE_DIR` on Windows).
 
-In performance tests on the PEGASE 9241 system, the Rust implementation for power flow calculation demonstrated significant performance advantages. Despite pandapower using acceleration techniques, the Rust implementation achieved far superior speeds although the post solution is not included. This indicates that with the Rust technologies, stochastic power flow simulation and optimization problems can be significant faster even without multi-threading, while the painful memory management and compiling problems from C/C++ won't bother us.  
-![alt text](imgs/performance_1.png)
-![alt text](imgs/performance_2.png)
+---
 
+## **Performance Comparison**
 
-## Installation
+RustPower achieves industry-leading performance in power flow calculations:
+- **IEEE 39-Bus System**:  
+  - ~300 microseconds with KLU (3 iterations).  
+  - ~500 microseconds with RSparse solver.  
+  10x faster than Python/Numba implementations.
 
-Add this library to your `Cargo.toml` file:
+- **PEGASE 9241 System**:  
+  Demonstrates significant performance advantages over Python-based solutions, even without multi-threading. RustPower is highly optimized for speed and avoids the complexity of C/C++ memory management.  
+![Performance Chart 1](imgs/performance_1.png)  
+![Performance Chart 2](imgs/performance_2.png)
 
-```toml
-[dependencies]
-RustPower = "0.1.0"
-```
+---
 
-## Usage
+## **Installation**
 
-```Rust
-use rustpower::{io::pandapower::Network, prelude::*};
+As `rustpower` is not yet published on [Crates.io](https://crates.io/), you can add it to your project directly from GitHub:
+
+1. Add the following line to your `Cargo.toml`:
+
+   ```toml
+   [dependencies]
+   rustpower = { git = "https://github.com/chengts95/rustpower", branch = "main" }
+
+---
+
+## **Usage Example**
+
+### **Basic ECS Example**
+
+```rust
+use ecs::post_processing::PostProcessing; // for print bus results
+use rustpower::{io::pandapower::*, prelude::*};
+
 fn main() {
-    // Define your power flow network or load pandapower files
-    let dir = "{your file path}/file_name.zip";
-    let net : Network = load_csv_zip(dir).unwrap(); //can load a zip archive or folder with csvs
-    let pf = PFNetwork::from(net);
-    let v_init = pf.create_v_init();
-    let tol = Some(1e-8);
-    let max_it = Some(10);
+    let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    let zipfile = format!("{}/cases/pegase9241/data.zip", dir);
+    let net = load_csv_zip(&zipfile).unwrap();
 
-    let (v,iterations) = pf.run_pf(v_init.clone(), max_it, tol);
-    //display results
-    println!("Vm,\t angle"); 
-    for (x, i) in v.iter().enumerate() {
-        println!("{} {:.5}, {:.5}", x, i.modulus(), i.argument().to_degrees());
-    }
+    // Initialize the ECS application with plugins
+    let mut pf_net = default_app();
+
+    // Register the power network as a resource
+    pf_net.world_mut().insert_resource(PPNetwork(net));
+    pf_net.update(); // Initializes the data for the first run
+
+    // Retrieve results
+    let results = pf_net.world().get_resource::<PowerFlowResult>().unwrap();
+    assert!(results.converged);
+    println!("Converged in {} iterations", results.iterations);
+
+    // Post-process and print results
+    pf_net.post_process();
+    pf_net.print_res_bus();
 }
 ```
-The cases are generated from pandapower with customized python functions, see the python notebook in the `cases` folder for details.
 
-## License
+For more examples, check the `cases` folder.
 
-This project is licensed under the MPLv2 License - see the LICENSE file for details.
+---
 
-## Contributions
+## **License**
 
-Contributions are welcome! Feel free to open an issue or submit a pull request.
+This project is licensed under the MPLv2 License. See the [LICENSE](LICENSE) file for more details.
 
-## Authors
+---
 
+## **Contributions**
+
+Contributions are welcome! Feel free to open an issue or submit a pull request to help improve the library.
+
+---
+
+## **Authors**
 - Tianshi Cheng
-## Contact
 
-Feel free to open a issue or PR.
+---
 
-## Acknowledgements
+## **Acknowledgements**
 
-This project draws inspiration and knowledge from the following libraries:
+This project draws inspiration from:
+- [Pandapower](https://github.com/e2nIEE/pandapower)
+- [PyPower](https://github.com/rwl/PYPOWER)
+- [MatPower](https://matpower.org)
 
-- [Pandapower](https://github.com/e2nIEE/pandapower): An easy-to-use Python package for power system analysis.
-- [PyPower](/https://github.com/rwl/PYPOWER): A Python implementation of the power flow analysis tool MatPower.
-- [MatPower](https://matpower.org/): A package of MATLAB-based power system simulation, analysis, and optimization tools.
+Special thanks to:  
+[T. Cheng, T. Duan, and V. Dinavahi, "ECS-Grid: Data-Oriented Real-Time Simulation Platform for Cyber-Physical Power Systems," IEEE Transactions on Industrial Informatics, vol. 19, no. 11, pp. 11128-11138, 2023.](https://era.library.ualberta.ca/items/5e45c2ff-9b92-41c7-b685-020110b77239)
 
-In addition, it uses part of the design philosophy and theory in:
-[T. Cheng, T. Duan and V. Dinavahi, "ECS-Grid: Data-Oriented Real-Time Simulation Platform for Cyber-Physical Power Systems," in IEEE Transactions on Industrial Informatics, vol. 19, no. 11, pp. 11128-11138, Nov. 2023, doi: 10.1109/TII.2023.3244329.](https://era.library.ualberta.ca/items/5e45c2ff-9b92-41c7-b685-020110b77239)
+Although ECS-Grid is a more complex electromagnetic transient (EMT) simulation system, its design philosophy and methodologies greatly influenced the development of this steady-state power flow solver.
 
-Although ECS-Grid is a more complex electromagnetic transient (EMT) cyber-physical simulation system, it provided valuable insights and experience that contributed to the design of this steady-state power flow calculation software.
