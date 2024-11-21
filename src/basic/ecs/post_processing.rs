@@ -277,7 +277,7 @@ mod tests {
     use crate::{
         basic::{
             self,
-            system::{PFNetwork, RunPF},
+            system::RunPF,
         },
         io::pandapower::load_csv_zip,
     };

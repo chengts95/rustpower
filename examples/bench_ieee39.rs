@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use rustpower::{io::pandapower::Network, prelude::*};
 
 #[macro_export]

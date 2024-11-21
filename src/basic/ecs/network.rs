@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use std::fmt;
 
 use bevy_app::prelude::*;

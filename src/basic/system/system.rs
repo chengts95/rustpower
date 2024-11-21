@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 #[allow(unused_imports)]
 use std::{f64::consts::PI, str::FromStr};
 
@@ -70,7 +71,11 @@ impl Default for ExtGridNode {
         }
     }
 }
-
+#[deprecated(
+    since = "0.2.0",
+    note = "This struct is deprecated.
+     Use `default_app()` to create a bevy App with default plugins or `PowerGrid` instead."
+)]
 /// Represents a power flow network with base voltage and power, bus, load, PV node, external grid node, and branch information.
 #[derive(Debug, Clone)]
 pub struct PFNetwork {

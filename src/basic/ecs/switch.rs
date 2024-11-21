@@ -524,7 +524,7 @@ mod tests {
 
     use crate::{
         basic::{
-            new_ecs::{
+            ecs::{
                 network::*, post_processing::PostProcessing, systems::create_permutation_matrix,
             },
             sparse::{self, conj::RealImage},
