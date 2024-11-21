@@ -2,26 +2,34 @@
 
 ## [0.2.0] - 2024-11-21
 ### Added
-- **Major Architectural Overhaul**:  
-  Introduced a new Bevy ECS-based application for power flow computation and future practical applications, marking a significant shift from the legacy `PFNetwork`.  
-  - **Modular and Extensible Design**: Users can now develop custom plugins to extend functionality. This modular approach enables integration of domain-specific features, such as time-series simulations or real-time power flow monitoring, in future releases. See plugins and Post-Processing Trait for details.
+- **World’s First ECS-Based Power Flow Solver**:  
+  Introduced the first-ever steady-state power system analysis program using the **Bevy ECS** architecture. This groundbreaking update shifts from the legacy `PFNetwork` to a modular, extensible design, paving the future way for advanced applications such as:
+  - **Time-Series Simulations**
+  - **Stochastic Power Flow**
+  - **Optimal Power Flow**
+  - **Custom Plugins for Domain-Specific Needs**  
 
-  - **Deprecated Legacy Framework**: The old `PFNetwork` is officially deprecated. Users should usethe ECS-based version for enhanced flexibility and scalability. The old PFNetwork was too simple to meet the demand of solving pratical problems, but it will serve as a demo for the basic Netwon-Raphson power flow solver.
+  **Deprecation Notice**: The old `PFNetwork` is now deprecated. While it remains available as a demo for the Newton-Raphson power flow solver, it is no longer suitable for practical problem-solving. Users are encouraged to migrate to the ECS-based version for better scalability and flexibility.
 
 - **Post-Processing Trait**:  
-  Added a post-processing trait to demonstrate Rust's compositional design philosophy and ECS's data manipulation capabilities. Users can treat simulation results like a dataframe and implement custom post-processing methods. An example implementation is provided to help users get started.
+  Added a post-processing trait to demonstrate Rust's compositional design philosophy and how simulation results can be handled within the ECS framework, similar to working with dataframes. Users can implement their own post-processing methods, with provided examples serving as a starting point.
 
 - **Switch Element Handling (Experimental)**:  
-  Added experimental support for modeling switch elements between buses:
-  1. **Admittance-based Method**: Represents switches via admittance adjustments.
-  2. **Node-merging Method**: Simplifies switch behavior by merging connected nodes.  
+  Introduced experimental support for handling switch elements between buses, offering two optional methods:
+  1. **Admittance-Based Method**: Models switches via admittance adjustments.
+  2. **Node-Merging Method**: Simplifies switches by merging connected nodes.  
   These methods are implemented as optional plugins and are disabled by default.
 
 ### Fixed
-- Enhanced JSON parsing support for `pandapower` networks, contributed by [@mancioshell](https://github.com/mancioshell).
-- Corrected the conversion of shunt elements, which are now treated as admittances rather than PQ injections, ensuring compatibility with `pandapower`'s behavior.
+- **Improved JSON Parsing for `pandapower`**:  
+  Enhanced compatibility with `pandapower` networks, thanks to contributions from [@mancioshell](https://github.com/mancioshell).
+- **Corrected Shunt Element Behavior**:  
+  Shunt elements are now treated as admittances rather than PQ injections, ensuring consistency with `pandapower`’s implementation.
 
-## [0.1.0] - 2024-5-10
+---
+
+## [0.1.0] - 2024-05-10
 ### Added
-- Established the initial project framework with core functionality for Ybus and Sbus calculations.
-- Implemented the Newton-Raphson method for power flow analysis.
+- **Initial Project Release**:  
+  - Established the foundational framework for Ybus and Sbus calculations.
+  - Implemented the Newton-Raphson method for power flow analysis.
