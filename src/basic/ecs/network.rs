@@ -109,8 +109,7 @@ impl PowerFlow for PowerGrid {
         schedule.set_executor_kind(schedule::ExecutorKind::SingleThreaded);
         schedule.add_systems(
             (
-                (init_pf)
-                    .run_if(resource_exists::<PPNetwork>),
+                (init_pf).run_if(resource_exists::<PPNetwork>),
                 process_switch_state,
                 init_states.run_if(not(resource_exists::<PowerFlowMat>)),
                 apply_permutation,
