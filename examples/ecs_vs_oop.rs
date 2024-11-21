@@ -1,11 +1,11 @@
 #![allow(deprecated)]
-use std::env;
-use nalgebra::ComplexField;
 use ecs::{elements::PPNetwork, network::*, plugin::default_app, post_processing::*};
+use nalgebra::ComplexField;
 use rustpower::{io::pandapower::*, prelude::*};
+use std::env;
 
 /// A utility macro to measure the execution time of a code block.
-/// It runs the provided code block a specified number of times (`$times`) 
+/// It runs the provided code block a specified number of times (`$times`)
 /// and calculates the average, maximum, and minimum execution duration.
 ///
 /// # Parameters
@@ -56,7 +56,7 @@ macro_rules! timeit {
 /// 1. Object-Oriented Programming (OOP) approach.
 /// 2. ECS with traits.
 /// 3. ECS with plugins.
-/// 
+///
 /// Each method uses a different approach to solve the same problem,
 /// showcasing the flexibility and trade-offs of each design.
 fn main() {
@@ -68,9 +68,9 @@ fn main() {
     let net = load_csv_zip(&zipfile).unwrap();
 
     // Execute each method and compare their outputs
-    run_pf_net_obj(net.clone());            // Traditional OOP method
-    run_ecs_with_trait(net.clone());        // ECS with traits
-    run_ecs_app_with_plugins(net.clone());  // ECS with plugins
+    run_pf_net_obj(net.clone()); // Traditional OOP method
+    run_ecs_with_trait(net.clone()); // ECS with traits
+    run_ecs_app_with_plugins(net.clone()); // ECS with plugins
 }
 
 /// Performs power flow analysis using a traditional Object-Oriented Programming (OOP) approach.
@@ -84,8 +84,8 @@ fn main() {
 /// # Limitations
 /// - Fixed initialization and parameters (`tol`, `max_it`) reduce flexibility.
 /// - Results may differ from `pandapower` due to algorithmic differences.
-/// - This implementation is not recommended now due to scalibility issues and 
-/// the treatment to shunt is not correct, causing significant differences to 
+/// - This implementation is not recommended now due to scalibility issues and
+/// the treatment to shunt is not correct, causing significant differences to
 /// pandapower's results.
 /// # Parameters
 /// - `net`: The input power network (`Network`) to analyze.
@@ -94,8 +94,8 @@ fn run_pf_net_obj(net: Network) {
     let pf = PFNetwork::from(net);
 
     // Initialize voltage vector with a default method
-    let v_init = pf.create_v_init(); 
-    let tol = Some(1e-6);  // Convergence tolerance
+    let v_init = pf.create_v_init();
+    let tol = Some(1e-6); // Convergence tolerance
     let max_it = Some(10); // Maximum iterations
 
     // Solve the power flow problem
