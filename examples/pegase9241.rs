@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use std::env;
 
 use nalgebra::ComplexField;
