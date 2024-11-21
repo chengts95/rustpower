@@ -1,7 +1,10 @@
 #![allow(deprecated)]
 use std::env;
 
-use nalgebra::ComplexField;
+use ecs::{
+    elements::PPNetwork, network::PowerFlowResult, plugin::default_app,
+    post_processing::PostProcessing,
+};
 use rustpower::{io::pandapower::*, prelude::*};
 
 #[macro_export]
@@ -43,17 +46,20 @@ fn main() {
     let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let zipfile = format!("{}/cases/pegase9241/data.zip", dir);
     let net = load_csv_zip(&zipfile).unwrap();
-    let pf = PFNetwork::from(net);
-    let v_init = pf.create_v_init();
-    let tol = Some(1e-6);
-    let max_it = Some(10);
-    let (v, iter) = pf.run_pf(v_init.clone(), max_it, tol);
+    // Initialize the default ECS application with predefined plugins
+    let mut pf_net = default_app();
 
-    println!("Vm,\t angle");
-    for (x, i) in v.iter().enumerate() {
-        println!("{} {:.5}, {:.5}", x, i.modulus(), i.argument().to_degrees());
-    }
-    println!("converged within {} iterations", iter);
-    timeit!(pegase9241, 10, || _ =
-        (&pf).run_pf(v_init.clone(), max_it, tol));
+    // Register the power network as a resource in the ECS world
+    pf_net.world_mut().insert_resource(PPNetwork(net));
+    pf_net.update(); //this will initalize the data for pf in the first run
+    // Extract and validate the results
+    let results = pf_net.world().get_resource::<PowerFlowResult>().unwrap();
+    assert_eq!(results.converged, true);
+    println!("ECS APP converged within {} iterations", results.iterations);
+
+    // Post-process and print the results
+    pf_net.post_process();
+    pf_net.print_res_bus();
+
+    timeit!(pegase9241, 10, || _ = pf_net.update());
 }
