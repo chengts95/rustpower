@@ -35,7 +35,6 @@ pub(crate) fn create_permutation_matrix(
     ext: &[i64],
     nodes: usize,
 ) -> CooMatrix<i64> {
-
     let row_indices: Vec<usize> = (0..nodes).collect();
     let mut col_indices: Vec<usize> = (0..nodes).collect();
     let values = vec![1; nodes];

@@ -1,7 +1,6 @@
 #![allow(deprecated)]
 use std::f64::consts::PI;
 
-
 use crate::basic::system::*;
 use crate::prelude::pandapower::*;
 use nalgebra::vector;

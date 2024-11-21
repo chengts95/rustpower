@@ -1,10 +1,7 @@
 #![allow(deprecated)]
 use std::env;
 
-use ecs::{
-    elements::PPNetwork, network::PowerFlowResult, plugin::default_app,
-    post_processing::PostProcessing,
-};
+use ecs::post_processing::PostProcessing;
 use rustpower::{io::pandapower::*, prelude::*};
 
 #[macro_export]
@@ -52,7 +49,7 @@ fn main() {
     // Register the power network as a resource in the ECS world
     pf_net.world_mut().insert_resource(PPNetwork(net));
     pf_net.update(); //this will initalize the data for pf in the first run
-    // Extract and validate the results
+                     // Extract and validate the results
     let results = pf_net.world().get_resource::<PowerFlowResult>().unwrap();
     assert_eq!(results.converged, true);
     println!("ECS APP converged within {} iterations", results.iterations);
@@ -60,6 +57,4 @@ fn main() {
     // Post-process and print the results
     pf_net.post_process();
     pf_net.print_res_bus();
-
-    timeit!(pegase9241, 10, || _ = pf_net.update());
 }

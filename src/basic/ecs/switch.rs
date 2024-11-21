@@ -321,7 +321,7 @@ pub fn node_aggregation_system(
         mats.npv,
         mats.npq,
     );
- 
+
     let (pattern, values) = CscMatrix::from(&coo).into_pattern_and_values();
 
     let pre_select_mat = unsafe {
