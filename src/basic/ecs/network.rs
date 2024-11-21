@@ -234,7 +234,7 @@ impl TryFrom<&mut PowerGrid> for PFNetwork {
     type Error = ParseError;
 
     fn try_from(value: &mut PowerGrid) -> Result<Self, Self::Error> {
-        use crate::basic::new_ecs::network::DataOps;
+        use crate::basic::ecs::network::DataOps;
         let world = value.world_mut();
         if world.get_resource::<PPNetwork>().is_none() {
             return Err(ParseError::ConversionError(
