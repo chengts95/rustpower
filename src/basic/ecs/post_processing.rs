@@ -273,7 +273,7 @@ impl PostProcessing for App {
 #[allow(unused_imports)]
 mod tests {
     use super::*;
-    use crate::basic::new_ecs::network::PowerFlow;
+    use crate::basic::ecs::network::PowerFlow;
     use crate::{
         basic::{
             self,

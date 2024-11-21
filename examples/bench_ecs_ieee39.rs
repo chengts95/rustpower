@@ -1,4 +1,4 @@
-use new_ecs::{
+use ecs::{
     elements::PPNetwork,
     network::{DataOps, PowerFlow, PowerFlowResult, PowerGrid},
     post_processing::PostProcessing,
