@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use std::env;
 use nalgebra::ComplexField;
 use new_ecs::{elements::PPNetwork, network::*, plugin::default_app, post_processing::*};
