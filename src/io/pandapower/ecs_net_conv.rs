@@ -6,7 +6,7 @@ use bevy_ecs::schedule;
 use network::GND;
 use plugin::PFInitStage;
 
-use crate::basic::new_ecs::*;
+use crate::basic::ecs::*;
 
 use crate::prelude::pandapower::*;
 use bevy_ecs::prelude::*;

@@ -119,7 +119,7 @@ mod test {
     use serde_json::{Map, Value};
 
     use crate::{
-        basic::new_ecs::{elements::PPNetwork, post_processing::PostProcessing},
+        basic::ecs::{elements::PPNetwork, post_processing::PostProcessing},
         io::pandapower::{load_csv_zip, load_pandapower_json_obj},
     };
 
