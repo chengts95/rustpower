@@ -122,7 +122,7 @@ impl PowerFlow for PowerGrid {
 
     fn run_pf(&mut self) {
         // Executes the power flow system once within the ECS world.
-        self.world_mut().run_system_once(ecs_run_pf);
+        self.world_mut().run_system_once(ecs_run_pf).unwrap();
     }
 }
 
@@ -209,7 +209,11 @@ impl DataOps for PowerGrid {
         self.world_mut().get_mut(entity)
     }
     fn get_entity_mut(&mut self, entity: Entity) -> Option<EntityWorldMut<'_>> {
-        self.world_mut().get_entity_mut(entity)
+        if let Ok(e) = self.world_mut().get_entity_mut(entity) {
+            return Some(e);
+        } else {
+            return None;
+        }
     }
 }
 

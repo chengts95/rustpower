@@ -360,7 +360,7 @@ mod tests {
         let world = pf_net.world_mut();
         println!("{}", net.bus.len());
         world.insert_resource(PPNetwork(net));
-        world.run_system_once(init_pf);
+        world.run_system_once(init_pf).unwrap();
         let mut a = world.query::<(&Transformer, &Port2)>();
 
         println!("{:?}", a.iter(world).collect::<Vec<_>>().len());
