@@ -620,7 +620,7 @@ mod tests {
         pf_net.init_pf_net();
 
         // 3. 运行系统并获取结果矩阵 `mat` 和 `mat_v`
-        let (mat, mat_v) = pf_net.world_mut().run_system_once(node_aggregation_system);
+        let (mat, mat_v) = pf_net.world_mut().run_system_once(node_aggregation_system).unwrap();
 
         // 4. 获取节点映射
         let node_mapping = pf_net.world().get_resource::<NodeMapping>().unwrap();
@@ -682,7 +682,7 @@ mod tests {
         pf_net.init_pf_net();
 
         // Step 3: Run system and retrieve result matrices
-        let (mat, mat_v) = pf_net.world_mut().run_system_once(node_aggregation_system);
+        let (mat, mat_v) = pf_net.world_mut().run_system_once(node_aggregation_system).unwrap();
 
         // Step 4: Retrieve node mapping and generate input vector
         let node_mapping = pf_net.world().get_resource::<NodeMapping>().unwrap();
