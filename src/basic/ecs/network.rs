@@ -2,7 +2,7 @@
 use std::fmt;
 
 use bevy_app::prelude::*;
-use bevy_ecs::{prelude::*, schedule, system::RunSystemOnce};
+use bevy_ecs::{prelude::*, schedule, system::RunSystemOnce, world::error::EntityFetchError};
 use nalgebra::*;
 use nalgebra_sparse::*;
 use num_complex::Complex64;
@@ -77,7 +77,7 @@ pub struct PowerFlowMat {
 
 /// Trait for performing operations on ECS data, such as getting and mutating components of entities.
 pub trait DataOps {
-    fn get_entity_mut(&mut self, entity: Entity) -> Option<EntityWorldMut<'_>>;
+    fn get_entity_mut(&mut self, entity: Entity) -> Result<EntityWorldMut<'_>, EntityFetchError> ;
     fn get_mut<T>(&mut self, entity: Entity) -> Option<Mut<T>>
     where
         T: Component;
@@ -122,7 +122,7 @@ impl PowerFlow for PowerGrid {
 
     fn run_pf(&mut self) {
         // Executes the power flow system once within the ECS world.
-        self.world_mut().run_system_once(ecs_run_pf);
+        self.world_mut().run_system_once(ecs_run_pf).unwrap();
     }
 }
 
@@ -208,7 +208,7 @@ impl DataOps for PowerGrid {
     fn get_mut<T: Component>(&mut self, entity: Entity) -> Option<Mut<T>> {
         self.world_mut().get_mut(entity)
     }
-    fn get_entity_mut(&mut self, entity: Entity) -> Option<EntityWorldMut<'_>> {
+    fn get_entity_mut(&mut self, entity: Entity) -> Result<EntityWorldMut<'_>, EntityFetchError> {
         self.world_mut().get_entity_mut(entity)
     }
 }
