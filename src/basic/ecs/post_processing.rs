@@ -241,31 +241,31 @@ pub trait PostProcessing {
 
 impl PostProcessing for PowerGrid {
     fn print_res_bus(&mut self) {
-        self.world_mut().run_system_once(print_res_bus);
+        self.world_mut().run_system_once(print_res_bus).unwrap();
     }
 
     fn print_res_line(&mut self) {
-        self.world_mut().run_system_once(print_res_line);
+        self.world_mut().run_system_once(print_res_line).unwrap();
     }
 
     fn post_process(&mut self) {
-        self.world_mut().run_system_once(extract_res_bus);
-        self.world_mut().run_system_once(extract_res_line);
+        self.world_mut().run_system_once(extract_res_bus).unwrap();
+        self.world_mut().run_system_once(extract_res_line).unwrap();
     }
 }
 
 impl PostProcessing for App {
     fn print_res_bus(&mut self) {
-        self.world_mut().run_system_once(print_res_bus);
+        self.world_mut().run_system_once(print_res_bus).unwrap();
     }
 
     fn print_res_line(&mut self) {
-        self.world_mut().run_system_once(print_res_line);
+        self.world_mut().run_system_once(print_res_line).unwrap();
     }
 
     fn post_process(&mut self) {
-        self.world_mut().run_system_once(extract_res_bus);
-        self.world_mut().run_system_once(extract_res_line);
+        self.world_mut().run_system_once(extract_res_bus).unwrap();
+        self.world_mut().run_system_once(extract_res_line).unwrap();
     }
 }
 
