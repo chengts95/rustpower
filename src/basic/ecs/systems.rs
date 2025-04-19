@@ -121,8 +121,8 @@ pub(crate) fn create_y_bus(
 ///
 /// Inserts a `PowerFlowMat` resource into the world, containing matrices and vectors required for power flow analysis.
 pub fn init_states(world: &mut World) {
-    let (_incidence_matrix, y_bus) = world.run_system_once(create_y_bus);
-    let cfg = world.run_system_once(init_bus_status);
+    let (_incidence_matrix, y_bus) = world.run_system_once(create_y_bus).unwrap();
+    let cfg = world.run_system_once(init_bus_status).unwrap();
     let y_bus = y_bus.transpose_as_csc();
     let s_bus = cfg.s_bus;
     let v_bus_init = cfg.v_bus_init;
