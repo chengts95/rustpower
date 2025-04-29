@@ -53,7 +53,7 @@ fn main() {
     let results = pf_net.world().get_resource::<PowerFlowResult>().unwrap();
     assert_eq!(results.converged, true);
     println!("ECS APP converged within {} iterations", results.iterations);
-   
+
     // Post-process and print the results
     pf_net.post_process();
     pf_net.print_res_bus();

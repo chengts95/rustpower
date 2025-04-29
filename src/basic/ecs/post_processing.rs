@@ -1,6 +1,5 @@
 use bevy_app::App;
 use bevy_ecs::{prelude::*, system::RunSystemOnce};
-use bevy_hierarchy::prelude::*;
 
 use nalgebra::*;
 use num_complex::{Complex64, ComplexFloat};
@@ -152,7 +151,7 @@ fn extract_res_line(
     mut cmd: Commands,
     node_agg: Option<Res<NodeAggRes>>,
     q: Query<(Entity, &Children, &Port2), With<Line>>,
-    admit: Query<(&Admittance, &VBase, &Port2), With<Parent>>,
+    admit: Query<(&Admittance, &VBase, &Port2), With<ChildOf>>,
     results: Res<PowerFlowResult>,
     common: Res<PFCommonData>,
     mat: Res<PowerFlowMat>,

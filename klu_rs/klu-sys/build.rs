@@ -4,10 +4,8 @@ use std::env;
 use std::path::PathBuf;
 #[cfg(all(target_os = "windows", target_env = "msvc"))]
 fn main() {
-   
-    let suitesparse_dir = env::var("SUITESPARSE_DIR")
-        .unwrap_or(String::from(""));
-    if suitesparse_dir == ""{
+    let suitesparse_dir = env::var("SUITESPARSE_DIR").unwrap_or(String::from(""));
+    if suitesparse_dir == "" {
         panic!("SUITESPARSE_DIR is not found");
     }
     println!("cargo:rustc-link-search={}/lib", suitesparse_dir);

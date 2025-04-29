@@ -118,7 +118,8 @@ impl Solve for RSparseSolver {
         b: &mut [f64],
         n: usize,
     ) -> Result<(), &'static str> {
-        let mut mat: data::Sprs<f64> = rsparse::data::Sprs::zeros(Ap.len() - 1, Ap.len() - 1, Ai.len());
+        let mut mat: data::Sprs<f64> =
+            rsparse::data::Sprs::zeros(Ap.len() - 1, Ap.len() - 1, Ai.len());
 
         let p = unsafe { std::slice::from_raw_parts_mut(Ap.as_mut_ptr() as *mut isize, Ap.len()) };
         unsafe {

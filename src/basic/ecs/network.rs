@@ -2,7 +2,10 @@
 use std::fmt;
 
 use bevy_app::prelude::*;
-use bevy_ecs::{prelude::*, schedule, system::RunSystemOnce, world::error::EntityFetchError};
+use bevy_ecs::{
+    component::Mutable, prelude::*, schedule, system::RunSystemOnce,
+    world::error::EntityMutableFetchError,
+};
 use nalgebra::*;
 use nalgebra_sparse::*;
 use num_complex::Complex64;
@@ -77,10 +80,13 @@ pub struct PowerFlowMat {
 
 /// Trait for performing operations on ECS data, such as getting and mutating components of entities.
 pub trait DataOps {
-    fn get_entity_mut(&mut self, entity: Entity) -> Result<EntityWorldMut<'_>, EntityFetchError> ;
+    fn get_entity_mut(
+        &mut self,
+        entity: Entity,
+    ) -> Result<EntityWorldMut<'_>, EntityMutableFetchError>;
     fn get_mut<T>(&mut self, entity: Entity) -> Option<Mut<T>>
     where
-        T: Component;
+        T: Component<Mutability = Mutable>;
     fn get<T>(&self, entity: Entity) -> Option<&T>
     where
         T: Component;
@@ -206,10 +212,16 @@ impl DataOps for PowerGrid {
     fn get<T: Component>(&self, entity: Entity) -> Option<&T> {
         self.world().get(entity)
     }
-    fn get_mut<T: Component>(&mut self, entity: Entity) -> Option<Mut<T>> {
+    fn get_mut<T: Component>(&mut self, entity: Entity) -> Option<Mut<T>>
+    where
+        T: Component<Mutability = Mutable>,
+    {
         self.world_mut().get_mut(entity)
     }
-    fn get_entity_mut(&mut self, entity: Entity) -> Result<EntityWorldMut<'_>, EntityFetchError> {
+    fn get_entity_mut(
+        &mut self,
+        entity: Entity,
+    ) -> Result<EntityWorldMut<'_>, EntityMutableFetchError> {
         self.world_mut().get_entity_mut(entity)
     }
 }

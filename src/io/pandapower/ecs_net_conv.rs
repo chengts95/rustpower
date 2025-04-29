@@ -10,7 +10,6 @@ use crate::basic::ecs::*;
 
 use crate::prelude::pandapower::*;
 use bevy_ecs::prelude::*;
-use bevy_hierarchy::prelude::*;
 use elements::*;
 use nalgebra::vector;
 use nalgebra::Complex;
