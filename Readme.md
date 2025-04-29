@@ -41,7 +41,7 @@ RustPower achieves industry-leading performance in power flow calculations:
   10x faster than Python/Numba implementations.
 
 - **PEGASE 9241 System**:  
-  Demonstrates significant performance advantages over Python-based solutions, even without multi-threading. RustPower is highly optimized for speed and avoids the complexity of C/C++ memory management.  
+  Demonstrates significant performance advantages over Python-based solutions, even without multi-threading. RustPower is highly optimized for speed and avoids the complexity of C/C++ memory management.  (Measured in Pandapower 2.14.11,  Pandapower 3.0 becomes much faster).
 ![Performance Chart 1](imgs/performance_1.png)  
 ![Performance Chart 2](imgs/performance_2.png)
 
