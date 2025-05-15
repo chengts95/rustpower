@@ -2,7 +2,7 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
-use klu_sys::*;
+use rustpower_klu_sys::*;
 use std::alloc::{alloc, Layout};
 pub struct KLUSolver {
     pub common: *mut klu_l_common,
