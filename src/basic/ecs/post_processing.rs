@@ -15,11 +15,13 @@ use super::{elements::*, network::*};
 /// Component storing the result of SBus power flow calculation.
 /// The result is a complex number representing the power demand in MW in the bus.
 #[derive(Debug, Component, Clone)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct SBusResult(pub Complex64);
 
 /// Component storing the result of VBus power flow calculation.
 /// /// The result has a complex number representing the voltage magnitude in p.u.
 #[derive(Debug, Component, Clone)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct VBusResult(pub Complex64);
 /// Data structure for storing results of power flow calculations for a line.
 #[derive(Component, Debug, Default, Serialize, Deserialize)]

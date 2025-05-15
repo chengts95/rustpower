@@ -48,14 +48,17 @@ pub struct AdmittanceBranch {
 ///
 /// This resource contains the complete power network data, loaded from the external Pandapower library.
 #[derive(Debug, Resource, Deref, DerefMut)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct PPNetwork(pub pandapower::Network);
 
 /// Component that stores an index, typically referring to an element within the power network.
 #[derive(Debug, Component, Deref, DerefMut)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct ElemIdx(pub usize);
 
 /// Component that stores an index, typically referring to a power flow node within the network.
 #[derive(Debug, Component, Deref, DerefMut)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct PFNode(pub usize);
 
 /// Resource that maps node indices (i64) to ECS entities.
@@ -68,26 +71,31 @@ pub struct NodeLookup(pub HashMap<i64, Entity>);
 ///
 /// `AuxNode` typically refers to a node with a special function, defined by its bus index.
 #[derive(Debug, Component)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct AuxNode {
     pub bus: i64,
 }
 
 /// Marker component for a line element in the power system.
 #[derive(Debug, Component)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct Line;
 
 /// Marker component for a transformer element in the power system.
 #[derive(Debug, Component)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct Transformer;
 
 /// Marker component for a shunt element in the power system.
 #[derive(Debug, Component)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct EShunt;
 
 /// Resource holding common base values for the power flow calculation.
 ///
 /// `PFCommonData` contains the base frequency (`wbase`) and base power (`sbase`) for per-unit system calculations.
 #[derive(Debug, Resource)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct PFCommonData {
     pub wbase: f64, // Base frequency (typically in rad/s).
     pub sbase: f64, // Base power (typically in MVA).
@@ -97,6 +105,7 @@ pub struct PFCommonData {
 ///
 /// `NodeType` differentiates between various node types such as PQ nodes, PV nodes, external grid nodes, and auxiliary nodes.
 #[derive(Debug, Component)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub enum NodeType {
     PQ(PQNode),       // Load bus (PQ bus)
     PV(PVNode),       // Generator bus (PV bus)

@@ -21,6 +21,7 @@ pub const GND: i32 = -1;
 
 /// Represents a branch with admittance and port information.
 #[derive(Debug, Default, Clone, Component)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct AdmittanceBranch {
     /// The admittance value of the branch.
     pub y: admittance::Admittance,
@@ -32,6 +33,7 @@ pub struct AdmittanceBranch {
 
 /// Represents a node with specified power and bus information in a power system.
 #[derive(Debug, Clone, Copy, Default, Component)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct PQNode {
     /// The complex power injected at the node.
     pub s: Complex<f64>,
@@ -41,6 +43,7 @@ pub struct PQNode {
 
 /// Represents a node with specified active power, voltage, and bus information in a power system.
 #[derive(Debug, Clone, Copy, Default, Component)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct PVNode {
     /// The active power injected at the node.
     pub p: f64,
@@ -52,6 +55,7 @@ pub struct PVNode {
 
 /// Represents an external grid node with voltage, phase, and bus information.
 #[derive(Debug, Clone, Copy, Component)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct ExtGridNode {
     /// The voltage magnitude at the external grid node.
     pub v: f64,
@@ -78,6 +82,7 @@ impl Default for ExtGridNode {
 )]
 /// Represents a power flow network with base voltage and power, bus, load, PV node, external grid node, and branch information.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct PFNetwork {
     /// The base voltage of the network.
     pub v_base: f64,

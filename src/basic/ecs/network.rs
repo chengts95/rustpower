@@ -47,11 +47,13 @@ pub struct PowerGrid {
 
 /// Resource that wraps the power flow network (PFNetwork).
 #[derive(Debug, Resource, Clone)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct ResPFNetwork(pub PFNetwork);
 
 /// Resource that holds the power flow configuration options, such as the initial voltage guess,
 /// maximum iterations, and tolerance for convergence.
 #[derive(Debug, Resource, Clone)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct PowerFlowConfig {
     pub max_it: Option<usize>, // Maximum number of iterations
     pub tol: Option<f64>,      // Tolerance for convergence
@@ -60,6 +62,7 @@ pub struct PowerFlowConfig {
 /// Resource for storing the results of power flow calculation, including the final voltage vector,
 /// number of iterations taken, and whether the solution converged.
 #[derive(Debug, Default, Resource, Clone)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct PowerFlowResult {
     pub v: DVector<Complex64>, // Final voltage vector after convergence
     pub iterations: usize,     // Number of iterations taken
@@ -69,6 +72,7 @@ pub struct PowerFlowResult {
 /// Resource holding various matrices required for power flow calculations, including the reordered
 /// matrix, admittance matrix (Y-bus), and the power injection vector (S-bus).
 #[derive(Debug, Resource, Clone)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct PowerFlowMat {
     pub reorder: CsrMatrix<Complex<f64>>, // Reordering matrix
     pub y_bus: CscMatrix<Complex<f64>>,   // Y-bus admittance matrix

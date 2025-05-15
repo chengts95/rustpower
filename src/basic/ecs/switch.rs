@@ -16,6 +16,7 @@ use super::{elements::*, network::PowerFlowMat, systems::create_permutation_matr
 /// A switch connects two buses or a bus and an element, and can have a given impedance (z_ohm).
 /// The switch state is defined by its type (`SwitchType`), the connected buses, and its impedance.
 #[derive(Default, Debug, Clone, Component)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct Switch {
     pub bus: i64,       // Identifier for the bus connected by the switch.
     pub element: i64,   // Identifier for the element connected by the switch.
@@ -27,6 +28,7 @@ pub struct Switch {
 ///
 /// This structure holds the merged node matrices (`merge_mat` and `merge_mat_v`) after performing the node aggregation process.
 #[derive(Default, Debug, Clone, Resource)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct NodeAggRes {
     pub merge_mat: CscMatrix<f64>, // Aggregation matrix for the merged nodes.
     pub merge_mat_v: CscMatrix<f64>, // Aggregation matrix for voltage values.
@@ -36,18 +38,21 @@ pub struct NodeAggRes {
 ///
 /// The state (`true` for closed and `false` for open) is wrapped in the `SwitchState` component.
 #[derive(Default, Debug, Clone, Component, Deref, DerefMut)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct SwitchState(pub bool);
 
 /// Represents the merging of two nodes in the power network.
 ///
 /// Each `MergeNode` instance represents a pair of nodes to be merged.
 #[derive(Default, Debug, Clone, Component)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct MergeNode(pub usize, pub usize);
 
 /// Implements a Union-Find structure for efficiently merging nodes in the network.
 ///
 /// This structure is used to manage merging of nodes and to keep track of their relationships.
 #[derive(Default, Debug, Clone)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct NodeMerge {
     pub parent: HashMap<u64, u64>, // Maps each node to its parent in the union-find structure.
     pub rank: HashMap<u64, u64>,   // Rank used for efficient union operations.
@@ -55,6 +60,7 @@ pub struct NodeMerge {
 
 /// Represents the mapping of original nodes to their merged nodes after aggregation.
 #[derive(Default, Debug, Clone, Deref, DerefMut, Resource)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct NodeMapping(HashMap<u64, u64>);
 
 impl NodeMerge {

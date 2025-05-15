@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// `Admittance` is a wrapper around a complex number representing the admittance value.
 #[derive(Clone, Default, PartialEq, Debug)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct Admittance(pub Complex<f64>);
 
 /// Represents a port with two integer values.
