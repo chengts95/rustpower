@@ -46,8 +46,7 @@ pub struct Bus {
     pub min_vm_pu: Option<f64>,
     #[serde(deserialize_with = "from_str")]
     pub name: Option<String>,
-    #[serde(rename = "type")]
-    pub type_: Option<String>, // Added underscore to avoid conflict with Rust keyword
+    pub r#type: Option<String>, // Added underscore to avoid conflict with Rust keyword
     pub vn_kv: f64,
     #[serde(deserialize_with = "from_number")]
     pub zone: Option<i64>,

@@ -1,12 +1,18 @@
  [package]
 name = "rustpower"
-version = "0.2.1"
-edition = "2021"
+version = "0.3.0"
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[workspace]
+members = [
+    "crates/*"
+]
+
 [features]
-default=[]
-klu = ["dep:klu-rs"]
+default=["archive"]
+klu = ["dep:rustpower-sol-klu"]
 archive = ["dep:bevy_archive"]
 
 [profile.release]
@@ -31,7 +37,7 @@ bevy_ecs = "^0.16.0"
 bevy_app = "^0.16.0"
 derive_more = { version = "^1.0", features = ["full"] }
 tabled = "^0.16.0"
-bevy_archive = {git = "https://github.com/chengts95/bevy_archive", optional = true}
+bevy_archive = {version = "^0.1.4-beta.1", optional = true}
 
 [dependencies.rustpower-sol-klu]
 path = "./crates/rustpower-sol-klu"
