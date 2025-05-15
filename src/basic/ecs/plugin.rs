@@ -113,7 +113,7 @@ impl Plugin for ArchivePlugin {
         reg.register::<Port2>();
         reg.register::<VBase>();
 
-        app.insert_resource();
+        app.insert_resource(reg);
     }
 }
 

@@ -10,8 +10,12 @@ use nalgebra::*;
 use nalgebra_sparse::*;
 use num_complex::Complex64;
 
+#[cfg(feature = "klu")]
+use crate::prelude::solver::KLUSolver;
+#[cfg(not(feature = "klu"))]
+use crate::prelude::solver::RSparseSolver;
 use crate::{
-    basic::{self, newton_pf, solver::RSparseSolver, system::PFNetwork},
+    basic::{self, newton_pf,  system::PFNetwork},
     io::pandapower::ecs_net_conv::*,
 };
 
