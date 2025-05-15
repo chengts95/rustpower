@@ -33,6 +33,6 @@ derive_more = { version = "^1.0", features = ["full"] }
 tabled = "^0.16.0"
 bevy_archive = {git = "https://github.com/chengts95/bevy_archive", optional = true}
 
-[dependencies.klu-rs]
-path = "./klu_rs"
+[dependencies.rustpower-sol-klu]
+path = "./crates/rustpower-sol-klu"
 optional = true

@@ -1,6 +1,9 @@
 use rsparse::{self, data, lusol};
 
 #[cfg(feature = "klu")]
+use rustpower_sol_klu as klu_rs;
+
+#[cfg(feature = "klu")]
 #[derive(Default)]
 pub struct KLUSolver(pub klu_rs::KLUSolver);
 
