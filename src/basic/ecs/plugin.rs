@@ -1,4 +1,5 @@
 use bevy_app::prelude::*;
+use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
 
 use crate::io::pandapower::ecs_net_conv::PandaPowerStartupPlugin;
@@ -99,6 +100,21 @@ impl Plugin for SwitchPluginTypeB {
         );
     }
 }
+#[cfg_attr(feature = "archive")]
+pub struct ArchivePlugin;
+#[cfg_attr(feature = "archive")]
+impl Plugin for ArchivePlugin {
+    fn build(&self, app: &mut App) {
+        use crate::prelude::ecs::elements::*;
+        let mut reg = SnapshotRegistry::default();
+
+        reg.register::<Admittance>();
+        reg.register::<Port2>();
+        reg.register::<VBase>();
+
+        app.insert_resource(reg);
+    }
+}
 
 /// Creates a default Bevy application with the base power flow plugin.
 ///
@@ -108,6 +124,9 @@ impl Plugin for SwitchPluginTypeB {
 pub fn default_app() -> App {
     let mut app = App::new();
     app.add_plugins((PandaPowerStartupPlugin, BasePFPlugin));
+    #[cfg(feature = "archive")]
+    app.add_plugins(ArchivePlugin);
+
     app
 }
 

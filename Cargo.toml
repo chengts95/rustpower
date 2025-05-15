@@ -5,7 +5,7 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [features]
-default=["archive"]
+default=[]
 klu = ["dep:klu-rs"]
 archive = ["dep:bevy_archive"]
 
@@ -31,7 +31,7 @@ bevy_ecs = "^0.16.0"
 bevy_app = "^0.16.0"
 derive_more = { version = "^1.0", features = ["full"] }
 tabled = "^0.16.0"
-bevy_archive = {version ="^0.1.3", optional = true}
+bevy_archive = {git = "https://github.com/chengts95/bevy_archive", optional = true}
 
 [dependencies.klu-rs]
 path = "./klu_rs"

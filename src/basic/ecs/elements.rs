@@ -8,12 +8,12 @@ pub use crate::prelude::PVNode;
 use bevy_ecs::prelude::*;
 use derive_more::{Deref, DerefMut};
 use nalgebra::Complex;
-use serde::{Deserialize, Serialize};
 
 /// Base voltage for a bus or system node.
 ///
 /// `VBase` is a wrapper around a `f64` value representing the base voltage of a node.
 #[derive(Debug, Component, Deref, DerefMut, Default)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct VBase(pub f64);
 
 /// Represents an admittance value in a power system.
@@ -21,13 +21,15 @@ pub struct VBase(pub f64);
 /// `Admittance` is a wrapper around a complex number representing the admittance value,
 /// which is essential for modeling the impedance in electrical systems.
 #[derive(Component, Clone, Default, PartialEq, Debug)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct Admittance(pub Complex<f64>);
 
 /// Represents a port with two integer values.
 ///
 /// `Port2` holds two integer values (typically bus or node indices) used to define
 /// the connectivity between two entities in the power grid (like branches).
-#[derive(Component, Deref, DerefMut, Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Component, Deref, DerefMut, Default, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
 pub struct Port2(pub nalgebra::Vector2<i64>);
 
 /// Represents a branch with admittance and port information.
