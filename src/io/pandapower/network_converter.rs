@@ -163,7 +163,7 @@ impl From<Network> for PFNetwork {
             .collect();
 
         let pv_nodes = value
-            .gen
+            .r#gen
             .unwrap_or(Vec::new())
             .iter()
             .map(|x| gen_to_pvnode(x).into_iter())

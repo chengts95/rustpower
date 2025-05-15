@@ -226,7 +226,7 @@ impl From<&str> for SwitchType {
 /// Represents a network.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Network {
-    pub gen: Option<Vec<Gen>>,
+    pub r#gen: Option<Vec<Gen>>,
     pub bus: Vec<Bus>,
     pub load: Option<Vec<Load>>,
     pub line: Option<Vec<Line>>,
@@ -253,7 +253,7 @@ impl ToCSV for Network {
 impl Default for Network {
     fn default() -> Self {
         Self {
-            gen: None,
+            r#gen: None,
             bus: Vec::new(),
             load: None,
             line: None,
@@ -350,7 +350,7 @@ macro_rules! read_json_network {
 /// Loads a CSV folder into a Network structure.
 pub fn load_csv_folder(folder: &str) -> Network {
     let bus = folder.to_owned() + "/bus.csv";
-    let gen = folder.to_owned() + "/gen.csv";
+    let r#gen = folder.to_owned() + "/gen.csv";
     let line = folder.to_owned() + "/line.csv";
     let shunt = folder.to_owned() + "/shunt.csv";
     let trafo = folder.to_owned() + "/trafo.csv";
@@ -361,7 +361,7 @@ pub fn load_csv_folder(folder: &str) -> Network {
     let mut net = Network::default();
     net.bus = load_pandapower_csv(&bus).unwrap();
     read_csv_network_folder!(net,  {
-        gen: &gen,
+        r#gen: &r#gen,
         line: &line,
         shunt: &shunt,
         trafo: &trafo,
@@ -391,7 +391,7 @@ pub fn load_csv_zip(name: &str) -> Result<Network, std::io::Error> {
     let mut net = Network::default();
     net.bus = csv_from_map(&map, "bus.csv").unwrap();
     read_csv_network!(net, map, {
-        gen: "gen.csv",
+        r#gen: "gen.csv",
         line: "line.csv",
         shunt: "shunt.csv",
         trafo: "trafo.csv",
@@ -475,7 +475,7 @@ pub fn load_pandapower_json_obj(json: &Map<String, Value>) -> Network {
     let mut net = Network::default();
     net.bus = load_pandapower_element_json(object, "bus").unwrap();
     read_json_network!(net, object, {
-        gen: "gen",
+        r#gen: "gen",
         line: "line",
         shunt: "shunt",
         trafo: "trafo",
@@ -499,7 +499,7 @@ mod tests {
         let folder = format!("{}/cases", dir);
         let filepath: String = folder.to_owned() + "/networks.json";
         let net = load_pandapower_json(&filepath);
-        net.gen.unwrap();
+        net.r#gen.unwrap();
     }
 
     #[test]

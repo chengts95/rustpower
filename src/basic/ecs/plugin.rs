@@ -1,9 +1,9 @@
 use bevy_app::prelude::*;
- #[cfg(feature = "archive")]
-use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
 
-use crate::io::pandapower::ecs_net_conv::PandaPowerStartupPlugin;
+use crate::io::{
+    archive::aurora_format::ArchivePlugin, pandapower::ecs_net_conv::PandaPowerStartupPlugin,
+};
 
 use super::{network::*, switch::*, systems::init_states};
 
@@ -99,21 +99,6 @@ impl Plugin for SwitchPluginTypeB {
                 .before(init_states)
                 .in_set(PFInitStage),
         );
-    }
-}
-#[cfg(feature = "archive")]
-pub struct ArchivePlugin;
-#[cfg(feature = "archive")]
-impl Plugin for ArchivePlugin {
-    fn build(&self, app: &mut App) {
-        use crate::prelude::ecs::elements::*;
-        let mut reg = SnapshotRegistry::default();
-
-        reg.register::<Admittance>();
-        reg.register::<Port2>();
-        reg.register::<VBase>();
-
-        app.insert_resource(reg);
     }
 }
 

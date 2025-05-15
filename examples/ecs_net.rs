@@ -1,7 +1,11 @@
 use std::env;
 
+use bevy_archive::prelude::save_world_manifest;
 use ecs::{elements::PPNetwork, network::*, post_processing::*};
-use rustpower::{io::pandapower::*, prelude::*};
+use rustpower::{
+    io::{archive, pandapower::*},
+    prelude::*,
+};
 
 #[macro_export]
 macro_rules! timeit {
@@ -57,4 +61,8 @@ fn main() {
     );
     pf_net.post_process();
     pf_net.print_res_bus();
+    pf_net.register_types();
+    let reg = pf_net.get_snapshot_reg();
+    let a = save_world_manifest(pf_net.world(), reg.unwrap());
+    a.unwrap().to_file("IEEE118.toml", None).unwrap();
 }

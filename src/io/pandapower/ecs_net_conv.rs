@@ -187,7 +187,7 @@ fn processing_pq_elems(mut cmd: Commands, net: Res<PPNetwork>) {
 
 /// Processes PV nodes (generators) in the network and spawns them into the ECS.
 fn processing_pv_nodes(mut cmd: Commands, net: Res<PPNetwork>) {
-    if let Some(elems) = &net.gen {
+    if let Some(elems) = &net.r#gen {
         let m: Vec<_> = elems
             .iter()
             .enumerate()

@@ -15,7 +15,7 @@ use crate::prelude::solver::KLUSolver;
 #[cfg(not(feature = "klu"))]
 use crate::prelude::solver::RSparseSolver;
 use crate::{
-    basic::{self, newton_pf,  system::PFNetwork},
+    basic::{self, newton_pf, system::PFNetwork},
     io::pandapower::ecs_net_conv::*,
 };
 
@@ -209,13 +209,20 @@ pub fn ecs_run_pf(mut cmd: Commands, mat: Res<PowerFlowMat>, cfg: Res<PowerFlowC
         }
     }
 }
-
+impl PowerGrid {
+    pub fn app(&self) -> &App {
+        &self.data_storage
+    }
+    pub fn app_mut(&mut self) -> &mut App {
+        &mut self.data_storage
+    }
+}
 impl DataOps for PowerGrid {
     fn world(&self) -> &World {
-        self.data_storage.world()
+        self.app().world()
     }
     fn world_mut(&mut self) -> &mut World {
-        self.data_storage.world_mut()
+        self.app_mut().world_mut()
     }
     fn get<T: Component>(&self, entity: Entity) -> Option<&T> {
         self.world().get(entity)
