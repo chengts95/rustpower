@@ -1,4 +1,5 @@
 use bevy_app::prelude::*;
+ #[cfg(feature = "archive")]
 use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
 
@@ -100,9 +101,9 @@ impl Plugin for SwitchPluginTypeB {
         );
     }
 }
-#[cfg_attr(feature = "archive")]
+#[cfg(feature = "archive")]
 pub struct ArchivePlugin;
-#[cfg_attr(feature = "archive")]
+#[cfg(feature = "archive")]
 impl Plugin for ArchivePlugin {
     fn build(&self, app: &mut App) {
         use crate::prelude::ecs::elements::*;
@@ -112,7 +113,7 @@ impl Plugin for ArchivePlugin {
         reg.register::<Port2>();
         reg.register::<VBase>();
 
-        app.insert_resource(reg);
+        app.insert_resource();
     }
 }
 
