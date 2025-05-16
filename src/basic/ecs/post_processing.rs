@@ -96,7 +96,7 @@ fn extract_res_bus(
         sbus_res[node] += s_shunt;
     });
 
-    for (idx, entity) in nodes.0.iter() {
+    for (idx, entity) in nodes.forward.iter().enumerate() {
         cmd.entity(*entity).insert((
             SBusResult(sbus_res[*idx as usize] * common.sbase),
             VBusResult(v[*idx as usize]),

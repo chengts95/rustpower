@@ -5,7 +5,7 @@ use crate::io::{
     archive::aurora_format::ArchivePlugin, pandapower::ecs_net_conv::PandaPowerStartupPlugin,
 };
 
-use super::{network::*, switch::*, systems::init_states};
+use super::{elements::*, network::*, systems::init_states};
 
 /// Represents the power flow initialization stage for Bevy's ECS system.
 #[derive(Debug, SystemSet, Hash, Eq, PartialEq, Clone)]

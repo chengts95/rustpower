@@ -1,6 +1,9 @@
 use std::collections::HashMap;
-
-pub use super::switch::*;
+mod switch;
+mod bus;
+mod units;
+use bevy_ecs::entity::EntityHash;
+pub use switch::*;
 use crate::io::pandapower;
 pub use crate::prelude::ExtGridNode;
 pub use crate::prelude::PQNode;
@@ -67,7 +70,14 @@ pub struct PFNode(pub usize);
 ///
 /// `NodeLookup` helps in quickly finding the ECS entity corresponding to a node in the power flow network.
 #[derive(Default, Debug, Resource)]
-pub struct NodeLookup(pub HashMap<i64, Entity>);
+pub struct NodeLookup {
+    /// bus_id → entity 映射
+    pub forward: Vec<Option<Entity>>,
+    /// entity → bus_id 映射
+    pub reverse: HashMap<Entity, i64, EntityHash>,
+}
+
+
 
 /// Component representing an auxiliary node in the network.
 ///
@@ -147,5 +157,59 @@ impl From<ExtGridNode> for NodeType {
 impl From<AuxNode> for NodeType {
     fn from(node: AuxNode) -> Self {
         NodeType::AUX(node)
+    }
+}
+
+
+impl NodeLookup {
+    pub fn len(&self) -> usize {
+        self.forward.len()
+    }
+    pub fn insert(&mut self, bus_id: i64, entity: Entity) {
+        let idx = bus_id as usize;
+        if self.forward.len() <= idx {
+            self.forward.resize_with(idx + 1, || None);
+        }
+
+        if let Some(old_id) = self.reverse.insert(entity, bus_id) {
+            if let Some(e) = self.forward.get_mut(old_id as usize) {
+                if *e == Some(entity) {
+                    *e = None;
+                }
+            }
+        }
+
+        self.forward[idx] = Some(entity);
+    }
+        pub fn remove_entity(&mut self, entity: Entity) {
+        if let Some(id) = self.reverse.remove(&entity) {
+            if let Some(slot) = self.forward.get_mut(id as usize) {
+                if *slot == Some(entity) {
+                    *slot = None;
+                }
+            }
+        }
+    }
+
+    pub fn remove_id(&mut self, bus_id: i64) {
+        if let Some(Some(entity)) = self.forward.get_mut(bus_id as usize) {
+            self.reverse.remove(entity);
+        }
+    }
+
+        pub fn get_entity(&self, bus_id: i64) -> Option<Entity> {
+        self.forward.get(bus_id as usize).and_then(|x| *x)
+    }
+
+    pub fn get_id(&self, entity: Entity) -> Option<i64> {
+        self.reverse.get(&entity).copied()
+    }
+
+    pub fn contains_id(&self, bus_id: i64) -> bool {
+        self.forward.get(bus_id as usize).map_or(false, |e| e.is_some())
+    }
+
+    pub fn contains_entity(&self, entity: Entity) -> bool {
+        self.reverse.contains_key(&entity)
     }
 }

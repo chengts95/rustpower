@@ -76,7 +76,7 @@ pub(crate) fn create_y_bus(
     node_lookup: Res<NodeLookup>,
     y_br: Query<(&Admittance, &Port2, &VBase)>,
 ) -> (CsrMatrix<Complex64>, CsrMatrix<Complex64>) {
-    let nodes = node_lookup.0.len();
+    let nodes = node_lookup.len();
     let branches = y_br.iter();
     let s_base = common.sbase;
 

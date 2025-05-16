@@ -4,12 +4,15 @@ use crate::{
 };
 use bevy_ecs::prelude::*;
 use derive_more::{Deref, DerefMut};
-use nalgebra::{vector, Complex, DVector};
+use nalgebra::{Complex, DVector, vector};
 use nalgebra_sparse::{CooMatrix, CscMatrix, CsrMatrix};
 use std::collections::{HashMap, HashSet};
 
 use self::sparse::conj::RealImage;
-use super::{elements::*, network::PowerFlowMat, systems::create_permutation_matrix};
+use super::{
+    super::{network::PowerFlowMat, systems::create_permutation_matrix},
+    *
+};
 
 /// Represents a network switch in the power flow network.
 ///
