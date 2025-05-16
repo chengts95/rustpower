@@ -332,7 +332,7 @@ fn init_node_lookup(mut cmd: Commands, value: Res<PPNetwork>) {
     let mut d = NodeLookup::default();
     for i in &value.bus {
         let idx = cmd.spawn(PFNode(i.index as usize));
-        d.0.insert(i.index, idx.id());
+        d.insert(i.index, idx.id());
     }
     cmd.insert_resource(d);
 }

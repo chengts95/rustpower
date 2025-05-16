@@ -1,16 +1,16 @@
 use std::collections::HashMap;
-mod switch;
 mod bus;
+mod switch;
 mod units;
-use bevy_ecs::entity::EntityHash;
-pub use switch::*;
 use crate::io::pandapower;
 pub use crate::prelude::ExtGridNode;
 pub use crate::prelude::PQNode;
 pub use crate::prelude::PVNode;
+use bevy_ecs::entity::EntityHash;
 use bevy_ecs::prelude::*;
 use derive_more::{Deref, DerefMut};
 use nalgebra::Complex;
+pub use switch::*;
 
 /// Base voltage for a bus or system node.
 ///
@@ -76,8 +76,6 @@ pub struct NodeLookup {
     /// entity → bus_id 映射
     pub reverse: HashMap<Entity, i64, EntityHash>,
 }
-
-
 
 /// Component representing an auxiliary node in the network.
 ///
@@ -160,10 +158,15 @@ impl From<AuxNode> for NodeType {
     }
 }
 
-
 impl NodeLookup {
     pub fn len(&self) -> usize {
-        self.forward.len()
+        self.reverse.len()
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (i64, Entity)> + '_ {
+        self.forward
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| v.map(|e| (i as i64, e)))
     }
     pub fn insert(&mut self, bus_id: i64, entity: Entity) {
         let idx = bus_id as usize;
@@ -181,7 +184,7 @@ impl NodeLookup {
 
         self.forward[idx] = Some(entity);
     }
-        pub fn remove_entity(&mut self, entity: Entity) {
+    pub fn remove_entity(&mut self, entity: Entity) {
         if let Some(id) = self.reverse.remove(&entity) {
             if let Some(slot) = self.forward.get_mut(id as usize) {
                 if *slot == Some(entity) {
@@ -197,7 +200,7 @@ impl NodeLookup {
         }
     }
 
-        pub fn get_entity(&self, bus_id: i64) -> Option<Entity> {
+    pub fn get_entity(&self, bus_id: i64) -> Option<Entity> {
         self.forward.get(bus_id as usize).and_then(|x| *x)
     }
 
@@ -206,7 +209,9 @@ impl NodeLookup {
     }
 
     pub fn contains_id(&self, bus_id: i64) -> bool {
-        self.forward.get(bus_id as usize).map_or(false, |e| e.is_some())
+        self.forward
+            .get(bus_id as usize)
+            .map_or(false, |e| e.is_some())
     }
 
     pub fn contains_entity(&self, entity: Entity) -> bool {

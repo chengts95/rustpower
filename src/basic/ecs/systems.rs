@@ -169,7 +169,7 @@ pub(crate) fn init_bus_status(
     common: Res<PFCommonData>,
     q: Query<&NodeType>,
 ) -> SystemBusStatus {
-    let nodes = node_lookup.0.len();
+    let nodes = node_lookup.len();
     let s_base = common.sbase;
 
     // Initialize sets for different bus types
@@ -203,8 +203,8 @@ pub(crate) fn init_bus_status(
     let pv_ext: HashSet<_> = pv_set.union(&ext_set).cloned().collect();
     let mut pv_only: Vec<_> = pv_set.difference(&ext_set).cloned().collect();
     let mut pq_only: Vec<_> = node_lookup
-        .0
-        .keys()
+        .reverse
+        .values()
         .cloned()
         .collect::<HashSet<_>>()
         .difference(&pv_ext)

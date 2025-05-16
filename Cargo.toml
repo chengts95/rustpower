@@ -13,7 +13,7 @@ members = [
 [features]
 default=["archive"]
 klu = ["dep:rustpower-sol-klu"]
-archive = ["dep:bevy_archive"]
+archive = ["dep:bevy_archive","dep:const_format"]
 
 [profile.release]
 opt-level = 3              # Use slightly better optimizations.
@@ -37,7 +37,9 @@ bevy_ecs = "^0.16.0"
 bevy_app = "^0.16.0"
 derive_more = { version = "^1.0", features = ["full"] }
 tabled = "^0.16.0"
-bevy_archive = {version = "^0.1.4-beta.1", optional = true}
+bevy_archive = {path="C:/dev_workspace/rust/bevy_archive", optional = true}
+const_format = {version = "^0.2.34", optional = true}
+enum_dispatch = "0.3.13"
 
 [dependencies.rustpower-sol-klu]
 path = "./crates/rustpower-sol-klu"

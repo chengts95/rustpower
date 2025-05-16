@@ -162,7 +162,7 @@ pub fn process_switch_state(
     net: Res<PPNetwork>,
     q: Query<(Entity, &Switch, &SwitchState)>,
 ) {
-    let node_idx: Vec<u64> = nodes.0.keys().map(|&x| x as u64).collect();
+    let node_idx: Vec<u64> = nodes.reverse.values().map(|&x| x as u64).collect();
     let mut union_find: Option<NodeMerge> = if q.iter().count() > 0 {
         Some(NodeMerge::new(&node_idx))
     } else {
