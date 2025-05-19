@@ -174,7 +174,7 @@ pub fn ecs_run_pf(mut cmd: Commands, mat: Res<PowerFlowMat>, cfg: Res<PowerFlowC
     #[cfg(feature = "klu")]
     let mut solver = KLUSolver::default();
     #[cfg(not(feature = "klu"))]
-    let mut solver = RSparseSolver {};
+    let mut solver = RSparseSolver::default();
 
     let v = newton_pf(
         &mat.y_bus,

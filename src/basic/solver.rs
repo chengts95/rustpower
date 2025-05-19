@@ -1,4 +1,8 @@
-use rsparse::{self, data, lusol};
+use rsparse::{
+    self,
+    data::{self, Numeric, Symb},
+    lsolve, lu, sqr, usolve,
+};
 
 #[cfg(feature = "klu")]
 use rustpower_sol_klu as klu_rs;
@@ -8,7 +12,10 @@ use rustpower_sol_klu as klu_rs;
 pub struct KLUSolver(pub klu_rs::KLUSolver);
 
 #[derive(Default)]
-pub struct RSparseSolver;
+pub struct RSparseSolver {
+    x: Option<Vec<f64>>,
+    symbolic: Option<Symb>,
+}
 
 #[allow(non_snake_case)]
 /// A trait for solving sparse linear systems.
@@ -97,6 +104,22 @@ fn reset_test() {
     klu.0.reset();
 }
 
+fn ipvec_identity<T: Numeric<T>>(b: &[T], x: &mut [T]) {
+    x.copy_from_slice(b);
+}
+
+fn ipvec_perm<T: Numeric<T>>(p: &[isize], b: &[T], x: &mut [T]) {
+    for k in 0..b.len() {
+        x[p[k] as usize] = b[k];
+    }
+}
+
+fn ipvec<T: Numeric<T>>(p: &Option<Vec<isize>>, b: &[T], x: &mut [T]) {
+    match p {
+        Some(pvec) => ipvec_perm(pvec, b, x),
+        None => ipvec_identity(b, x),
+    }
+}
 #[allow(non_snake_case)]
 impl Solve for RSparseSolver {
     #[allow(unused)]
@@ -121,17 +144,28 @@ impl Solve for RSparseSolver {
         b: &mut [f64],
         n: usize,
     ) -> Result<(), &'static str> {
-        let mut mat: data::Sprs<f64> =
-            rsparse::data::Sprs::zeros(Ap.len() - 1, Ap.len() - 1, Ai.len());
-
-        let p = unsafe { std::slice::from_raw_parts_mut(Ap.as_mut_ptr() as *mut isize, Ap.len()) };
-        unsafe {
-            mat.i.clone_from_slice(Ai);
-            mat.p.clone_from_slice(p);
-            mat.x.clone_from_slice(Ax);
+        let n = Ap.len() - 1;
+        let p: Vec<isize> = Ap.iter().map(|&v| v as isize).collect();
+        let mut a = data::Sprs {
+            m: n,
+            n: n,
+            i: Ai.to_vec(),
+            p,
+            x: Ax.to_vec(),
+            nzmax: Ax.len(),
+        };
+        if self.symbolic.is_none() {
+            self.symbolic = Some(sqr(&a, 1, false));
+            self.x = Some(vec![0.0; n]);
         }
+        let mut x = self.x.as_mut().unwrap();
+        let mut s = self.symbolic.as_mut().unwrap();
+        let n = lu(&a, &mut s, 1e-6).map_err(|_| "LU factorization failed")?; // numeric LU factorization
+        ipvec(&n.pinv, b, &mut x[..]); // x = P*b
+        lsolve(&n.l, &mut x); // x = L\x
+        usolve(&n.u, &mut x); // x = U\x
+        ipvec(&s.q, &x, &mut b[..]); // b = Q*x
 
-        lusol(&mat, b, 1, 1e-6);
         Ok(())
     }
 }

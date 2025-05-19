@@ -287,7 +287,7 @@ impl RunPF for PFNetwork {
         #[cfg(feature = "klu")]
         let mut solver = KLUSolver::default();
         #[cfg(not(feature = "klu"))]
-        let mut solver = RSparseSolver {};
+        let mut solver = RSparseSolver::default();
         let v = newton_pf(&Ybus, &Sbus, &v_init, npv, npq, tol, max_it, &mut solver);
         let (v, iter) = v.unwrap();
         let x = reorder.transpose() * &v;
