@@ -10,7 +10,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 macro_rules! define_unit {
     ($unit:ident, $suffix:literal) => {
-        #[derive(Component, Default, Serialize, Deserialize, Clone)]
+        #[derive(Component, Debug, Default, Serialize, Deserialize, Clone)]
         pub struct $unit;
 
         impl UnitTrait for $unit {
@@ -31,7 +31,7 @@ macro_rules! define_snapshot {
         impl SnapShotReg for $ty {}
     };
 }
-#[derive(Component, Default, Serialize, Deserialize, Clone, From, Into, Deref, DerefMut)]
+#[derive(Component, Debug,Default, Serialize, Deserialize, Clone, From, Into, Deref, DerefMut)]
 #[serde(transparent)]
 pub struct Pair<T, Unit>(
     pub T,
@@ -68,6 +68,10 @@ pub trait UnitTrait {
 
 define_unit!(PerUnit, "pu");
 define_unit!(KV, "kv");
+define_unit!(MW, "mw");
+define_unit!(MVar, "mvar");
+define_unit!(KW, "kw");
+
 
 impl<T, Unit: UnitTrait> UnitTrait for Pair<T, Unit> {
     fn suffix() -> &'static str {
@@ -76,7 +80,7 @@ impl<T, Unit: UnitTrait> UnitTrait for Pair<T, Unit> {
 
     const SUFFIX: &'static str = Unit::SUFFIX;
 }
-#[derive(Component, Serialize, Deserialize, Clone)]
+#[derive(Debug,Component, Serialize, Deserialize, Clone)]
 pub struct Limit<T> {
     pub min: T,
     pub max: T,
