@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+mod generator;
 mod bus;
+mod line;
 mod switch;
 mod units;
 use crate::io::pandapower;

@@ -131,6 +131,9 @@ pub mod systems {
 
         // 2️⃣ 更新变更/新增的
         for (entity, bus_id) in changed.iter() {
+            if lookup.contains_entity(entity) {
+                lookup.remove_entity(entity);
+            }
             lookup.insert(bus_id.0, entity);
         }
     }
