@@ -2,30 +2,23 @@ use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
 use derive_more::From;
 
-use std::marker::PhantomData;
 
-use super::{
-    bus::{OutOfService, SnaptShotRegGroup},
-    units::*,
-};
-use crate::io::pandapower::{Gen, Line};
+use super::bus::{OutOfService, SnaptShotRegGroup};
+use crate::io::pandapower::Line;
 use bevy_ecs::name::Name;
 
-#[derive(Component, Debug, Clone)]
-#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
-pub struct TargetBus(pub i64);
 
 #[derive(Component, Debug, Clone)]
-#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct FromBus(pub i64);
 
 #[derive(Component, Debug, Clone)]
-#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
+#[derive(serde::Serialize, serde::Deserialize)]
 
 pub struct ToBus(pub i64);
 
 #[derive(Component, Debug, Clone)]
-#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct LineParams {
     pub r_ohm_per_km: f64,
     pub x_ohm_per_km: f64,
@@ -49,7 +42,7 @@ pub struct LineMeta {
     pub out: OutOfService,
 }
 #[derive(Component, Debug, Clone)]
-#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct StandardModelType(pub String); // std_type only
 pub struct LineSnapShotReg;
 impl From<&Line> for LineBundle {
@@ -76,12 +69,12 @@ impl From<&Line> for LineBundle {
 }
 
 pub struct LineSnapshotReg;
+
 impl SnaptShotRegGroup for LineSnapshotReg {
     fn register_snap_shot(reg: &mut SnapshotRegistry) {
         reg.register::<FromBus>();
         reg.register::<ToBus>();
         reg.register::<LineParams>();
         reg.register::<StandardModelType>();
-        reg.register::<OutOfService>();
     }
 }

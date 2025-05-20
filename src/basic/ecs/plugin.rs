@@ -110,7 +110,6 @@ impl Plugin for SwitchPluginTypeB {
 pub fn default_app() -> App {
     let mut app = App::new();
     app.add_plugins((PandaPowerStartupPlugin, BasePFPlugin));
-    #[cfg(feature = "archive")]
     app.add_plugins(ArchivePlugin);
 
     app

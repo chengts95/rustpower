@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::component::Component;
 use derive_more::derive::{Deref, DerefMut, From};
-
+#[allow(unused_imports)]
 use const_format::concatcp;
 use derive_more::derive::Into;
 use serde::de::DeserializeOwned;

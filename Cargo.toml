@@ -13,11 +13,10 @@ default-members = [
     "."
 ]
 [features]
-default=["archive","rsparse"]
+default=["rsparse"]
 klu = ["dep:rustpower-sol-klu"]
 faer = ["dep:faer"]
 rsparse = ["dep:rsparse"]
-archive = ["dep:bevy_archive","dep:const_format"]
 
 [profile.release]
 opt-level = 3              
@@ -41,8 +40,8 @@ bevy_ecs = "^0.16.0"
 bevy_app = "^0.16.0"
 derive_more = { version = "^1.0", features = ["full"] }
 tabled = "^0.16.0"
-bevy_archive = {git="https://github.com/chengts95/bevy_archive", optional = true}
-const_format = {version = "^0.2.34", optional = true}
+bevy_archive = {git="https://github.com/chengts95/bevy_archive"}
+const_format = {version = "^0.2.34"}
 faer = {version = "^0.22", optional = true}
 [dependencies.rustpower-sol-klu]
 path = "./crates/rustpower-sol-klu"

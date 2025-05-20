@@ -11,19 +11,16 @@ use super::units::*;
 
 use bevy_ecs::name::Name;
 
-#[derive(Component)]
-#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Component, serde::Serialize, serde::Deserialize)]
 pub struct OutOfService;
 #[derive(Component)]
 #[require(VNominal)]
-#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct BusID(pub i64);
-#[derive(Component)]
-#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Component, serde::Serialize, serde::Deserialize)]
 pub struct BusType(pub String);
 
-#[derive(Component, Clone, From, Into, Deref, DerefMut)]
-#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Component, Clone, From, Into, Deref, DerefMut, serde::Serialize, serde::Deserialize)]
 pub struct VmLimit<T: UnitTrait>(pub Pair<Limit<f64>, T>);
 impl Default for VmLimit<PerUnit> {
     fn default() -> Self {
@@ -42,8 +39,7 @@ impl<T: UnitTrait> VmLimit<T> {
         self.min
     }
 }
-#[derive(Component)]
-#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Component, serde::Serialize, serde::Deserialize)]
 pub struct VNominal(pub Pair<f64, KV>);
 impl Default for VNominal {
     fn default() -> Self {
@@ -51,8 +47,7 @@ impl Default for VNominal {
     }
 }
 
-#[derive(Component, Default)]
-#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Component, Default, serde::Serialize, serde::Deserialize)]
 pub struct Zone(pub i64);
 #[derive(Bundle, Default)]
 pub struct BusBundle {
@@ -88,9 +83,7 @@ pub trait SnaptShotRegGroup {
 
 pub struct BusSnapShotReg;
 
-#[derive(Component, Default)]
-#[cfg(feature = "archive")]
-#[cfg_attr(feature = "archive", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Component, Default, serde::Serialize, serde::Deserialize)]
 pub struct NameWrapper(pub String);
 impl From<&Name> for NameWrapper {
     fn from(value: &Name) -> Self {
@@ -113,7 +106,7 @@ impl SnaptShotRegGroup for BusSnapShotReg {
 }
 
 pub mod systems {
-    use bevy_ecs::{query, system::command::init_resource, world::World};
+    
 
     use crate::basic::ecs::elements::NodeLookup;
 
