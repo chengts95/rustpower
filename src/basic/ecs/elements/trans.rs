@@ -1,9 +1,14 @@
+use crate::io::pandapower::{Gen, Transformer};
+use crate::prelude::ecs::defer_builder::DeferBundle;
+use crate::prelude::ecs::defer_builder::DeferredEntityBuilder;
 use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
+use rustpower_proc_marco::DeferBundle;
 
-use crate::io::pandapower::{Gen, Transformer};
-
-use super::line::{FromBus, ToBus};
+use super::{
+    bus::SnaptShotRegGroup,
+    line::{FromBus, StandardModelType, ToBus},
+};
 
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TransformerDevice {
@@ -33,16 +38,18 @@ pub struct TapChanger {
     pub is_phase_shifter: bool,
 }
 
-#[derive(Bundle, Debug, Clone)]
+#[derive(DeferBundle, Debug, Clone)]
 pub struct TransformerBundle {
     pub device: TransformerDevice,
-    pub from_bus: FromBus, // 包装 hv_bus
-    pub to_bus: ToBus,     // 包装 lv_bus
+    pub from_bus: FromBus, // hv_bus
+    pub to_bus: ToBus,     //  lv_bus
+    pub name: Option<Name>,
+    pub std_type: Option<StandardModelType>,
 }
 
 impl From<&Transformer> for TransformerBundle {
     fn from(t: &Transformer) -> Self {
-        TransformerBundle {
+        Self {
             device: TransformerDevice {
                 df: t.df,
                 i0_percent: t.i0_percent,
@@ -68,10 +75,17 @@ impl From<&Transformer> for TransformerBundle {
             },
             from_bus: FromBus(t.hv_bus as i64),
             to_bus: ToBus(t.lv_bus as i64),
+            name: t.name.as_ref().map(|x| Name::new(x.clone())),
+            std_type: t.std_type.as_ref().map(|x| StandardModelType(x.clone())),
         }
     }
 }
-
+pub struct TransSnapShotReg;
+impl SnaptShotRegGroup for TransSnapShotReg {
+    fn register_snap_shot(reg: &mut SnapshotRegistry) {
+        reg.register::<TransformerDevice>();
+    }
+}
 pub mod systems {
     use bevy_ecs::{entity, relationship::RelatedSpawnerCommands};
     use nalgebra::{Complex, vector};
@@ -83,11 +97,12 @@ pub mod systems {
 
     use super::*;
     pub fn generate_transformer(
-        commands: &mut Commands,
+        mut commands: Commands,
         q: Query<(Entity, &TransformerDevice, &FromBus, &ToBus)>,
     ) {
         q.iter().for_each(|(entity, transformer, from, to)| {
             let port = Port2::new(from.0, to.0);
+            generate_transformer_admittance(&mut commands, entity, transformer, &port);
         });
     }
     fn generate_transformer_admittance(

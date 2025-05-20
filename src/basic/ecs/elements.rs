@@ -8,6 +8,7 @@ mod shunt;
 mod switch;
 mod trans;
 mod units;
+mod ele_process;
 use crate::io::pandapower;
 
 use bevy_ecs::entity::EntityHash;

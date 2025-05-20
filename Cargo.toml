@@ -10,7 +10,8 @@ members = [
     "crates/*"
 ]
 default-members = [
-    "."
+    ".",
+    "crates/rustpower_proc_marco",
 ]
 [features]
 default=["rsparse"]
@@ -43,6 +44,8 @@ tabled = "^0.16.0"
 bevy_archive = {git="https://github.com/chengts95/bevy_archive"}
 const_format = {version = "^0.2.34"}
 faer = {version = "^0.22", optional = true}
+rustpower_proc_marco = {path = "crates/rustpower_proc_marco"}
+bumpalo = "^3.17.0"
 [dependencies.rustpower-sol-klu]
 path = "./crates/rustpower-sol-klu"
 optional = true

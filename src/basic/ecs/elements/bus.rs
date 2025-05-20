@@ -82,7 +82,15 @@ pub trait SnaptShotRegGroup {
 }
 
 pub struct BusSnapShotReg;
-
+impl SnaptShotRegGroup for BusSnapShotReg {
+    fn register_snap_shot(reg: &mut SnapshotRegistry) {
+        reg.register::<BusID>();
+        reg.register::<Zone>();
+        reg.register_with::<Name, NameWrapper>();
+        VmLimitPerUnit::register_snap_shot(reg);
+        VNominal::register_snap_shot(reg);
+    }
+}
 #[derive(Component, Default, serde::Serialize, serde::Deserialize)]
 pub struct NameWrapper(pub String);
 impl From<&Name> for NameWrapper {
@@ -95,15 +103,7 @@ impl Into<Name> for NameWrapper {
         Name::new(self.0)
     }
 }
-impl SnaptShotRegGroup for BusSnapShotReg {
-    fn register_snap_shot(reg: &mut SnapshotRegistry) {
-        reg.register::<BusID>();
-        reg.register::<Zone>();
-        reg.register_with::<Name, NameWrapper>();
-        VmLimitPerUnit::register_snap_shot(reg);
-        VNominal::register_snap_shot(reg);
-    }
-}
+
 
 pub mod systems {
 

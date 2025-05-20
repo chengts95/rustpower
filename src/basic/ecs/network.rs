@@ -11,7 +11,7 @@ use nalgebra_sparse::*;
 use num_complex::Complex64;
 
 use crate::{
-    basic::{self, newton_pf, solver::DefaultSolver},
+    basic::{newton_pf, solver::DefaultSolver},
     io::pandapower::ecs_net_conv::*,
 };
 
@@ -20,24 +20,7 @@ use super::{elements::*, systems::init_states};
 /// Represents the ground node in the network.
 pub const GND: i64 = -1;
 
-/// Extracts nodes from the ECS world based on a given extractor function.
-///
-/// # Parameters
-/// - `world`: The ECS world containing the nodes.
-/// - `extractor`: A closure that defines how to extract specific node information from `NodeType`.
-///
-/// # Returns
-/// A vector of extracted node information based on the provided extractor.
-fn extract_node<T, F>(world: &mut World, extractor: F) -> Vec<T>
-where
-    F: Fn(&NodeType) -> Option<T>,
-{
-    world
-        .query::<&NodeType>()
-        .iter(world)
-        .filter_map(extractor)
-        .collect()
-}
+
 
 /// Represents the power grid, managing the ECS world for power flow calculations.
 #[derive(Default)]
