@@ -10,12 +10,9 @@ use nalgebra::*;
 use nalgebra_sparse::*;
 use num_complex::Complex64;
 
-#[cfg(feature = "klu")]
-use crate::prelude::solver::KLUSolver;
-#[cfg(not(feature = "klu"))]
-use crate::prelude::solver::RSparseSolver;
+
 use crate::{
-    basic::{self, newton_pf, system::PFNetwork},
+    basic::{self, newton_pf, solver::DefaultSolver, system::PFNetwork},
     io::pandapower::ecs_net_conv::*,
 };
 
@@ -171,11 +168,8 @@ pub fn ecs_run_pf(mut cmd: Commands, mat: Res<PowerFlowMat>, cfg: Res<PowerFlowC
     let max_it = cfg.max_it;
     let tol = cfg.tol;
 
-    #[cfg(feature = "klu")]
-    let mut solver = KLUSolver::default();
-    #[cfg(not(feature = "klu"))]
-    let mut solver = RSparseSolver::default();
 
+    let mut solver = DefaultSolver::default();
     let v = newton_pf(
         &mat.y_bus,
         &mat.s_bus,

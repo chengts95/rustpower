@@ -3,18 +3,14 @@
 use std::{f64::consts::PI, str::FromStr};
 
 use super::{admittance, test_ieee39};
-use crate::basic::newtonpf::newton_pf;
+use crate::basic::{newtonpf::newton_pf, solver::DefaultSolver};
 #[allow(unused_imports)]
-use crate::basic::solver::RSparseSolver;
 use crate::io::pandapower::*;
 use bevy_ecs::component::Component;
 use nalgebra::*;
 use nalgebra_sparse::*;
 use num_complex::Complex64;
 use num_traits::One;
-
-#[cfg(feature = "klu")]
-use crate::basic::solver::KLUSolver;
 
 /// Represents the ground node in the network.
 pub const GND: i32 = -1;
@@ -284,10 +280,7 @@ impl RunPF for PFNetwork {
     ) -> (DVector<Complex64>, usize) {
         let (reorder, Ybus, Sbus, v_init, npv, npq) = self.prepare_matrices(v_init);
 
-        #[cfg(feature = "klu")]
-        let mut solver = KLUSolver::default();
-        #[cfg(not(feature = "klu"))]
-        let mut solver = RSparseSolver::default();
+        let mut solver = DefaultSolver::default();
         let v = newton_pf(&Ybus, &Sbus, &v_init, npv, npq, tol, max_it, &mut solver);
         let (v, iter) = v.unwrap();
         let x = reorder.transpose() * &v;

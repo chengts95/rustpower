@@ -13,14 +13,16 @@ default-members = [
     "."
 ]
 [features]
-default=["archive"]
+default=["archive","rsparse"]
 klu = ["dep:rustpower-sol-klu"]
+faer = ["dep:faer"]
+rsparse = ["dep:rsparse"]
 archive = ["dep:bevy_archive","dep:const_format"]
 
 [profile.release]
-opt-level = 3              # Use slightly better optimizations.
+opt-level = 3              
 overflow-checks = false     # Disable integer overflow checks.
-lto = true
+lto = "fat"
 
 [dependencies]
 ordered-float = { version = ">3.0", default-features = false }
@@ -32,7 +34,7 @@ serde_json = ">=1.0"
 num-traits = ">=0.2"
 num-derive = ">=0.3"
 num-complex = ">=0.4"
-rsparse = "^1.2"
+rsparse = {version ="^1.2", optional = true}
 csv = "^1.3.0"
 zip = "^3.0.0"
 bevy_ecs = "^0.16.0"
@@ -41,8 +43,7 @@ derive_more = { version = "^1.0", features = ["full"] }
 tabled = "^0.16.0"
 bevy_archive = {git="https://github.com/chengts95/bevy_archive", optional = true}
 const_format = {version = "^0.2.34", optional = true}
-enum_dispatch = "0.3.13"
-
+faer = {version = "^0.22", optional = true}
 [dependencies.rustpower-sol-klu]
 path = "./crates/rustpower-sol-klu"
 optional = true
