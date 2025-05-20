@@ -1,45 +1,86 @@
 use std::collections::HashMap;
-mod generator;
 mod bus;
+mod generator;
 mod line;
-mod switch;
-mod units;
 mod load;
 mod sgen;
 mod shunt;
+mod switch;
 mod trans;
+mod units;
 use crate::io::pandapower;
-pub use crate::prelude::ExtGridNode;
-pub use crate::prelude::PQNode;
-pub use crate::prelude::PVNode;
+
 use bevy_ecs::entity::EntityHash;
 use bevy_ecs::prelude::*;
 use derive_more::{Deref, DerefMut};
 use nalgebra::Complex;
 pub use switch::*;
+/// Represents a node with specified power and bus information in a power system.
+#[derive(Debug, Clone, Copy, Default, Component, serde::Serialize, serde::Deserialize)]
+pub struct PQNode {
+    /// The complex power injected at the node.
+    pub s: Complex<f64>,
+    /// The bus identifier of the node.
+    pub bus: i64,
+}
+
+/// Represents a node with specified active power, voltage, and bus information in a power system.
+#[derive(Debug, Clone, Copy, Default, Component, serde::Serialize, serde::Deserialize)]
+pub struct PVNode {
+    /// The active power injected at the node.
+    pub p: f64,
+    /// The voltage magnitude at the node.
+    pub v: f64,
+    /// The bus identifier of the node.
+    pub bus: i64,
+}
+
+/// Represents an external grid node with voltage, phase, and bus information.
+#[derive(Debug, Clone, Copy, Component, serde::Serialize, serde::Deserialize)]
+pub struct ExtGridNode {
+    /// The voltage magnitude at the external grid node.
+    pub v: f64,
+    /// The phase angle at the external grid node.
+    pub phase: f64,
+    /// The bus identifier of the external grid node.
+    pub bus: i64,
+}
 
 /// Base voltage for a bus or system node.
 ///
 /// `VBase` is a wrapper around a `f64` value representing the base voltage of a node.
-#[derive(Debug, Component, Deref, DerefMut, Default)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Component, Deref, DerefMut, Default, serde::Serialize, serde::Deserialize)]
 pub struct VBase(pub f64);
 
 /// Represents an admittance value in a power system.
 ///
 /// `Admittance` is a wrapper around a complex number representing the admittance value,
 /// which is essential for modeling the impedance in electrical systems.
-#[derive(Component, Clone, Default, PartialEq, Debug)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Component, Clone, Default, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Admittance(pub Complex<f64>);
 
 /// Represents a port with two integer values.
 ///
 /// `Port2` holds two integer values (typically bus or node indices) used to define
 /// the connectivity between two entities in the power grid (like branches).
-#[derive(Component, Deref, DerefMut, Default, Debug, Clone, PartialEq)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(
+    Component,
+    Deref,
+    DerefMut,
+    Default,
+    Debug,
+    Clone,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct Port2(pub nalgebra::Vector2<i64>);
+
+impl Port2 {
+    pub fn new(a: i64, b: i64) -> Self {
+        Self(nalgebra::Vector2::new(a, b))
+    }
+}
 
 /// Represents a branch with admittance and port information.
 ///
@@ -58,18 +99,15 @@ pub struct AdmittanceBranch {
 /// Wrapper around a `pandapower::Network` structure.
 ///
 /// This resource contains the complete power network data, loaded from the external Pandapower library.
-#[derive(Debug, Resource, Deref, DerefMut)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Resource, Deref, DerefMut, serde::Serialize, serde::Deserialize)]
 pub struct PPNetwork(pub pandapower::Network);
 
 /// Component that stores an index, typically referring to an element within the power network.
-#[derive(Debug, Component, Deref, DerefMut)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Component, Deref, DerefMut, serde::Serialize, serde::Deserialize)]
 pub struct ElemIdx(pub usize);
 
 /// Component that stores an index, typically referring to a power flow node within the network.
-#[derive(Debug, Component, Deref, DerefMut)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Component, Deref, DerefMut, serde::Serialize, serde::Deserialize)]
 pub struct PFNode(pub usize);
 
 /// Resource that maps node indices (i64) to ECS entities.
@@ -86,32 +124,27 @@ pub struct NodeLookup {
 /// Component representing an auxiliary node in the network.
 ///
 /// `AuxNode` typically refers to a node with a special function, defined by its bus index.
-#[derive(Debug, Component)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Component, serde::Serialize, serde::Deserialize)]
 pub struct AuxNode {
     pub bus: i64,
 }
 
 /// Marker component for a line element in the power system.
-#[derive(Debug, Component)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Component, serde::Serialize, serde::Deserialize)]
 pub struct Line;
 
 /// Marker component for a transformer element in the power system.
-#[derive(Debug, Component)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Component, serde::Serialize, serde::Deserialize)]
 pub struct Transformer;
 
 /// Marker component for a shunt element in the power system.
-#[derive(Debug, Component)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Component, serde::Serialize, serde::Deserialize)]
 pub struct EShunt;
 
 /// Resource holding common base values for the power flow calculation.
 ///
 /// `PFCommonData` contains the base frequency (`wbase`) and base power (`sbase`) for per-unit system calculations.
-#[derive(Debug, Resource)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Resource, serde::Serialize, serde::Deserialize)]
 pub struct PFCommonData {
     pub wbase: f64, // Base frequency (typically in rad/s).
     pub sbase: f64, // Base power (typically in MVA).
@@ -120,8 +153,7 @@ pub struct PFCommonData {
 /// Enum representing different types of nodes in the power flow network.
 ///
 /// `NodeType` differentiates between various node types such as PQ nodes, PV nodes, external grid nodes, and auxiliary nodes.
-#[derive(Debug, Component)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Component, serde::Serialize, serde::Deserialize)]
 pub enum NodeType {
     PQ(PQNode),       // Load bus (PQ bus)
     PV(PVNode),       // Generator bus (PV bus)

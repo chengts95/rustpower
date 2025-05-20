@@ -343,7 +343,7 @@ mod tests {
     use nalgebra::ComplexField;
     use network::{DataOps, PowerGrid};
 
-    use crate::basic::{self, system::RunPF};
+    use crate::basic;
 
     use super::*;
     use std::env;

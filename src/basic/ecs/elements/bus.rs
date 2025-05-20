@@ -106,7 +106,6 @@ impl SnaptShotRegGroup for BusSnapShotReg {
 }
 
 pub mod systems {
-    
 
     use crate::basic::ecs::elements::NodeLookup;
 
@@ -157,6 +156,7 @@ mod tests {
         let mut pf_net = PowerGrid::default();
         let mut cmd = pf_net.world_mut().commands();
         cmd.spawn_batch(buses);
+        
         pf_net.world_mut().flush();
         let mut registry = SnapshotRegistry::default();
         BusSnapShotReg::register_snap_shot(&mut registry);

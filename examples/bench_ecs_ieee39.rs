@@ -4,7 +4,7 @@ use ecs::{
     post_processing::PostProcessing,
 };
 
-use rustpower::{io::pandapower::Network, prelude::*};
+use rustpower::{io::pandapower::Network, prelude::*, testcases::case_ieee39::IEEE_39};
 
 #[macro_export]
 macro_rules! timeit {
@@ -43,7 +43,7 @@ macro_rules! timeit {
 
 #[allow(non_snake_case)]
 fn main() {
-    let file_path = test_ieee39::IEEE_39;
+    let file_path = IEEE_39;
     let net: Network = serde_json::from_str(file_path).unwrap();
     let mut pf_net = PowerGrid::default();
     pf_net.world_mut().insert_resource(PPNetwork(net));

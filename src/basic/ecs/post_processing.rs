@@ -276,7 +276,7 @@ mod tests {
     use super::*;
     use crate::basic::ecs::network::PowerFlow;
     use crate::{
-        basic::{self, system::RunPF},
+        basic,
         io::pandapower::load_csv_zip,
     };
     use bevy_ecs::system::RunSystemOnce;

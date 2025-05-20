@@ -1,4 +1,3 @@
-
 use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
 
@@ -37,10 +36,9 @@ pub struct TapChanger {
 #[derive(Bundle, Debug, Clone)]
 pub struct TransformerBundle {
     pub device: TransformerDevice,
-    pub from_bus: FromBus,  // 包装 hv_bus
-    pub to_bus: ToBus,      // 包装 lv_bus
+    pub from_bus: FromBus, // 包装 hv_bus
+    pub to_bus: ToBus,     // 包装 lv_bus
 }
-
 
 impl From<&Transformer> for TransformerBundle {
     fn from(t: &Transformer) -> Self {
@@ -70,6 +68,77 @@ impl From<&Transformer> for TransformerBundle {
             },
             from_bus: FromBus(t.hv_bus as i64),
             to_bus: ToBus(t.lv_bus as i64),
+        }
+    }
+}
+
+pub mod systems {
+    use bevy_ecs::{entity, relationship::RelatedSpawnerCommands};
+    use nalgebra::{Complex, vector};
+
+    use crate::basic::ecs::{
+        elements::{Admittance, AdmittanceBranch, Port2, VBase},
+        network::GND,
+    };
+
+    use super::*;
+    pub fn generate_transformer(
+        commands: &mut Commands,
+        q: Query<(Entity, &TransformerDevice, &FromBus, &ToBus)>,
+    ) {
+        q.iter().for_each(|(entity, transformer, from, to)| {
+            let port = Port2::new(from.0, to.0);
+        });
+    }
+    fn generate_transformer_admittance(
+        commands: &mut Commands,
+        parent: Entity,
+        dev: &TransformerDevice,
+        port: &Port2,
+    ) {
+        commands.entity(parent).despawn_related::<Children>();
+
+        let tap_m = dev.tap.as_ref().map_or(1.0, |tap| {
+            let pos = tap.pos.unwrap_or(0.0);
+            let neutral = tap.neutral.unwrap_or(0.0);
+            let step = tap.step_percent.unwrap_or(0.0);
+            1.0 + (pos - neutral) * 0.01 * step
+        });
+
+        let v_base = dev.vn_lv_kv;
+        let z_base = v_base * v_base / dev.sn_mva;
+        let vk = dev.vk_percent * 0.01;
+        let vkr = dev.vkr_percent * 0.01;
+        let z = z_base * vk;
+        let re = z_base * vkr;
+        let im = (z.powi(2) - re.powi(2)).sqrt();
+        let y = 1.0 / (Complex::new(re, im) * dev.parallel as f64);
+
+        let gnd_port = |idx: usize| Port2(vector![port.0[idx], GND.into()]);
+        let spawn_branch =
+            |c: &mut RelatedSpawnerCommands<'_, ChildOf>, y: Complex<f64>, p: Port2| {
+                c.spawn(AdmittanceBranch {
+                    y: Admittance(y),
+                    port: p,
+                    v_base: VBase(v_base),
+                });
+            };
+
+        commands.entity(parent).with_children(|child| {
+            spawn_branch(child, y / tap_m, port.clone());
+            spawn_branch(child, (1.0 - tap_m) * y / tap_m.powi(2), gnd_port(0));
+            spawn_branch(child, (1.0 - 1.0 / tap_m) * y, gnd_port(1));
+        });
+
+        let re_core = z_base * 0.001 * dev.pfe_kw / dev.sn_mva;
+        let im_core = z_base / (0.01 * dev.i0_percent);
+        let c = dev.parallel as f64 / Complex::new(re_core, im_core);
+
+        if c.is_finite() {
+            commands.entity(parent).with_children(|child| {
+                spawn_branch(child, 0.5 * c / tap_m.powi(2), gnd_port(0));
+                spawn_branch(child, 0.5 * c, gnd_port(1));
+            });
         }
     }
 }
