@@ -30,6 +30,12 @@ where
         self.unwrap_or_default().iter().map(Into::into).collect()
     }
 }
+impl LoadPandapowerNet for PowerGrid {
+    fn load_pandapower_net(&mut self, net: &Network) {
+        let world = self.world_mut();
+        world.load_pandapower_net(net);
+    }
+}
 impl LoadPandapowerNet for World {
     fn load_pandapower_net(&mut self, net: &Network) {
         let world = self;

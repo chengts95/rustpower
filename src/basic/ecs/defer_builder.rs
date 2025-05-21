@@ -6,6 +6,7 @@ use bevy_ecs::{
     ptr::{Aligned, OwningPtr},
 };
 use bumpalo::Bump;
+
 pub struct DeferredBundleBuilder<'a> {
     entity: &'a mut EntityWorldMut<'a>,
     ids: Vec<ComponentId>,
@@ -31,16 +32,15 @@ impl<'a> DeferredBundleBuilder<'a> {
         let ptr = unsafe { OwningPtr::new(NonNull::new_unchecked(ptr.cast())) };
         self.insert_by_id(id, ptr);
     }
-    pub fn insert_if_new_by_id(&mut self, id: ComponentId, ptr: OwningPtr<'a>) {
-        if self.entity.contains_id(id) {
-            return;
-        }
-        self.insert_by_id(id, ptr);
-    }
+    // pub fn insert_if_new_by_id(&mut self, id: ComponentId, ptr: OwningPtr<'a>) {
+    //     if self.entity.contains_id(id) {
+    //         return;
+    //     }
+    //     self.insert_by_id(id, ptr);
+    // }
     pub fn insert_by_id(&mut self, id: ComponentId, ptr: OwningPtr<'a>) {
-            self.ids.push(id);
-            self.ptrs.push(ptr);
-        
+        self.ids.push(id);
+        self.ptrs.push(ptr);
     }
 
     pub fn commit(mut self) {
@@ -71,6 +71,6 @@ impl DeferBundleSpawner {
             d.insert_to(&mut builder);
             builder.commit();
         }
-        self.bump.reset(); 
+        self.bump.reset();
     }
 }

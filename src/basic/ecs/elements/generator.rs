@@ -39,11 +39,12 @@ impl Default for TargetVaDeg {
 }
 /// 发电机的有功/无功出力限值
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct PQRange {
+#[serde(from = "PQRangeProxy", into = "PQRangeProxy")]
+pub struct PQLim {
     pub p: Limit<f64>, // MW
     pub q: Limit<f64>, // MVAr
 }
-impl PQRange {
+impl PQLim {
     pub fn new(pmin: f64, pmax: f64, qmin: f64, qmax: f64) -> Self {
         Self {
             p: Limit {
@@ -54,6 +55,32 @@ impl PQRange {
                 min: qmin,
                 max: qmax,
             },
+        }
+    }
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct PQRangeProxy {
+    p_min: f64,
+    p_max: f64,
+    q_min: f64,
+    q_max: f64,
+}
+impl From<PQRangeProxy> for PQLim {
+    fn from(proxy: PQRangeProxy) -> Self {
+        PQLim {
+            p: Limit { min: proxy.p_min, max: proxy.p_max },
+            q: Limit { min: proxy.q_min, max: proxy.q_max },
+        }
+    }
+}
+
+impl From<PQLim> for PQRangeProxy {
+    fn from(r: PQLim) -> Self {
+        PQRangeProxy {
+            p_min: r.p.min,
+            p_max: r.p.max,
+            q_min: r.q.min,
+            q_max: r.q.max,
         }
     }
 }
@@ -89,7 +116,7 @@ pub struct GeneratorBundle {
     pub target_bus: TargetBus,
     pub target_vm: TargetVmPu,
     pub target_p: TargetPMW,
-    pub pq_range: PQRange,
+    pub pq_range: PQLim,
     pub cfg: GeneratorCfg,
     pub slack: Option<Slack>,
     pub uncontrollable: Option<Uncontrollable>,
@@ -104,7 +131,7 @@ pub struct ExtGridBundle {
     pub target_vm: TargetVmPu,
     pub target_va: TargetVaDeg,
     pub cfg: GeneratorCfg, // slack_weight, gen_type, scaling
-    pub pq_range: PQRange, // min/max p/q
+    pub pq_range: PQLim, // min/max p/q
     pub slack: Slack,
 }
 
@@ -114,7 +141,7 @@ impl From<&Gen> for GeneratorBundle {
             target_bus: TargetBus(generator.bus),
             target_p: TargetPMW(generator.p_mw),
             target_vm: TargetVmPu(generator.vm_pu),
-            pq_range: PQRange {
+            pq_range: PQLim {
                 p: Limit {
                     min: generator.min_p_mw,
                     max: generator.max_p_mw,
@@ -150,7 +177,7 @@ impl From<&ExtGrid> for ExtGridBundle {
                 r#gen_type: None,
                 slack_weight: ext_grid.slack_weight,
             },
-            pq_range: PQRange {
+            pq_range: PQLim {
                 p: Limit {
                     min: ext_grid.min_p_mw.unwrap_or(0.0),
                     max: ext_grid.max_p_mw.unwrap_or(f64::MAX),
@@ -175,6 +202,6 @@ impl SnaptShotRegGroup for GenSnapShotReg {
         reg.register::<Slack>();
         reg.register_named::<GeneratorCfg>("gen_cfg");
         reg.register_named::<Uncontrollable>("uncontrol");
-        reg.register::<PQRange>();
+        reg.register::<PQLim>();
     }
 }
