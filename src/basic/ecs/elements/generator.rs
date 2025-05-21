@@ -1,8 +1,12 @@
 use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
 use derive_more::From;
+use rustpower_proc_marco::DeferBundle;
 
-use crate::io::pandapower::Gen;
+use crate::{
+    basic::ecs::defer_builder::*,
+    io::pandapower::{ExtGrid, Gen},
+};
 
 use super::{bus::SnaptShotRegGroup, units::*};
 
@@ -58,8 +62,8 @@ impl PQRange {
 #[component(storage = "SparseSet")]
 pub struct Slack;
 
-/// 不可控发电机标记
-#[derive(Component, Debug, Default, serde::Serialize, serde::Deserialize)]
+/// 不可控标记
+#[derive(Component, Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 #[component(storage = "SparseSet")]
 pub struct Uncontrollable;
 
@@ -80,17 +84,21 @@ impl Default for GeneratorCfg {
     }
 }
 
-#[derive(Bundle, Debug, Clone)]
+#[derive(DeferBundle, Debug, Clone)]
 pub struct GeneratorBundle {
     pub target_bus: TargetBus,
     pub target_vm: TargetVmPu,
     pub target_p: TargetPMW,
     pub pq_range: PQRange,
     pub cfg: GeneratorCfg,
+    pub slack: Option<Slack>,
+    pub uncontrollable: Option<Uncontrollable>,
+    pub sn_mva: Option<SnMva>,
+    pub name: Option<Name>,
 }
 
 /// 可以重用 Generator 架构
-#[derive(Bundle)]
+#[derive(Bundle, DeferBundle)]
 pub struct ExtGridBundle {
     pub target_bus: TargetBus,
     pub target_vm: TargetVmPu,
@@ -100,15 +108,9 @@ pub struct ExtGridBundle {
     pub slack: Slack,
 }
 
-#[derive(Default)]
-pub struct GeneratorFlags {
-    pub slack: bool,
-    pub uncontrollable: bool,
-    pub sn_mva: Option<SnMva>,
-}
-impl From<&Gen> for (GeneratorBundle, GeneratorFlags) {
+impl From<&Gen> for GeneratorBundle {
     fn from(generator: &Gen) -> Self {
-        let bundle = GeneratorBundle {
+        GeneratorBundle {
             target_bus: TargetBus(generator.bus),
             target_p: TargetPMW(generator.p_mw),
             target_vm: TargetVmPu(generator.vm_pu),
@@ -127,41 +129,52 @@ impl From<&Gen> for (GeneratorBundle, GeneratorFlags) {
                 r#gen_type: generator.type_.clone(),
                 slack_weight: generator.slack_weight,
             },
-        };
-        let flags = GeneratorFlags {
-            slack: generator.slack,
-            uncontrollable: generator.controllable == Some(false),
+
+            slack: generator.slack.then_some(Slack),
+            uncontrollable: (!generator.controllable.unwrap_or(true)).then_some(Uncontrollable),
+
             sn_mva: generator.sn_mva.map(SnMva),
-        };
-        (bundle, flags)
+            name: generator.name.clone().map(Name::new),
+        }
     }
 }
-/// Represents an external grid in the network.
-#[derive(Default, Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct ExtGrid {
-    pub bus: i64,
-    pub in_service: bool,
-    pub va_degree: f64,
-    pub vm_pu: f64,
-    pub max_p_mw: Option<f64>,
-    pub min_p_mw: Option<f64>,
-    pub max_q_mvar: Option<f64>,
-    pub min_q_mvar: Option<f64>,
-    pub slack_weight: f64,
-    pub name: Option<String>,
-}
 
+impl From<&ExtGrid> for ExtGridBundle {
+    fn from(ext_grid: &ExtGrid) -> Self {
+        ExtGridBundle {
+            target_bus: TargetBus(ext_grid.bus),
+            target_vm: TargetVmPu(ext_grid.vm_pu),
+            target_va: TargetVaDeg(ext_grid.va_degree),
+            cfg: GeneratorCfg {
+                scaling: 1.0,
+                r#gen_type: None,
+                slack_weight: ext_grid.slack_weight,
+            },
+            pq_range: PQRange {
+                p: Limit {
+                    min: ext_grid.min_p_mw.unwrap_or(0.0),
+                    max: ext_grid.max_p_mw.unwrap_or(f64::MAX),
+                },
+                q: Limit {
+                    min: ext_grid.min_q_mvar.unwrap_or(0.0),
+                    max: ext_grid.max_q_mvar.unwrap_or(f64::MAX),
+                },
+            },
+            slack: Slack,
+        }
+    }
+}
 pub struct GenSnapShotReg;
 
 impl SnaptShotRegGroup for GenSnapShotReg {
     fn register_snap_shot(reg: &mut SnapshotRegistry) {
-        reg.register::<TargetBus>();
-        reg.register::<TargetVmPu>();
-        reg.register::<TargetQMVar>();
-        reg.register::<TargetPMW>();
+        reg.register_named::<TargetBus>("target_bus");
+        reg.register_named::<TargetVmPu>("vm_pu");
+        reg.register_named::<TargetQMVar>("q_mvar");
+        reg.register_named::<TargetPMW>("p_mw");
         reg.register::<Slack>();
-        reg.register::<GeneratorCfg>();
-        reg.register::<Uncontrollable>();
+        reg.register_named::<GeneratorCfg>("gen_cfg");
+        reg.register_named::<Uncontrollable>("uncontrol");
         reg.register::<PQRange>();
     }
 }

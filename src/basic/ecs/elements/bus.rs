@@ -11,7 +11,7 @@ use super::units::*;
 
 use bevy_ecs::name::Name;
 
-#[derive(Component, serde::Serialize, serde::Deserialize)]
+#[derive(Component, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OutOfService;
 #[derive(Component)]
 #[require(VNominal)]

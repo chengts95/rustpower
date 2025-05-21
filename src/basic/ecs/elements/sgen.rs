@@ -1,9 +1,13 @@
-use bevy_archive::prelude::SnapshotRegistry;
-use bevy_ecs::{bundle::Bundle, component::Component};
-
 use crate::io::pandapower::SGen;
+use crate::prelude::ecs::defer_builder::*;
+use bevy_archive::prelude::SnapshotRegistry;
+use bevy_ecs::{bundle::Bundle, component::Component, name::Name};
+use rustpower_proc_marco::DeferBundle;
 
-use super::{bus::SnaptShotRegGroup, generator::TargetBus};
+use super::{
+    bus::SnaptShotRegGroup,
+    generator::{TargetBus, Uncontrollable},
+};
 
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SGenDevice {
@@ -15,18 +19,15 @@ pub struct SGenDevice {
     pub is_current_source: bool,
 }
 
-#[derive(Bundle, Debug, Clone)]
+#[derive(DeferBundle, Debug, Clone)]
 pub struct SGenBundle {
     pub target_bus: TargetBus,
     pub device: SGenDevice,
+    pub uncontrollable: Option<Uncontrollable>,
+    pub name: Option<Name>,
 }
 
-#[derive(Default)]
-pub struct SGenFlags {
-    pub uncontrollable: bool,
-}
-
-impl From<&SGen> for (SGenBundle, SGenFlags) {
+impl From<&SGen> for SGenBundle {
     fn from(sgen: &SGen) -> Self {
         let bundle = SGenBundle {
             target_bus: TargetBus(sgen.bus),
@@ -38,11 +39,11 @@ impl From<&SGen> for (SGenBundle, SGenFlags) {
                 gen_type: sgen.type_.clone(),
                 is_current_source: sgen.current_source,
             },
+            uncontrollable: (!sgen.controllable.unwrap_or(true)).then_some(Uncontrollable),
+            name: sgen.name.clone().map(Name::new),
         };
-        let flags = SGenFlags {
-            uncontrollable: sgen.controllable == Some(false),
-        };
-        (bundle, flags)
+
+        bundle
     }
 }
 
