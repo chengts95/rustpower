@@ -1,6 +1,6 @@
 use crate::io::pandapower::{Gen, Transformer};
 use crate::prelude::ecs::defer_builder::DeferBundle;
-use crate::prelude::ecs::defer_builder::DeferredEntityBuilder;
+use crate::prelude::ecs::defer_builder::DeferredBundleBuilder;
 use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
 use rustpower_proc_marco::DeferBundle;
@@ -83,7 +83,7 @@ impl From<&Transformer> for TransformerBundle {
 pub struct TransSnapShotReg;
 impl SnaptShotRegGroup for TransSnapShotReg {
     fn register_snap_shot(reg: &mut SnapshotRegistry) {
-        reg.register::<TransformerDevice>();
+        reg.register_named::<TransformerDevice>("trafo");
     }
 }
 pub mod systems {

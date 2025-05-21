@@ -9,9 +9,10 @@ mod test {
 
     use bevy_archive::prelude::{SnapshotRegistry, save_world_manifest};
     use bevy_ecs::world::EntityWorldMut;
+    use bumpalo::Bump;
 
     use super::*;
-    use crate::basic::ecs::defer_builder::{DeferBundle, DeferredEntityBuilder};
+    use crate::basic::ecs::defer_builder::{DeferBundle, DeferredBundleBuilder};
     use crate::basic::ecs::network::DataOps;
     use crate::{
         basic::ecs::network::PowerGrid,
@@ -28,22 +29,20 @@ mod test {
     fn test_ele_process() {
         let net = load_net();
         let buses: Vec<BusBundle> = net.bus.iter().map(|x| x.into()).collect();
-        let ts: Vec<TransformerBundle> =
-            net.trafo.unwrap().iter().map(|x| x.into()).collect();
+        let ts: Vec<TransformerBundle> = net.trafo.unwrap().iter().map(|x| x.into()).collect();
         let mut pf_net = PowerGrid::default();
         let mut cmd = pf_net.world_mut().commands();
-
+        let bump = Bump::new();
         cmd.spawn_batch(buses);
+        pf_net.world_mut().flush();
+
         for i in ts {
-            let e = cmd.spawn_empty();
-            e.queue(|entity: EntityWorldMut| {
-                let mut builder = DeferredEntityBuilder::new(& mut entity, );
-                i.insert_to(&mut builder);
-                builder.commit();
-            });
+            let mut e = pf_net.world_mut().spawn_empty();
+            let mut builder = DeferredBundleBuilder::new(&mut e, &bump);
+            i.insert_to(&mut builder);
+            builder.commit();
         }
 
-        pf_net.world_mut().flush();
         let mut registry = SnapshotRegistry::default();
         BusSnapShotReg::register_snap_shot(&mut registry);
         TransSnapShotReg::register_snap_shot(&mut registry);

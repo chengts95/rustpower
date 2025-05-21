@@ -6,14 +6,14 @@ use bevy_ecs::{
     ptr::{Aligned, OwningPtr},
 };
 use bumpalo::Bump;
-pub struct DeferredEntityBuilder<'a> {
+pub struct DeferredBundleBuilder<'a> {
     entity: &'a mut EntityWorldMut<'a>,
     ids: Vec<ComponentId>,
     ptrs: Vec<OwningPtr<'a, Aligned>>,
     bump: &'a Bump,
 }
 
-impl<'a> DeferredEntityBuilder<'a> {
+impl<'a> DeferredBundleBuilder<'a> {
     pub fn new(entity: &'a mut EntityWorldMut<'a>, bump: &'a Bump) -> Self {
         Self {
             entity,
@@ -52,5 +52,5 @@ impl<'a> DeferredEntityBuilder<'a> {
     }
 }
 pub trait DeferBundle {
-    fn insert_to(&self, builder: &mut DeferredEntityBuilder);
+    fn insert_to(self, builder: &mut DeferredBundleBuilder);
 }

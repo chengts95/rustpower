@@ -45,7 +45,7 @@ pub fn derive_defer_bundle(input: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         impl DeferBundle for #name {
-            fn insert_to(&self, builder: &mut DeferredEntityBuilder) {
+            fn insert_to(self, builder: &mut DeferredBundleBuilder) {
                 #(#field_insertions)*
             }
         }
