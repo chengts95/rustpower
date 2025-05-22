@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use crate::basic::ecs::network::DataOps;
 use crate::basic::ecs::network::PowerGrid;
+#[derive(Default)]
 pub struct ArchivePlugin;
 
 
@@ -48,26 +49,8 @@ impl PowerGrid {
 impl Plugin for ArchivePlugin {
     fn build(&self, app: &mut App) {
         use crate::prelude::ecs::elements::*;
-        let mut reg = SnapshotRegistry::default();
-        register_all!(
-            reg,
-            [
-                PFNode,
-                ElemIdx,
-                Line,
-                Admittance,
-                VBase,
-                Port2,
-                Transformer,
-                EShunt,
-                Switch,
-                SwitchState,
-                PQNode,
-                PVNode,
-                ExtGridNode,
-                NodeType,
-            ]
-        );
+        let mut reg = build_snapshot_registry();
+       
         reg.register_with::<ChildOf,ChildOfWrapper>();
         register_res_all!(reg, [PFCommonData]);
         app.insert_resource(reg);

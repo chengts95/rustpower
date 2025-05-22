@@ -14,18 +14,8 @@ use super::{
     *
 };
 
-/// Represents a network switch in the power flow network.
-///
-/// A switch connects two buses or a bus and an element, and can have a given impedance (z_ohm).
-/// The switch state is defined by its type (`SwitchType`), the connected buses, and its impedance.
-#[derive(Default, Debug, Clone, Component)]
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct Switch {
-    pub bus: i64,       // Identifier for the bus connected by the switch.
-    pub element: i64,   // Identifier for the element connected by the switch.
-    pub et: SwitchType, // Switch type that defines its behavior.
-    pub z_ohm: f64,     // Impedance in ohms for the switch connection.
-}
+mod comps;
+pub use comps::*;
 
 /// Represents the result of node aggregation as a resource in matrix form.
 ///
@@ -37,12 +27,6 @@ pub struct NodeAggRes {
     pub merge_mat_v: CscMatrix<f64>, // Aggregation matrix for voltage values.
 }
 
-/// Represents the state of a switch (either open or closed).
-///
-/// The state (`true` for closed and `false` for open) is wrapped in the `SwitchState` component.
-#[derive(Default, Debug, Clone, Component, Deref, DerefMut)]
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct SwitchState(pub bool);
 
 /// Represents the merging of two nodes in the power network.
 ///

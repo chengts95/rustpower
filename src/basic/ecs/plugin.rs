@@ -1,4 +1,5 @@
-use bevy_app::prelude::*;
+use bevy_app::{plugin_group, prelude::*};
+use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
 
 use crate::io::{
@@ -15,6 +16,7 @@ pub struct PFInitStage;
 ///
 /// This plugin sets up the basic configuration required for power flow computation,
 /// and registers necessary systems to run during the application startup and update phases.
+#[derive(Default)]
 pub struct BasePFPlugin;
 
 /// Plugin for initializing switch handling using Type A logic.
@@ -22,6 +24,7 @@ pub struct BasePFPlugin;
 /// SwitchPluginTypeA includes node aggregation logic that results in merging nodes in the network.
 /// This plugin is used when merging nodes is required, typically involving matrix operations
 /// to aggregate nodes for power flow calculation purposes.
+#[derive(Default)]
 pub struct SwitchPluginTypeA;
 
 /// Plugin for initializing switch handling using Type B logic.
@@ -29,6 +32,7 @@ pub struct SwitchPluginTypeA;
 /// SwitchPluginTypeB does not involve node merging and instead focuses on directly processing
 /// switch admittance without the need for complex aggregation operations. This is used when
 /// performance optimization is required, as node merging and matrix operations are not necessary.
+#[derive(Default)]
 pub struct SwitchPluginTypeB;
 
 impl Plugin for BasePFPlugin {
@@ -109,10 +113,37 @@ impl Plugin for SwitchPluginTypeB {
 /// `SwitchPluginTypeB` can be added based on the use case.
 pub fn default_app() -> App {
     let mut app = App::new();
-    app.add_plugins((PandaPowerStartupPlugin, BasePFPlugin));
-    app.add_plugins(ArchivePlugin);
+
+    app.add_plugins(DefaultPlugins);
 
     app
+}
+#[derive(Default)]
+pub struct NewPPLoadPlugin;
+impl Plugin for NewPPLoadPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Startup, (pandapower_init_system).before(PFInitStage));
+    }
+}
+
+plugin_group! {
+    /// Doc comments and annotations are supported: they will be added to the generated plugin
+    /// group.
+    #[derive(Debug)]
+    pub struct DefaultPlugins {
+
+        // Basic plugin to run a power flow calculation.
+        :BasePFPlugin,
+        // power flow calculation using SwitchPluginTypeA with union-find node merging.
+        :SwitchPluginTypeA,
+        // convert the pandapower network to bevy ECS.
+        :NewPPLoadPlugin,
+        #[cfg(feature = "archive")]
+        crate::io::archive::aurora_format:::ArchivePlugin,
+
+
+    }
+
 }
 
 #[cfg(test)]

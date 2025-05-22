@@ -1,19 +1,26 @@
 use super::bus::*;
 use super::line::*;
 
-use super::trans::*;
+use super::PPNetwork;
+use super::SwitchSnapShotReg;
+use super::switch;
 use crate::basic::ecs::defer_builder::*;
+use crate::basic::ecs::elements::*;
 use crate::basic::ecs::network::PowerGrid;
 use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::world::World;
 
-use crate::basic::ecs::elements::generator::{ExtGridBundle, GenSnapShotReg, GeneratorBundle};
-use crate::basic::ecs::elements::load::{LoadBundle, LoadSnapshotReg};
-use crate::basic::ecs::elements::sgen::{SGenBundle, SGenSnapShotReg};
-use crate::basic::ecs::elements::shunt::{self, ShuntSnapShotReg};
 use crate::basic::ecs::network::DataOps;
 use crate::io::pandapower::Network;
-
+pub use bus::*;
+pub use generator::*;
+pub use line::*;
+pub use load::*;
+pub use sgen::*;
+pub use shunt::*;
+pub use switch::*;
+pub use trans::*;
+pub use units::*;
 pub trait LoadPandapowerNet {
     fn load_pandapower_net(&mut self, net: &Network);
 }
@@ -47,7 +54,7 @@ impl LoadPandapowerNet for World {
         let ext_grid: Vec<ExtGridBundle> = net.ext_grid.clone().to_bundle_vec();
         let shunts: Vec<shunt::ShuntBundle> = net.shunt.clone().to_bundle_vec();
         let sgens: Vec<SGenBundle> = net.sgen.clone().to_bundle_vec();
-
+        let switches: Vec<switch::SwitchBundle> = net.switch.clone().to_bundle_vec();
         world.commands().spawn_batch(buses);
         world.flush();
 
@@ -59,6 +66,14 @@ impl LoadPandapowerNet for World {
         spawner.spawn_batch(world, ext_grid);
         spawner.spawn_batch(world, shunts);
         spawner.spawn_batch(world, sgens);
+        spawner.spawn_batch(world, switches);
+    }
+}
+
+pub fn pandapower_init_system(world: &mut World) {
+    let net = world.remove_resource::<PPNetwork>();
+    if let Some(net) = net {
+        world.load_pandapower_net(&net.0);
     }
 }
 pub fn init_powergrid_from_net(net: &Network, world: &mut World) {
@@ -75,6 +90,7 @@ impl SnaptShotRegGroup for DefaultSnapShotReg {
         LoadSnapshotReg::register_snap_shot(registry);
         ShuntSnapShotReg::register_snap_shot(registry);
         SGenSnapShotReg::register_snap_shot(registry);
+        SwitchSnapShotReg::register_snap_shot(registry);
     }
 }
 pub fn build_snapshot_registry() -> SnapshotRegistry {
@@ -117,6 +133,8 @@ mod test {
         a.to_file("test_system.toml", None).unwrap();
         let mut world = World::default();
         let b = read_manifest_from_file("test_system.toml", None).unwrap();
-        let _b = load_world_manifest(&mut world, &b, &registry).unwrap();
+        load_world_manifest(&mut world, &b, &registry).unwrap();
+        let a = save_world_manifest(&world, &registry).unwrap();
+        a.to_file("test_system.toml", None).unwrap();
     }
 }
