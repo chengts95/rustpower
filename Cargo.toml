@@ -14,11 +14,11 @@ default-members = [
     "crates/rustpower_proc_marco",
 ]
 [features]
-default=["rsparse"]
+default=["rsparse","archive"]
 klu = ["dep:rustpower-sol-klu"]
 faer = ["dep:faer"]
 rsparse = ["dep:rsparse"]
-
+archive = []
 [profile.release]
 opt-level = 3              
 overflow-checks = false     # Disable integer overflow checks.
