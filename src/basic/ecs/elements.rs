@@ -149,6 +149,7 @@ pub struct EShunt;
 #[derive(Debug, Resource, serde::Serialize, serde::Deserialize)]
 pub struct PFCommonData {
     pub wbase: f64, // Base frequency (typically in rad/s).
+    pub f_hz: f64, // Base frequency (typically in Hz).
     pub sbase: f64, // Base power (typically in MVA).
 }
 

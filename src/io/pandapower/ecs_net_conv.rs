@@ -11,8 +11,8 @@ use crate::basic::ecs::*;
 use crate::prelude::pandapower::*;
 use bevy_ecs::prelude::*;
 use elements::*;
-use nalgebra::vector;
 use nalgebra::Complex;
+use nalgebra::vector;
 
 use std::f64::consts::PI;
 
@@ -273,6 +273,7 @@ pub fn process_switch(mut cmd: Commands, net: Res<PPNetwork>) {
 fn inital_setup(mut cmd: Commands, net: Res<PPNetwork>) {
     cmd.insert_resource(PFCommonData {
         wbase: 2.0 * PI * net.f_hz,
+        f_hz: net.f_hz,
         sbase: net.sn_mva,
     });
 }

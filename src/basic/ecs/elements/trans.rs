@@ -96,16 +96,16 @@ pub mod systems {
     };
 
     use super::*;
-    pub fn generate_transformer(
+    pub fn setup_transformer(
         mut commands: Commands,
         q: Query<(Entity, &TransformerDevice, &FromBus, &ToBus)>,
     ) {
         q.iter().for_each(|(entity, transformer, from, to)| {
             let port = Port2::new(from.0, to.0);
-            generate_transformer_admittance(&mut commands, entity, transformer, &port);
+            setup_transformer_admittance(&mut commands, entity, transformer, &port);
         });
     }
-    fn generate_transformer_admittance(
+    fn setup_transformer_admittance(
         commands: &mut Commands,
         parent: Entity,
         dev: &TransformerDevice,

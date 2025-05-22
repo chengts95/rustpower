@@ -7,6 +7,9 @@ use super::switch;
 use crate::basic::ecs::defer_builder::*;
 use crate::basic::ecs::elements::*;
 use crate::basic::ecs::network::PowerGrid;
+use crate::basic::ecs::plugin::PFInitStage;
+use bevy_app::PreUpdate;
+use bevy_app::Startup;
 use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::world::World;
 
@@ -91,6 +94,22 @@ impl SnaptShotRegGroup for DefaultSnapShotReg {
         ShuntSnapShotReg::register_snap_shot(registry);
         SGenSnapShotReg::register_snap_shot(registry);
         SwitchSnapShotReg::register_snap_shot(registry);
+    }
+}
+
+pub struct ElementSetupPlugin;
+impl bevy_app::Plugin for ElementSetupPlugin {
+    fn build(&self, app: &mut bevy_app::App) {
+        app.add_systems(Startup, (
+            bus::systems::init_node_lookup,
+            (
+            trans::systems::setup_transformer,
+            line::systems::setup_line_systems,
+            shunt::systems::setup_shunt_systems,
+            )
+        ).chain().in_set(PFInitStage));
+
+        app.add_systems(PreUpdate, bus::systems::update_node_lookup);
     }
 }
 pub fn build_snapshot_registry() -> SnapshotRegistry {

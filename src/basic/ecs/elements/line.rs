@@ -70,3 +70,56 @@ impl SnaptShotRegGroup for LineSnapshotReg {
         reg.register::<StandardModelType>();
     }
 }
+
+pub mod systems {
+    use nalgebra::{Complex, vector};
+
+    use crate::basic::ecs::{elements::*, network::GND};
+
+    use super::*;
+    pub fn setup_line_systems(
+        mut commands: Commands,
+        q: Query<(Entity, &LineParams, &FromBus, &ToBus)>,
+        buses:Query< &VNominal>,
+        lut:Res<NodeLookup>,
+        common: Res<PFCommonData>,
+    ) {
+        for (entity, params, from, to) in &q {
+            let length = params.length_km;
+            let parallel = params.parallel as f64;
+            let wbase = common.wbase;
+
+            let b = wbase * 1e-9 * params.c_nf_per_km * length * parallel;
+            let g = 1e-6 * params.g_us_per_km * length * parallel;
+            let y_shunt = 0.5 * Complex::new(g, b);
+
+            let rl = params.r_ohm_per_km * length * parallel;
+            let xl = params.x_ohm_per_km * length * parallel;
+            let y_series = 1.0 / Complex::new(rl, xl);
+            let vbase = lut.get_entity(from.0).unwrap();
+            let vbase = buses.get(vbase).unwrap().0.0;
+            // Shunt: from and to → GND
+            commands.entity(entity).with_children(|p| {
+                if g != 0.0 || b != 0.0 {
+                    p.spawn(AdmittanceBranch {
+                        y: Admittance(y_shunt),
+                        port: Port2(vector![from.0, GND.into()]),
+                        v_base: VBase(vbase), // 1.0 per unit unless otherwise specified
+                    });
+                    p.spawn(AdmittanceBranch {
+                        y: Admittance(y_shunt),
+                        port: Port2(vector![to.0, GND.into()]),
+                        v_base: VBase(vbase),
+                    });
+                }
+
+                // Series element between from and to
+                p.spawn(AdmittanceBranch {
+                    y: Admittance(y_series),
+                    port: Port2(vector![from.0, to.0]),
+                    v_base: VBase(vbase),
+                });
+            });
+        }
+    }
+}

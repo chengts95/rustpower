@@ -112,7 +112,6 @@ impl PowerFlow for PowerGrid {
     fn run_pf(&mut self) {
         // Executes the power flow system once within the ECS world.
         self.world_mut().run_system_once(ecs_run_pf).unwrap();
-        self.world_mut().run_system_once(ecs_run_pf).unwrap();
     }
 }
 

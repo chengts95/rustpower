@@ -104,13 +104,18 @@ impl Into<Name> for NameWrapper {
     }
 }
 
-
 pub mod systems {
 
     use crate::basic::ecs::elements::NodeLookup;
 
     use super::*;
-
+    pub fn init_node_lookup(mut cmd: Commands, bus_ids: Query<(Entity, &BusID)>) {
+        let mut node_lookup = NodeLookup::default();
+        bus_ids.iter().for_each(|(entity, bus_id)| {
+            node_lookup.insert(bus_id.0, entity);
+        });
+        cmd.insert_resource(node_lookup);
+    }
     pub fn update_node_lookup(
         mut lookup: ResMut<NodeLookup>,
         changed: Query<(Entity, &BusID), Changed<BusID>>,
@@ -156,7 +161,7 @@ mod tests {
         let mut pf_net = PowerGrid::default();
         let mut cmd = pf_net.world_mut().commands();
         cmd.spawn_batch(buses);
-        
+
         pf_net.world_mut().flush();
         let mut registry = SnapshotRegistry::default();
         BusSnapShotReg::register_snap_shot(&mut registry);
