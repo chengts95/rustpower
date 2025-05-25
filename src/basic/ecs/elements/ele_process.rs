@@ -83,6 +83,7 @@ pub fn init_powergrid_from_net(net: &Network, world: &mut World) {
     world.load_pandapower_net(net);
 }
 
+
 pub struct DefaultSnapShotReg;
 impl SnaptShotRegGroup for DefaultSnapShotReg {
     fn register_snap_shot(registry: &mut SnapshotRegistry) {
@@ -100,14 +101,19 @@ impl SnaptShotRegGroup for DefaultSnapShotReg {
 pub struct ElementSetupPlugin;
 impl bevy_app::Plugin for ElementSetupPlugin {
     fn build(&self, app: &mut bevy_app::App) {
-        app.add_systems(Startup, (
-            bus::systems::init_node_lookup,
+        app.add_systems(
+            Startup,
             (
-            trans::systems::setup_transformer,
-            line::systems::setup_line_systems,
-            shunt::systems::setup_shunt_systems,
+                bus::systems::init_node_lookup,
+                (
+                    trans::systems::setup_transformer,
+                    line::systems::setup_line_systems,
+                    shunt::systems::setup_shunt_systems,
+                ),
             )
-        ).chain().in_set(PFInitStage));
+                .chain()
+                .in_set(PFInitStage),
+        );
 
         app.add_systems(PreUpdate, bus::systems::update_node_lookup);
     }

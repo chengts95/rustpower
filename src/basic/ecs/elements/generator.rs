@@ -23,7 +23,7 @@ pub struct TargetPMW(pub f64);
 pub struct TargetQMVar(pub f64);
 /// PU电压目标
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct TargetVmPu(f64);
+pub struct TargetVmPu(pub f64);
 impl Default for TargetVmPu {
     fn default() -> Self {
         Self(1.0)
@@ -31,7 +31,7 @@ impl Default for TargetVmPu {
 }
 /// PU电压目标
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct TargetVaDeg(f64);
+pub struct TargetVaDeg(pub f64);
 impl Default for TargetVaDeg {
     fn default() -> Self {
         Self(0.0)

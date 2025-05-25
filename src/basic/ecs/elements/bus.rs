@@ -4,12 +4,22 @@ use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
 use const_format::concatcp;
 use derive_more::derive::{Deref, DerefMut, From, Into};
+use nalgebra::Complex;
 
 use crate::{define_snapshot, io::pandapower::Bus};
 
 use super::units::*;
 
 use bevy_ecs::name::Name;
+#[derive(Component, Clone, serde::Serialize, serde::Deserialize)]
+pub struct VBusPu(pub Complex<f64>);
+#[derive(Component, Default, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SBusPu(pub Complex<f64>);
+impl Default for VBusPu {
+    fn default() -> Self {
+        VBusPu(Complex::new(1.0, 0.0))
+    }
+}
 
 #[derive(Component, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OutOfService;
@@ -113,6 +123,8 @@ pub mod systems {
         let mut node_lookup = NodeLookup::default();
         bus_ids.iter().for_each(|(entity, bus_id)| {
             node_lookup.insert(bus_id.0, entity);
+            cmd.entity(entity)
+                .insert((SBusPu::default(), VBusPu::default()));
         });
         cmd.insert_resource(node_lookup);
     }
