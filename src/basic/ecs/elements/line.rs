@@ -80,8 +80,8 @@ pub mod systems {
     pub fn setup_line_systems(
         mut commands: Commands,
         q: Query<(Entity, &LineParams, &FromBus, &ToBus)>,
-        buses:Query< &VNominal>,
-        lut:Res<NodeLookup>,
+        buses: Query<&VNominal>,
+        lut: Res<NodeLookup>,
         common: Res<PFCommonData>,
     ) {
         for (entity, params, from, to) in &q {

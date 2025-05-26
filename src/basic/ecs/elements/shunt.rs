@@ -55,8 +55,27 @@ impl SnaptShotRegGroup for ShuntSnapShotReg {
 
 pub mod systems {
     use super::*;
+    use crate::basic::ecs::{elements::*, network::GND};
     use bevy_ecs::prelude::Commands;
-    pub fn setup_shunt_systems(mut commands: Commands) {
-        
+    use nalgebra::vector;
+    /// Converts a shunt to its equivalent admittance branch.
+
+    fn shunt_internal(item: &ShuntDevice, bus: &TargetBus) -> AdmittanceBranch {
+        let s = Complex::new(-item.p_mw, -item.q_mvar) * Complex::new(item.step as f64, 0.0);
+        let y = s / (item.vn_kv * item.vn_kv);
+        AdmittanceBranch {
+            y: Admittance(y),
+            port: Port2(vector![bus.0 as i64, GND.into()]),
+            v_base: VBase(item.vn_kv),
+        }
+    }
+
+    pub fn setup_shunt_systems(
+        mut commands: Commands,
+        q: Query<(&TargetBus, &ShuntDevice), Without<OutOfService>>,
+    ) {
+        q.iter().for_each(|(target_bus, device)| {
+            commands.spawn((EShunt, shunt_internal(device, target_bus)));
+        });
     }
 }

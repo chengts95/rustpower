@@ -6,7 +6,10 @@ use nalgebra_sparse::{CooMatrix, CsrMatrix};
 use num_complex::Complex64;
 use num_traits::One;
 
-use super::{elements::*, network::PowerFlowMat};
+use super::{
+    elements::{pf::{PQBus, PVBus, SlackBus}, *},
+    network::PowerFlowMat,
+};
 
 /// Creates a permutation matrix for reordering buses in the power flow network.
 ///
@@ -167,7 +170,9 @@ pub(crate) struct SystemBusStatus {
 pub(crate) fn init_bus_status(
     node_lookup: Res<NodeLookup>,
     common: Res<PFCommonData>,
-    q: Query<&NodeType>,
+    pq: Query<&PQBus>,
+    pv: Query<&PVBus>,
+    ext: Query<&SlackBus>,
 ) -> SystemBusStatus {
     let nodes = node_lookup.len();
     let s_base = common.sbase;

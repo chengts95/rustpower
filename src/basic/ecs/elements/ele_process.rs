@@ -7,6 +7,7 @@ use super::switch;
 use crate::basic::ecs::defer_builder::*;
 use crate::basic::ecs::elements::*;
 use crate::basic::ecs::network::PowerGrid;
+use crate::basic::ecs::plugin::BeforePFInitStage;
 use crate::basic::ecs::plugin::PFInitStage;
 use bevy_app::PreUpdate;
 use bevy_app::Startup;
@@ -70,6 +71,11 @@ impl LoadPandapowerNet for World {
         spawner.spawn_batch(world, shunts);
         spawner.spawn_batch(world, sgens);
         spawner.spawn_batch(world, switches);
+        world.insert_resource(PFCommonData {
+            wbase: net.f_hz * 2.0 * std::f64::consts::PI,
+            f_hz: net.f_hz,
+            sbase: net.sn_mva,
+        });
     }
 }
 
@@ -82,7 +88,6 @@ pub fn pandapower_init_system(world: &mut World) {
 pub fn init_powergrid_from_net(net: &Network, world: &mut World) {
     world.load_pandapower_net(net);
 }
-
 
 pub struct DefaultSnapShotReg;
 impl SnaptShotRegGroup for DefaultSnapShotReg {
@@ -97,14 +102,14 @@ impl SnaptShotRegGroup for DefaultSnapShotReg {
         SwitchSnapShotReg::register_snap_shot(registry);
     }
 }
-
+#[derive(Default)]
 pub struct ElementSetupPlugin;
 impl bevy_app::Plugin for ElementSetupPlugin {
     fn build(&self, app: &mut bevy_app::App) {
         app.add_systems(
             Startup,
             (
-                bus::systems::init_node_lookup,
+                bus::systems::init_node_lookup.in_set(BeforePFInitStage),
                 (
                     trans::systems::setup_transformer,
                     line::systems::setup_line_systems,
@@ -112,7 +117,7 @@ impl bevy_app::Plugin for ElementSetupPlugin {
                 ),
             )
                 .chain()
-                .in_set(PFInitStage),
+                .in_set(BeforePFInitStage),
         );
 
         app.add_systems(PreUpdate, bus::systems::update_node_lookup);

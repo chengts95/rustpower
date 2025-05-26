@@ -1,7 +1,9 @@
-use crate::basic::ecs::plugin::PFInitStage;
+use crate::basic::ecs::network::{PowerFlowMat, apply_permutation};
+use crate::basic::ecs::plugin::{AfterPFInitStage, BeforePFInitStage, PFInitStage};
+use crate::basic::ecs::systems::init_states;
 
 use super::*;
-use bevy_app::prelude::*;
+use bevy_app::{plugin_group, prelude::*};
 use bevy_ecs::component::Mutable;
 use bevy_ecs::system::SystemParam;
 use nalgebra::SimdComplexField;
@@ -77,7 +79,9 @@ pub fn p_mw_inj(mut target_p: NodeOp<TargetPMW, SBusPu>) {
         state.0.re += val.0 * sbase_frac;
     });
 }
-pub fn v_inj(target_vm: NodeOp<TargetVmPu, VBusPu>, target_va: NodeOp<TargetVaDeg, VBusPu>) {
+pub fn v_inj(mut v: ParamSet<(NodeOp<TargetVmPu, VBusPu>, NodeOp<TargetVaDeg, VBusPu>)>) {
+    let target_vm = v.p0();
+
     let mut buses = target_vm.buses;
     target_vm
         .elements
@@ -87,6 +91,10 @@ pub fn v_inj(target_vm: NodeOp<TargetVmPu, VBusPu>, target_va: NodeOp<TargetVaDe
             let mut data = buses.get_mut(entity).unwrap();
             data.0 = data.0.simd_signum() * Complex::new(target_vm_pu.0, 0.0);
         });
+
+    let target_va = v.p1();
+
+    let mut buses = target_va.buses;
     target_va
         .elements
         .iter()
@@ -97,28 +105,70 @@ pub fn v_inj(target_vm: NodeOp<TargetVmPu, VBusPu>, target_va: NodeOp<TargetVaDe
         });
 }
 pub fn q_mvar_inj(mut target_q: NodeOp<TargetQMVar, SBusPu>) {
-    let s_base_frac = 1.0 / target_q.common.sbase;
     target_q.inject(|val, state, sbase_frac| {
         state.0.im += val.0 * sbase_frac;
     });
 }
 
-pub struct NodeTaggingPlugin;
+// pub fn extract_pf_result(res: Res<PowerFlowResult>,
+//        mat: Res<PowerFlowMat>,nodes: Res<NodeLookup>, mut v_bus:Query<&mut VBusPu>, mut s_bus:Query<&mut SBusPu>) {
+//     let cv = &res.v;
+//     let mis = &cv.component_mul(&(&mat.y_bus * cv).conjugate());
+//     let sbus_res = mis.clone();
+//     let sbus_res = &mat.reorder.transpose() * sbus_res;
+//     let v = &mat.reorder.transpose() * &res.v;
 
+// }
+#[derive(Default)]
+pub struct NodeTaggingPlugin;
+#[derive(Default)]
+pub struct MatBuilderPlugin;
+
+// #[derive(Default)]
+// pub struct ResultExtractPlugin;
+
+impl Plugin for MatBuilderPlugin {
+    fn build(&self, app: &mut App) {
+        app.configure_sets(
+            Startup,
+            (
+                AfterPFInitStage.after(PFInitStage),
+                BeforePFInitStage.before(PFInitStage),
+            ),
+        );
+        app.add_systems(
+            Startup,
+            (
+                init_states.run_if(not(resource_exists::<PowerFlowMat>)),
+                apply_permutation,
+            )
+                .chain()
+                .in_set(AfterPFInitStage),
+        );
+    }
+}
 impl Plugin for NodeTaggingPlugin {
     fn build(&self, app: &mut App) {
+        app.add_systems(
+            Startup,
+            (label_pq_nodes, label_pv_nodes, label_slack_nodes).in_set(PFInitStage),
+        );
+
+        app.add_systems(Startup, (p_mw_inj, q_mvar_inj, v_inj).in_set(PFInitStage));
+    }
+}
+
+plugin_group! {
+    /// Doc comments and annotations are supported: they will be added to the generated plugin
+    /// group.
+    #[derive(Debug)]
+    pub struct BasePFInitPlugins {
+        :ElementSetupPlugin,
+        // Identify PV PQ Ext Nodes.
+        :NodeTaggingPlugin,
+        // Build the power flow matrix.
+        :MatBuilderPlugin
 
 
-        app.add_systems(Startup, (
-            label_pq_nodes,
-            label_pv_nodes,
-            label_slack_nodes,
-        ).in_set(PFInitStage));
-
-        app.add_systems(Startup, (
-            p_mw_inj,
-            q_mvar_inj,
-            v_inj,
-        ).in_set(PFInitStage));
     }
 }

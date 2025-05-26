@@ -24,8 +24,9 @@ impl Default for VBusPu {
 #[derive(Component, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OutOfService;
 #[derive(Component)]
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
 #[require(VNominal)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Default)]
 pub struct BusID(pub i64);
 #[derive(Component, serde::Serialize, serde::Deserialize)]
 pub struct BusType(pub String);
@@ -62,6 +63,7 @@ pub struct Zone(pub i64);
 #[derive(Bundle, Default)]
 pub struct BusBundle {
     pub name: Name,
+    pub bus_id: BusID,
     pub vm_pu: VmLimit<PerUnit>,
     pub vn_kv: VNominal,
     pub zone: Zone,
@@ -76,6 +78,7 @@ impl From<&Bus> for BusBundle {
                     .map(|x| x.clone())
                     .unwrap_or_else(|| format!("bus_{}", bus.index)),
             ),
+            bus_id: BusID(bus.index),
             vm_pu: VmLimit::new(bus.min_vm_pu.unwrap_or(0.9), bus.max_vm_pu.unwrap_or(1.1)),
             vn_kv: VNominal(Pair(bus.vn_kv, PhantomData)),
             zone: Zone(bus.zone.unwrap_or(0)),

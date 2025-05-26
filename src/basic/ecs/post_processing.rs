@@ -105,10 +105,10 @@ fn extract_res_bus(
 }
 
 /// Prints the results of the power flow for each bus.
-fn print_res_bus(q: Query<(&PFNode, &VBusResult, &SBusResult)>) {
+fn print_res_bus(q: Query<(&BusID, &VBusResult, &SBusResult)>) {
     let bus_res_table = q
         .iter()
-        .sort_by::<&PFNode>(|value_1, value_2| value_1.cmp(&value_2))
+        .sort_by::<&BusID>(|value_1, value_2| value_1.cmp(&value_2))
         .map(|(node, v, s)| {
             let vm = v.0.modulus();
             let angle = v.0.argument().to_degrees();
