@@ -9,9 +9,9 @@ use serde::Serialize;
 
 use crate::basic::ecs::network::DataOps;
 use crate::basic::ecs::network::PowerGrid;
+use crate::basic::ecs::powerflow::systems::PowerFlowConfig;
 #[derive(Default)]
 pub struct ArchivePlugin;
-
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct ChildOfWrapper(pub u32);
@@ -50,9 +50,9 @@ impl Plugin for ArchivePlugin {
     fn build(&self, app: &mut App) {
         use crate::prelude::ecs::elements::*;
         let mut reg = build_snapshot_registry();
-       
-        reg.register_with::<ChildOf,ChildOfWrapper>();
-        register_res_all!(reg, [PFCommonData]);
+
+        reg.register_with::<ChildOf, ChildOfWrapper>();
+        register_res_all!(reg, [PFCommonData, PowerFlowConfig]);
         app.insert_resource(reg);
     }
 }

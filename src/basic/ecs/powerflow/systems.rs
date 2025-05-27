@@ -249,9 +249,6 @@ pub(crate) fn init_bus_status(
     )
     .expect("Failed to create complex permutation matrix");
 
-    // Scale power injections to per-unit system
-    s_bus.scale_mut(1.0 / s_base);
-
     SystemBusStatus {
         reorder,
         s_bus,

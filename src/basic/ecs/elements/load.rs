@@ -43,8 +43,8 @@ impl From<&Load> for LoadBundle {
     fn from(load: &Load) -> Self {
         Self {
             target_bus: TargetBus(load.bus),
-            target_p: TargetPMW(load.p_mw),
-            target_q: TargetQMVar(load.q_mvar),
+            target_p: TargetPMW(-load.p_mw),
+            target_q: TargetQMVar(-load.q_mvar),
             cfg: LoadCfg {
                 scaling: load.scaling,
                 load_type: load.type_.clone(),

@@ -10,15 +10,18 @@ use bevy_ecs::component::Mutable;
 use bevy_ecs::system::SystemParam;
 use nalgebra::{Complex, SimdComplexField};
 
-use super::systems::{init_states, PowerFlowMat};
+use super::systems::{PowerFlowMat, init_states};
 
 #[derive(Component)]
+#[component(storage = "SparseSet")]
 pub struct PQBus;
 
 #[derive(Component)]
+#[component(storage = "SparseSet")]
 pub struct PVBus;
 
 #[derive(Component)]
+#[component(storage = "SparseSet")]
 pub struct SlackBus;
 
 #[derive(SystemParam)]
@@ -86,6 +89,7 @@ fn label_slack_nodes(
 
 pub fn p_mw_inj(mut target_p: NodeOp<TargetPMW, SBusPu>) {
     target_p.inject(|val, state, sbase_frac| {
+        println!("Injecting P: {} MW", val.0);
         state.0.re += val.0 * sbase_frac;
     });
 }
