@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 mod bus;
+mod ele_process;
 mod generator;
 mod line;
 mod load;
@@ -8,15 +9,14 @@ mod shunt;
 mod switch;
 mod trans;
 mod units;
-mod ele_process;
 use crate::io::pandapower;
 
 use bevy_ecs::entity::EntityHash;
 use bevy_ecs::prelude::*;
 use derive_more::{Deref, DerefMut};
+pub use ele_process::*;
 use nalgebra::Complex;
 pub use switch::*;
-pub use ele_process::*;
 /// Represents a node with specified power and bus information in a power system.
 #[derive(Debug, Clone, Copy, Default, Component, serde::Serialize, serde::Deserialize)]
 pub struct PQNode {
@@ -149,7 +149,7 @@ pub struct EShunt;
 #[derive(Debug, Resource, serde::Serialize, serde::Deserialize)]
 pub struct PFCommonData {
     pub wbase: f64, // Base frequency (typically in rad/s).
-    pub f_hz: f64, // Base frequency (typically in Hz).
+    pub f_hz: f64,  // Base frequency (typically in Hz).
     pub sbase: f64, // Base power (typically in MVA).
 }
 

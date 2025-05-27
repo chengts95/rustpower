@@ -89,7 +89,6 @@ fn label_slack_nodes(
 
 pub fn p_mw_inj(mut target_p: NodeOp<TargetPMW, SBusPu>) {
     target_p.inject(|val, state, sbase_frac| {
-        println!("Injecting P: {} MW", val.0);
         state.0.re += val.0 * sbase_frac;
     });
 }

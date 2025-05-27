@@ -7,21 +7,19 @@ use num_traits::Zero;
 mod res_display;
 use res_display::*;
 use serde::{Deserialize, Serialize};
-use tabled::{settings::Style, Table};
+use tabled::{Table, settings::Style};
 
 use crate::basic::sparse::cast::Cast;
 
 use super::{elements::*, network::*, powerflow::prelude::*};
 /// Component storing the result of SBus power flow calculation.
 /// The result is a complex number representing the power demand in MW in the bus.
-#[derive(Debug, Component, Clone)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Component, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SBusResult(pub Complex64);
 
 /// Component storing the result of VBus power flow calculation.
 /// /// The result has a complex number representing the voltage magnitude in p.u.
-#[derive(Debug, Component, Clone)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Component, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VBusResult(pub Complex64);
 /// Data structure for storing results of power flow calculations for a line.
 #[derive(Component, Debug, Default, Serialize, Deserialize)]
@@ -275,10 +273,7 @@ impl PostProcessing for App {
 mod tests {
     use super::*;
     use crate::basic::ecs::network::PowerFlow;
-    use crate::{
-        basic,
-        io::pandapower::load_csv_zip,
-    };
+    use crate::{basic, io::pandapower::load_csv_zip};
     use bevy_ecs::system::RunSystemOnce;
     use nalgebra::ComplexField;
     use std::env;

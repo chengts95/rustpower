@@ -140,7 +140,7 @@ impl NodeMerge {
 pub fn process_switch_state(
     mut cmd: Commands,
     nodes: Res<NodeLookup>,
-    net: Res<PPNetwork>,
+    buses: Query<&VNominal>,
     q: Query<(Entity, &Switch, &SwitchState)>,
 ) {
     let node_idx: Vec<u64> = nodes.reverse.values().map(|&x| x as u64).collect();
@@ -160,7 +160,8 @@ pub fn process_switch_state(
                     .union(switch.bus as u64, switch.element as u64);
             }
             SwitchType::SwitchTwoBuses if **closed => {
-                let v_base = net.bus[switch.bus as usize].vn_kv;
+                let bus = nodes.get_entity(switch.bus).unwrap();
+                let v_base = *buses.get(bus).unwrap().0;
                 cmd.entity(entity).insert(AdmittanceBranch {
                     y: Admittance(Complex::new(_z_ohm, 0.0)),
                     port: Port2(vector![switch.bus, switch.element]),
@@ -182,7 +183,8 @@ pub fn process_switch_state(
 #[allow(dead_code)]
 pub fn process_switch_state_admit(
     mut cmd: Commands,
-    net: Res<PPNetwork>,
+    nodes: Res<NodeLookup>,
+    buses: Query<&VNominal>,
     q: Query<(Entity, &Switch, &SwitchState)>,
 ) {
     q.iter().for_each(|(entity, switch, closed)| {
@@ -190,7 +192,8 @@ pub fn process_switch_state_admit(
         match switch.et {
             SwitchType::SwitchTwoBuses if **closed && _z_ohm == 0.0 => {
                 let (node1, node2) = (switch.bus, switch.element);
-                let v_base = net.bus[switch.bus as usize].vn_kv;
+                let bus = nodes.get_entity(switch.bus).unwrap();
+                let v_base = *buses.get(bus).unwrap().0;
                 cmd.entity(entity).insert(AdmittanceBranch {
                     y: Admittance(Complex::new(1e6, 0.0)),
                     port: Port2(vector![node1, node2]),
@@ -198,7 +201,8 @@ pub fn process_switch_state_admit(
                 });
             }
             SwitchType::SwitchTwoBuses if **closed => {
-                let v_base = net.bus[switch.bus as usize].vn_kv;
+                let bus = nodes.get_entity(switch.bus).unwrap();
+                let v_base = *buses.get(bus).unwrap().0;
                 cmd.entity(entity).insert(AdmittanceBranch {
                     y: Admittance(Complex::new(_z_ohm, 0.0)),
                     port: Port2(vector![switch.bus, switch.element]),
@@ -769,7 +773,8 @@ mod tests {
         pf_net.init_pf_net();
         let mut node_process_schedule = Schedule::default();
 
-        node_process_schedule.add_systems(node_aggregation_system.pipe(handle_node_merge));
+        node_process_schedule.add_systems( (process_switch_state,(node_aggregation_system
+            .pipe(handle_node_merge))).chain());
         node_process_schedule.run(pf_net.world_mut());
         let mat = pf_net.world().resource::<PowerFlowMat>();
         println!("{:?}", mat.v_bus_init);

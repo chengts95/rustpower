@@ -1,7 +1,7 @@
 use crate::io::pandapower::SGen;
 use crate::prelude::ecs::defer_builder::*;
 use bevy_archive::prelude::SnapshotRegistry;
-use bevy_ecs::{bundle::Bundle, component::Component, name::Name};
+use bevy_ecs::{component::Component, name::Name};
 use rustpower_proc_marco::DeferBundle;
 
 use super::{

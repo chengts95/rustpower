@@ -6,7 +6,6 @@ use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::component::Component;
 use bevy_ecs::name::Name;
 use derive_more::derive::{Deref, DerefMut};
-use nalgebra_sparse::ops::Op;
 use rustpower_proc_marco::DeferBundle;
 /// Represents a network switch in the power flow network.
 ///

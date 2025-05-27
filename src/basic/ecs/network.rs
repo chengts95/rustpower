@@ -6,28 +6,26 @@ use bevy_ecs::{
     component::Mutable, prelude::*, schedule, system::RunSystemOnce,
     world::error::EntityMutableFetchError,
 };
-use nalgebra::*;
-use nalgebra_sparse::*;
-use num_complex::Complex64;
 
 use crate::{
     basic::{newton_pf, solver::DefaultSolver},
     io::pandapower::ecs_net_conv::*,
 };
 
-use super::{elements::*, powerflow::systems::*};
+use super::{
+    elements::*,
+    plugin::DefaultPlugins,
+    powerflow::{init::BasePFInitPlugins, systems::*},
+};
 
 /// Represents the ground node in the network.
 pub const GND: i64 = -1;
-
-
 
 /// Represents the power grid, managing the ECS world for power flow calculations.
 #[derive(Default)]
 pub struct PowerGrid {
     data_storage: App,
 }
-
 
 /// Trait for performing operations on ECS data, such as getting and mutating components of entities.
 pub trait DataOps {
@@ -62,19 +60,18 @@ impl PowerFlow for PowerGrid {
             max_it: None,
             tol: None,
         });
-        let mut schedule = Schedule::default();
-        schedule.set_executor_kind(schedule::ExecutorKind::SingleThreaded);
-        schedule.add_systems(
-            (
-                (init_pf).run_if(resource_exists::<PPNetwork>),
-                process_switch_state,
-                init_states.run_if(not(resource_exists::<PowerFlowMat>)),
-                apply_permutation,
-            )
-                .chain(),
-        );
 
-        schedule.run(self.world_mut());
+        self.app_mut()
+            .add_plugins((BasePFInitPlugins, DefaultPlugins));
+        let world = self.world_mut();
+
+        let mut schedules = world.get_resource_mut::<Schedules>().unwrap();
+
+        let mut s = schedules.remove(Startup).unwrap();
+
+        s.run(world);
+        let mut schedules = world.get_resource_mut::<Schedules>().unwrap();
+        schedules.insert(s);
     }
 
     fn run_pf(&mut self) {
@@ -113,7 +110,6 @@ pub fn ecs_run_pf(mut cmd: Commands, mat: Res<PowerFlowMat>, cfg: Res<PowerFlowC
     let max_it = cfg.max_it;
     let tol = cfg.tol;
     let mut solver = DefaultSolver::default();
-    println!("Running power flow with {} buses", mat.s_bus);
     let v = newton_pf(
         &mat.y_bus,
         &mat.s_bus,
@@ -208,7 +204,6 @@ mod tests {
 
     use super::*;
     use std::env;
-
 
     /// Test case for running power flow in the ECS system.
     #[test]

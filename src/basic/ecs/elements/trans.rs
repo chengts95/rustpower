@@ -1,4 +1,4 @@
-use crate::io::pandapower::{Gen, Transformer};
+use crate::io::pandapower::Transformer;
 use crate::prelude::ecs::defer_builder::DeferBundle;
 use crate::prelude::ecs::defer_builder::DeferredBundleBuilder;
 use bevy_archive::prelude::SnapshotRegistry;
@@ -87,7 +87,7 @@ impl SnaptShotRegGroup for TransSnapShotReg {
     }
 }
 pub mod systems {
-    use bevy_ecs::{entity, relationship::RelatedSpawnerCommands};
+    use bevy_ecs::relationship::RelatedSpawnerCommands;
     use nalgebra::{Complex, vector};
 
     use crate::basic::ecs::{

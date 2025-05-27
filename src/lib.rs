@@ -6,5 +6,5 @@ pub mod prelude {
     pub use crate::io::pandapower;
     pub use basic::*;
 
-    pub use ecs::{elements::PPNetwork, powerflow::prelude::PowerFlowResult, plugin::default_app};
+    pub use ecs::{elements::PPNetwork, plugin::default_app, powerflow::prelude::PowerFlowResult};
 }

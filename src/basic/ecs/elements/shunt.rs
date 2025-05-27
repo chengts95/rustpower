@@ -1,13 +1,12 @@
 use crate::io::pandapower::Shunt;
 use crate::prelude::ecs::defer_builder::*;
 use bevy_archive::prelude::SnapshotRegistry;
-use bevy_ecs::{bundle::Bundle, component::Component};
+use bevy_ecs::component::Component;
 use rustpower_proc_marco::DeferBundle;
-use serde::{Deserialize, Serialize};
 
 use super::{
     bus::{OutOfService, SnaptShotRegGroup},
-    generator::{TargetBus, TargetPMW, TargetQMVar, Uncontrollable},
+    generator::TargetBus,
 };
 
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -54,7 +53,7 @@ impl SnaptShotRegGroup for ShuntSnapShotReg {
 }
 
 pub mod systems {
-    use super::*;
+    
     use crate::basic::ecs::{elements::*, network::GND};
     use bevy_ecs::prelude::Commands;
     use nalgebra::vector;

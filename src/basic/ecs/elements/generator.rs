@@ -68,8 +68,14 @@ struct PQRangeProxy {
 impl From<PQRangeProxy> for PQLim {
     fn from(proxy: PQRangeProxy) -> Self {
         PQLim {
-            p: Limit { min: proxy.p_min, max: proxy.p_max },
-            q: Limit { min: proxy.q_min, max: proxy.q_max },
+            p: Limit {
+                min: proxy.p_min,
+                max: proxy.p_max,
+            },
+            q: Limit {
+                min: proxy.q_min,
+                max: proxy.q_max,
+            },
         }
     }
 }
@@ -131,7 +137,7 @@ pub struct ExtGridBundle {
     pub target_vm: TargetVmPu,
     pub target_va: TargetVaDeg,
     pub cfg: GeneratorCfg, // slack_weight, gen_type, scaling
-    pub pq_range: PQLim, // min/max p/q
+    pub pq_range: PQLim,   // min/max p/q
     pub slack: Slack,
 }
 
