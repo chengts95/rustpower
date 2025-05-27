@@ -11,7 +11,7 @@ use tabled::{settings::Style, Table};
 
 use crate::basic::sparse::cast::Cast;
 
-use super::{elements::*, network::*};
+use super::{elements::*, network::*, powerflow::prelude::*};
 /// Component storing the result of SBus power flow calculation.
 /// The result is a complex number representing the power demand in MW in the bus.
 #[derive(Debug, Component, Clone)]

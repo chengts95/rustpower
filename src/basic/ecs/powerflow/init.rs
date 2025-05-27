@@ -1,12 +1,16 @@
-use crate::basic::ecs::network::{PowerFlowMat, apply_permutation};
-use crate::basic::ecs::plugin::{AfterPFInitStage, BeforePFInitStage, PFInitStage};
-use crate::basic::ecs::systems::init_states;
+use crate::basic::ecs::elements::*;
 
-use super::*;
+use crate::basic::ecs::network::apply_permutation;
+use crate::basic::ecs::plugin::{AfterPFInitStage, BeforePFInitStage, PFInitStage};
+
+use bevy_ecs::prelude::*;
+
 use bevy_app::{plugin_group, prelude::*};
 use bevy_ecs::component::Mutable;
 use bevy_ecs::system::SystemParam;
-use nalgebra::SimdComplexField;
+use nalgebra::{Complex, SimdComplexField};
+
+use super::systems::{init_states, PowerFlowMat};
 
 #[derive(Component)]
 pub struct PQBus;
@@ -40,13 +44,19 @@ impl<'w, 's, T: Component, T1: Component<Mutability = Mutable>> NodeOp<'w, 's, T
 }
 fn label_pq_nodes(
     mut cmd: Commands,
-    nodes: Res<NodeLookup>,
-    query: Query<&TargetBus, (With<TargetPMW>, With<TargetQMVar>, Without<OutOfService>)>,
+    query: Query<
+        Entity,
+        (
+            With<BusID>,
+            Without<PVBus>,
+            Without<PQBus>,
+            Without<SlackBus>,
+            Without<OutOfService>,
+        ),
+    >,
 ) {
-    for target_bus in &query {
-        if let Some(entity) = nodes.get_entity(target_bus.0) {
-            cmd.entity(entity).insert(PQBus);
-        }
+    for entity in &query {
+        cmd.entity(entity).insert(PQBus);
     }
 }
 
@@ -151,7 +161,9 @@ impl Plugin for NodeTaggingPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Startup,
-            (label_pq_nodes, label_pv_nodes, label_slack_nodes).in_set(PFInitStage),
+            ((label_pv_nodes, label_slack_nodes), label_pq_nodes)
+                .chain()
+                .in_set(PFInitStage),
         );
 
         app.add_systems(Startup, (p_mw_inj, q_mvar_inj, v_inj).in_set(PFInitStage));

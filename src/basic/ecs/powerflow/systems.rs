@@ -1,15 +1,44 @@
-use std::collections::HashSet;
-
 use bevy_ecs::{prelude::*, system::RunSystemOnce};
 use nalgebra::*;
-use nalgebra_sparse::{CooMatrix, CsrMatrix};
+use nalgebra_sparse::{CooMatrix, CscMatrix, CsrMatrix};
 use num_complex::Complex64;
 use num_traits::One;
 
-use super::{
-    elements::{pf::{PQBus, PVBus, SlackBus}, *},
-    network::PowerFlowMat,
-};
+use crate::basic::ecs::elements::*;
+
+use super::init::*;
+// /// Resource that wraps the power flow network (PFNetwork).
+// #[derive(Debug, Resource, Clone, serde::Serialize, serde::Deserialize)]
+// pub struct ResPFNetwork(pub PFNetwork);
+
+/// Resource that holds the power flow configuration options, such as the initial voltage guess,
+/// maximum iterations, and tolerance for convergence.
+#[derive(Debug, Resource, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PowerFlowConfig {
+    pub max_it: Option<usize>, // Maximum number of iterations
+    pub tol: Option<f64>,      // Tolerance for convergence
+}
+
+/// Resource for storing the results of power flow calculation, including the final voltage vector,
+/// number of iterations taken, and whether the solution converged.
+#[derive(Debug, Default, Resource, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PowerFlowResult {
+    pub v: DVector<Complex64>, // Final voltage vector after convergence
+    pub iterations: usize,     // Number of iterations taken
+    pub converged: bool,       // Convergence status
+}
+
+/// Resource holding various matrices required for power flow calculations, including the reordered
+/// matrix, admittance matrix (Y-bus), and the power injection vector (S-bus).
+#[derive(Debug, Resource, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PowerFlowMat {
+    pub reorder: CsrMatrix<Complex<f64>>, // Reordering matrix
+    pub y_bus: CscMatrix<Complex<f64>>,   // Y-bus admittance matrix
+    pub s_bus: DVector<Complex64>,        // S-bus power injections
+    pub v_bus_init: DVector<Complex64>,   // V-bus power injections
+    pub npv: usize,                       // Number of PV buses
+    pub npq: usize,                       // Number of PQ buses
+}
 
 /// Creates a permutation matrix for reordering buses in the power flow network.
 ///
@@ -43,7 +72,6 @@ pub(crate) fn create_permutation_matrix(
     let values = vec![1; nodes];
 
     let n_bus = pv.len() + pq.len();
-
     for i in 0..pv.len() {
         col_indices[i] = pv[i] as usize;
     }
@@ -170,54 +198,33 @@ pub(crate) struct SystemBusStatus {
 pub(crate) fn init_bus_status(
     node_lookup: Res<NodeLookup>,
     common: Res<PFCommonData>,
-    pq: Query<&PQBus>,
-    pv: Query<&PVBus>,
-    ext: Query<&SlackBus>,
+    pq: Query<(&BusID, &PQBus)>,
+    pv: Query<(&BusID, &PVBus), Without<SlackBus>>,
+    ext: Query<(&BusID, &SlackBus)>,
+    sbus: Query<(&BusID, &SBusPu)>,
+    vbus: Query<(&BusID, &VBusPu)>,
 ) -> SystemBusStatus {
     let nodes = node_lookup.len();
     let s_base = common.sbase;
 
-    // Initialize sets for different bus types
-    let mut pq_set = HashSet::new();
-    let mut pv_set = HashSet::new();
-    let mut ext_set = HashSet::new();
-
     // Initialize power injections and voltage vectors
     let mut s_bus = DVector::zeros(nodes);
     let mut v_bus_init = DVector::from_element(nodes, Complex64::one());
+    let mut pq_only: Vec<_> = pq.iter().map(|x| x.0.0).collect();
+    let mut pv_only: Vec<_> = pv.iter().map(|x| x.0.0).collect();
+    let mut exts: Vec<_> = ext.iter().map(|x| x.0.0).collect();
 
-    // Collect bus data
-    q.iter().for_each(|node| match node {
-        NodeType::PQ(pq) => {
-            s_bus[pq.bus as usize] -= pq.s;
-            pq_set.insert(pq.bus);
-        }
-        NodeType::PV(pv) => {
-            s_bus[pv.bus as usize] += pv.p;
-            v_bus_init[pv.bus as usize] = Complex64::new(pv.v, 0.0);
-            pv_set.insert(pv.bus);
-        }
-        NodeType::EXT(ext) => {
-            v_bus_init[ext.bus as usize] = Complex64::from_polar(ext.v, ext.phase);
-            ext_set.insert(ext.bus);
-        }
-        NodeType::AUX(_aux_node) => {}
+    sbus.iter().for_each(|(bus_id, s)| {
+        let idx = bus_id.0 as usize;
+        s_bus[idx] = s.0;
+    });
+    vbus.iter().for_each(|(bus_id, s)| {
+        let idx = bus_id.0 as usize;
+        v_bus_init[idx] = s.0;
     });
 
-    // Determine bus indices for reordering
-    let pv_ext: HashSet<_> = pv_set.union(&ext_set).cloned().collect();
-    let mut pv_only: Vec<_> = pv_set.difference(&ext_set).cloned().collect();
-    let mut pq_only: Vec<_> = node_lookup
-        .reverse
-        .values()
-        .cloned()
-        .collect::<HashSet<_>>()
-        .difference(&pv_ext)
-        .cloned()
-        .collect();
     let npv = pv_only.len();
     let npq = pq_only.len();
-    let mut exts: Vec<_> = ext_set.into_iter().collect();
 
     // Sort the bus indices for consistent ordering
     pv_only.sort_unstable();

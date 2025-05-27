@@ -1,5 +1,8 @@
 use crate::{
-    basic::sparse::{self, cast::Cast},
+    basic::{
+        ecs::powerflow::systems::create_permutation_matrix,
+        sparse::{self, cast::Cast},
+    },
     io::pandapower::SwitchType,
 };
 use bevy_ecs::prelude::*;
@@ -9,10 +12,7 @@ use nalgebra_sparse::{CooMatrix, CscMatrix, CsrMatrix};
 use std::collections::{HashMap, HashSet};
 
 use self::sparse::conj::RealImage;
-use super::{
-    super::{network::PowerFlowMat, systems::create_permutation_matrix},
-    *
-};
+use super::{super::powerflow::systems::PowerFlowMat, *};
 
 mod comps;
 pub use comps::*;
@@ -20,34 +20,31 @@ pub use comps::*;
 /// Represents the result of node aggregation as a resource in matrix form.
 ///
 /// This structure holds the merged node matrices (`merge_mat` and `merge_mat_v`) after performing the node aggregation process.
-#[derive(Default, Debug, Clone, Resource)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Default, Debug, Clone, Resource, serde::Serialize, serde::Deserialize)]
 pub struct NodeAggRes {
     pub merge_mat: CscMatrix<f64>, // Aggregation matrix for the merged nodes.
     pub merge_mat_v: CscMatrix<f64>, // Aggregation matrix for voltage values.
 }
 
-
 /// Represents the merging of two nodes in the power network.
 ///
 /// Each `MergeNode` instance represents a pair of nodes to be merged.
-#[derive(Default, Debug, Clone, Component)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Default, Debug, Clone, Component, serde::Serialize, serde::Deserialize)]
 pub struct MergeNode(pub usize, pub usize);
 
 /// Implements a Union-Find structure for efficiently merging nodes in the network.
 ///
 /// This structure is used to manage merging of nodes and to keep track of their relationships.
-#[derive(Default, Debug, Clone)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Default, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NodeMerge {
     pub parent: HashMap<u64, u64>, // Maps each node to its parent in the union-find structure.
     pub rank: HashMap<u64, u64>,   // Rank used for efficient union operations.
 }
 
 /// Represents the mapping of original nodes to their merged nodes after aggregation.
-#[derive(Default, Debug, Clone, Deref, DerefMut, Resource)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(
+    Default, Debug, Clone, Deref, DerefMut, Resource, serde::Serialize, serde::Deserialize,
+)]
 pub struct NodeMapping(HashMap<u64, u64>);
 
 impl NodeMerge {
@@ -517,9 +514,7 @@ mod tests {
 
     use crate::{
         basic::{
-            ecs::{
-                network::*, post_processing::PostProcessing, systems::create_permutation_matrix,
-            },
+            ecs::{network::*, post_processing::PostProcessing},
             sparse::{self, conj::RealImage},
         },
         io::pandapower::{load_pandapower_json, load_pandapower_json_obj},

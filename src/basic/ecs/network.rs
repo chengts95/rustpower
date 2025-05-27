@@ -15,7 +15,7 @@ use crate::{
     io::pandapower::ecs_net_conv::*,
 };
 
-use super::{elements::*, systems::init_states};
+use super::{elements::*, powerflow::systems::*};
 
 /// Represents the ground node in the network.
 pub const GND: i64 = -1;
@@ -28,38 +28,6 @@ pub struct PowerGrid {
     data_storage: App,
 }
 
-// /// Resource that wraps the power flow network (PFNetwork).
-// #[derive(Debug, Resource, Clone, serde::Serialize, serde::Deserialize)]
-// pub struct ResPFNetwork(pub PFNetwork);
-
-/// Resource that holds the power flow configuration options, such as the initial voltage guess,
-/// maximum iterations, and tolerance for convergence.
-#[derive(Debug, Resource, Clone, serde::Serialize, serde::Deserialize)]
-pub struct PowerFlowConfig {
-    pub max_it: Option<usize>, // Maximum number of iterations
-    pub tol: Option<f64>,      // Tolerance for convergence
-}
-
-/// Resource for storing the results of power flow calculation, including the final voltage vector,
-/// number of iterations taken, and whether the solution converged.
-#[derive(Debug, Default, Resource, Clone, serde::Serialize, serde::Deserialize)]
-pub struct PowerFlowResult {
-    pub v: DVector<Complex64>, // Final voltage vector after convergence
-    pub iterations: usize,     // Number of iterations taken
-    pub converged: bool,       // Convergence status
-}
-
-/// Resource holding various matrices required for power flow calculations, including the reordered
-/// matrix, admittance matrix (Y-bus), and the power injection vector (S-bus).
-#[derive(Debug, Resource, Clone, serde::Serialize, serde::Deserialize)]
-pub struct PowerFlowMat {
-    pub reorder: CsrMatrix<Complex<f64>>, // Reordering matrix
-    pub y_bus: CscMatrix<Complex<f64>>,   // Y-bus admittance matrix
-    pub s_bus: DVector<Complex64>,        // S-bus power injections
-    pub v_bus_init: DVector<Complex64>,   // V-bus power injections
-    pub npv: usize,                       // Number of PV buses
-    pub npq: usize,                       // Number of PQ buses
-}
 
 /// Trait for performing operations on ECS data, such as getting and mutating components of entities.
 pub trait DataOps {
@@ -144,10 +112,6 @@ pub fn ecs_run_pf(mut cmd: Commands, mat: Res<PowerFlowMat>, cfg: Res<PowerFlowC
     let v_init = &mat.v_bus_init;
     let max_it = cfg.max_it;
     let tol = cfg.tol;
-    println!(
-        "Running power flow with max_it: {:?}, tol: {:?}",
-        v_init, tol
-    );
     let mut solver = DefaultSolver::default();
     let v = newton_pf(
         &mat.y_bus,

@@ -1,6 +1,6 @@
 use ecs::{
     elements::PPNetwork,
-    network::{DataOps, PowerFlow, PowerFlowResult, PowerGrid},
+    network::{DataOps, PowerFlow,  PowerGrid},
     post_processing::PostProcessing,
 };
 
