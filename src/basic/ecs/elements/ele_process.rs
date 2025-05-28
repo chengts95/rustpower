@@ -1,4 +1,3 @@
-use super::SwitchSnapShotReg;
 use super::switch;
 use crate::basic::ecs::elements::*;
 use crate::basic::ecs::plugin::BeforePFInitStage;
@@ -60,7 +59,10 @@ pub fn build_snapshot_registry() -> SnapshotRegistry {
 
 #[cfg(test)]
 mod test {
-    use crate::{basic::ecs::network::{DataOps, PowerGrid}, prelude::pandapower::Network};
+    use crate::{
+        basic::ecs::network::{DataOps, PowerGrid},
+        prelude::pandapower::Network,
+    };
     use bevy_archive::prelude::{
         load_world_manifest, read_manifest_from_file, save_world_manifest,
     };

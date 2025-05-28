@@ -197,7 +197,6 @@ pub(crate) struct SystemBusStatus {
 /// A `SystemBusStatus` struct containing the initialized bus statuses.
 pub(crate) fn init_bus_status(
     node_lookup: Res<NodeLookup>,
-    common: Res<PFCommonData>,
     pq: Query<(&BusID, &PQBus)>,
     pv: Query<(&BusID, &PVBus), Without<SlackBus>>,
     ext: Query<(&BusID, &SlackBus)>,
@@ -205,8 +204,6 @@ pub(crate) fn init_bus_status(
     vbus: Query<(&BusID, &VBusPu)>,
 ) -> SystemBusStatus {
     let nodes = node_lookup.len();
-    let s_base = common.sbase;
-
     // Initialize power injections and voltage vectors
     let mut s_bus = DVector::zeros(nodes);
     let mut v_bus_init = DVector::from_element(nodes, Complex64::one());

@@ -91,7 +91,7 @@ type VmLimitPerUnit = VmLimit<PerUnit>;
 define_snapshot!(VmLimitPerUnit, "Vm", PerUnit);
 define_snapshot!(VNominal, "Vn", KV);
 pub trait SnaptShotRegGroup {
-    fn register_snap_shot(reg: &mut SnapshotRegistry) {}
+    fn register_snap_shot(_reg: &mut SnapshotRegistry) {}
 }
 
 pub struct BusSnapShotReg;
