@@ -26,7 +26,7 @@ impl Into<ChildOf> for ChildOfWrapper {
         ChildOf(Entity::from_raw(self.0))
     }
 }
-
+#[allow(unused_macros)]
 macro_rules! register_all {
     ($reg:expr, [$($ty:ty),* $(,)?]) => {
         $( ($reg).register::<$ty>(); )*

@@ -7,8 +7,6 @@ use crate::prelude::pandapower::*;
 use bevy_ecs::prelude::*;
 use elements::*;
 
-use std::f64::consts::PI;
-
 trait IntoBundleVec<T, U> {
     fn to_bundle_vec(self) -> Vec<U>;
 }
@@ -91,14 +89,10 @@ mod tests {
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
         let folder = format!("{}/cases/IEEE118", dir);
         let name = folder.to_owned() + "/data.zip";
-        // let net = load_csv_zip(&name).unwrap();
-        // let mut pf_net = PowerGrid::default();
-        // let world = pf_net.world_mut();
-        // println!("{}", net.bus.len());
-        // world.insert_resource(PPNetwork(net));
-        // world.run_system_once(init_pf).unwrap();
-        // let mut a = world.query::<(&Transformer, &Port2)>();
-
-        // println!("{:?}", a.iter(world).collect::<Vec<_>>().len());
+        let net = load_csv_zip(&name).unwrap();
+        let mut pf_net = PowerGrid::default();
+        let world = pf_net.world_mut();
+        println!("{}", net.bus.len());
+        world.insert_resource(PPNetwork(net));
     }
 }
