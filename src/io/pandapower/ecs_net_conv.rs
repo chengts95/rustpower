@@ -1,5 +1,3 @@
-
-
 use crate::basic::ecs::defer_builder::DeferBundleSpawner;
 use crate::basic::ecs::network::DataOps;
 use crate::basic::ecs::network::PowerGrid;
@@ -10,7 +8,6 @@ use bevy_ecs::prelude::*;
 use elements::*;
 
 use std::f64::consts::PI;
-
 
 trait IntoBundleVec<T, U> {
     fn to_bundle_vec(self) -> Vec<U>;
@@ -23,14 +20,6 @@ where
     fn to_bundle_vec(self) -> Vec<U> {
         self.unwrap_or_default().iter().map(Into::into).collect()
     }
-}
-
-fn inital_setup(mut cmd: Commands, net: Res<PPNetwork>) {
-    cmd.insert_resource(PFCommonData {
-        wbase: 2.0 * PI * net.f_hz,
-        f_hz: net.f_hz,
-        sbase: net.sn_mva,
-    });
 }
 
 pub trait LoadPandapowerNet {

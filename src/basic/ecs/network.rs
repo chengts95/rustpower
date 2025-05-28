@@ -3,17 +3,15 @@ use std::fmt;
 
 use bevy_app::prelude::*;
 use bevy_ecs::{
-    component::Mutable, prelude::*, schedule, system::RunSystemOnce,
+    component::Mutable, prelude::*, system::RunSystemOnce,
     world::error::EntityMutableFetchError,
 };
 
 use crate::{
     basic::{newton_pf, solver::DefaultSolver},
-    io::pandapower::ecs_net_conv::*,
 };
 
 use super::{
-    elements::*,
     plugin::DefaultPlugins,
     powerflow::{init::BasePFInitPlugins, systems::*},
 };
@@ -199,7 +197,7 @@ mod tests {
 
     use crate::{
         basic::{self},
-        io::pandapower::load_csv_zip,
+        io::pandapower::load_csv_zip, prelude::PPNetwork,
     };
 
     use super::*;

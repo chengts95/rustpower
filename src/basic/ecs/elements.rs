@@ -16,7 +16,6 @@ use bevy_ecs::prelude::*;
 use derive_more::{Deref, DerefMut};
 pub use ele_process::*;
 use nalgebra::Complex;
-pub use switch::*;
 /// Represents a node with specified power and bus information in a power system.
 #[derive(Debug, Clone, Copy, Default, Component, serde::Serialize, serde::Deserialize)]
 pub struct PQNode {
