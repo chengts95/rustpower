@@ -1,8 +1,9 @@
 #![allow(deprecated)]
 use std::env;
 
+use bevy_archive::prelude::{save_world_manifest, SnapshotRegistry};
 use ecs::post_processing::PostProcessing;
-use rustpower::{io::pandapower::*, prelude::*};
+use rustpower::{io::pandapower::*, prelude::{ecs::elements::SnMva, *}};
 
 #[macro_export]
 macro_rules! timeit {
@@ -49,6 +50,10 @@ fn main() {
     // Register the power network as a resource in the ECS world
     pf_net.world_mut().insert_resource(PPNetwork(net));
     pf_net.update(); //this will initalize the data for pf in the first run
+    let reg = pf_net.world().resource::<SnapshotRegistry>();
+
+    let a = save_world_manifest(pf_net.world(), reg).unwrap();
+    a.to_file("peagase9241.toml", None).unwrap();
     // Extract and validate the results
     let results = pf_net.world().get_resource::<PowerFlowResult>().unwrap();
     assert_eq!(results.converged, true);
