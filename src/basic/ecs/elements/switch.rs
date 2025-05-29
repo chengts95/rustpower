@@ -610,7 +610,10 @@ mod tests {
         let mut pf_net = PowerGrid::default();
         pf_net.world_mut().insert_resource(PPNetwork(net));
         pf_net.init_pf_net();
-
+        pf_net
+            .world_mut()
+            .run_system_once(process_switch_state)
+            .unwrap();
         // 3. 运行系统并获取结果矩阵 `mat` 和 `mat_v`
         let (mat, mat_v) = pf_net
             .world_mut()
@@ -675,7 +678,10 @@ mod tests {
         let mut pf_net = PowerGrid::default();
         pf_net.world_mut().insert_resource(PPNetwork(net));
         pf_net.init_pf_net();
-
+        pf_net
+            .world_mut()
+            .run_system_once(process_switch_state)
+            .unwrap();
         // Step 3: Run system and retrieve result matrices
         let (mat, mat_v) = pf_net
             .world_mut()
@@ -773,8 +779,13 @@ mod tests {
         pf_net.init_pf_net();
         let mut node_process_schedule = Schedule::default();
 
-        node_process_schedule.add_systems( (process_switch_state,(node_aggregation_system
-            .pipe(handle_node_merge))).chain());
+        node_process_schedule.add_systems(
+            (
+                process_switch_state,
+                (node_aggregation_system.pipe(handle_node_merge)),
+            )
+                .chain(),
+        );
         node_process_schedule.run(pf_net.world_mut());
         let mat = pf_net.world().resource::<PowerFlowMat>();
         println!("{:?}", mat.v_bus_init);
