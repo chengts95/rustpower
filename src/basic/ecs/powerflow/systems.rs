@@ -13,10 +13,12 @@ use super::init::*;
 
 /// Resource that holds the power flow configuration options, such as the initial voltage guess,
 /// maximum iterations, and tolerance for convergence.
-#[derive(Debug, Resource, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PowerFlowConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_it: Option<usize>, // Maximum number of iterations
-    pub tol: Option<f64>,      // Tolerance for convergence
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tol: Option<f64>, // Tolerance for convergence
 }
 
 /// Resource for storing the results of power flow calculation, including the final voltage vector,

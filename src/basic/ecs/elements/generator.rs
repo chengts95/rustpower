@@ -203,6 +203,7 @@ impl SnaptShotRegGroup for GenSnapShotReg {
     fn register_snap_shot(reg: &mut SnapshotRegistry) {
         reg.register_named::<TargetBus>("target_bus");
         reg.register_named::<TargetVmPu>("vm_pu");
+        reg.register_named::<TargetVaDeg>("va_deg");
         reg.register_named::<TargetQMVar>("q_mvar");
         reg.register_named::<TargetPMW>("p_mw");
         reg.register::<Slack>();

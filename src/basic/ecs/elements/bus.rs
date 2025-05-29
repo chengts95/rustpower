@@ -88,7 +88,7 @@ impl From<&Bus> for BusBundle {
 // Type alias for VmLimit<PerUnit> to use in macro
 type VmLimitPerUnit = VmLimit<PerUnit>;
 
-define_snapshot!(VmLimitPerUnit, "Vm", PerUnit);
+define_snapshot!(VmLimitPerUnit, "vm_range", PerUnit);
 define_snapshot!(VNominal, "Vn", KV);
 pub trait SnaptShotRegGroup {
     fn register_snap_shot(_reg: &mut SnapshotRegistry) {}
