@@ -6,7 +6,7 @@ use rustpower_proc_marco::DeferBundle;
 
 use super::{
     bus::SnaptShotRegGroup,
-    generator::{TargetBus, Uncontrollable},
+    generator::{TargetBus, Uncontrollable}, TargetPMW, TargetQMVar,
 };
 
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -23,6 +23,8 @@ pub struct SGenDevice {
 pub struct SGenBundle {
     pub target_bus: TargetBus,
     pub device: SGenDevice,
+    pub target_p: TargetPMW,
+    pub target_q: TargetQMVar,
     pub uncontrollable: Option<Uncontrollable>,
     pub name: Option<Name>,
 }
@@ -41,6 +43,8 @@ impl From<&SGen> for SGenBundle {
             },
             uncontrollable: (!sgen.controllable.unwrap_or(true)).then_some(Uncontrollable),
             name: sgen.name.clone().map(Name::new),
+            target_p: TargetPMW(sgen.p_mw),
+            target_q: TargetQMVar(sgen.q_mvar),
         };
 
         bundle

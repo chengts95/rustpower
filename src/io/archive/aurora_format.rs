@@ -50,7 +50,6 @@ impl Plugin for ArchivePlugin {
     fn build(&self, app: &mut App) {
         use crate::prelude::ecs::elements::*;
         let mut reg = build_snapshot_registry();
-
         reg.register_with::<ChildOf, ChildOfWrapper>();
         register_res_all!(reg, [PFCommonData, PowerFlowConfig]);
         app.insert_resource(reg);

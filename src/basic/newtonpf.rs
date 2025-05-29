@@ -51,7 +51,9 @@ pub fn newton_pf<Solver: Solve>(
 
     let mut F = DVector::zeros(num_state);
     assemble_f(&mut F, n_bus, &mis, num_state, npv);
-
+    if F.norm() < tol {
+        return Ok((v, 0));
+    }
     let mut v_m = v.map(|e| e.simd_modulus());
     let mut v_a = v.map(|e| e.simd_argument());
     let mut cache: Option<JacobianCache> = None;
