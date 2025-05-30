@@ -1,14 +1,9 @@
 #![allow(deprecated)]
 use std::env;
 
-use bevy_archive::prelude::{
-    SnapshotRegistry, load_world_manifest, read_manifest_from_file, save_world_manifest,
-};
+use bevy_archive::prelude::{SnapshotRegistry, load_world_manifest, read_manifest_from_file};
 use ecs::post_processing::PostProcessing;
-use rustpower::{
-    io::pandapower::*,
-    prelude::{ecs::elements::SnMva, *},
-};
+use rustpower::prelude::*;
 
 #[macro_export]
 macro_rules! timeit {
@@ -67,4 +62,5 @@ fn main() {
     // Post-process and print the results
     pf_net.post_process();
     pf_net.print_res_bus();
+    timeit!(pegase9241, 10, || pf_net.update());
 }
