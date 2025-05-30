@@ -40,8 +40,18 @@ pub struct PowerFlowMat {
     pub v_bus_init: DVector<Complex64>,   // V-bus power injections
     pub npv: usize,                       // Number of PV buses
     pub npq: usize,                       // Number of PQ buses
+    pub to_perm: Vec<usize>,              // original → reordered
+    pub from_perm: Vec<usize>,            // reordered → original
 }
+impl PowerFlowMat {
+    pub fn reorder_index(&self, orig: usize) -> usize {
+        self.to_perm[orig]
+    }
 
+    pub fn inverse_index(&self, perm: usize) -> usize {
+        self.from_perm[perm]
+    }
+}
 /// Creates a permutation matrix for reordering buses in the power flow network.
 ///
 /// This function constructs a permutation matrix based on the indices of PV nodes, PQ nodes, and external grid nodes.
@@ -159,7 +169,18 @@ pub fn init_states(world: &mut World) {
     let y_bus = y_bus.transpose_as_csc();
     let s_bus = cfg.s_bus;
     let v_bus_init = cfg.v_bus_init;
-
+    let mut to_perm = vec![0; v_bus_init.len()]; // 原 → 新
+    let mut from_perm = vec![0; v_bus_init.len()]; // 新 → 原
+    // println!(
+    //     "Power flow system initialized with {} buses, {} PV buses, and {} PQ buses.",
+    //     v_bus_init.len(),
+    //     cfg.npv,
+    //     cfg.npq
+    // );
+    for (new_idx, &original_idx) in cfg.reorder.col_indices().iter().enumerate() {
+        to_perm[original_idx] = new_idx;
+        from_perm[new_idx] = original_idx;
+    }
     world.insert_resource(PowerFlowMat {
         reorder: cfg.reorder,
         y_bus,
@@ -167,6 +188,8 @@ pub fn init_states(world: &mut World) {
         v_bus_init,
         npv: cfg.npv,
         npq: cfg.npq,
+        to_perm,
+        from_perm,
     });
 }
 
@@ -202,7 +225,7 @@ pub(crate) fn init_bus_status(
     pq: Query<(&BusID, &PQBus)>,
     pv: Query<(&BusID, &PVBus), Without<SlackBus>>,
     ext: Query<(&BusID, &SlackBus)>,
-    sbus: Query<(&BusID, &SBusPu)>,
+    sbus: Query<(&BusID, &SBusInjPu)>,
     vbus: Query<(&BusID, &VBusPu)>,
 ) -> SystemBusStatus {
     let nodes = node_lookup.len();

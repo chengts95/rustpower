@@ -75,15 +75,16 @@ fn extract_res_bus(
     let cv = &res.v;
     let mis = &cv.component_mul(&(&mat.y_bus * cv).conjugate());
     let sbus_res = -mis.clone();
-    let sbus_res = &mat.reorder.transpose() * sbus_res;
-    let v = &mat.reorder.transpose() * &res.v;
+    let inv_order = &mat.reorder.transpose();
+    let sbus_res = inv_order * sbus_res;
+    let v = inv_order * &res.v;
     //Step 2: apply results to original bus
     let v = match &node_agg {
-        Some(node_agg) => &node_agg.merge_mat.cast() * &v,
+        Some(node_agg) => &node_agg.expand_mat_v.cast() * &v,
         None => v,
     };
     let mut sbus_res = match &node_agg {
-        Some(node_agg) => &node_agg.merge_mat.cast() * &sbus_res,
+        Some(node_agg) => &node_agg.expand_mat.cast() * &sbus_res,
         None => sbus_res,
     };
 
@@ -158,7 +159,7 @@ fn extract_res_line(
 ) {
     let v = &mat.reorder.transpose() * &results.v;
     let v = match node_agg {
-        Some(agg) => &agg.merge_mat.cast() * v,
+        Some(agg) => &agg.expand_mat.cast() * v,
         None => v,
     };
     q.iter().for_each(|(e, children, p)| {

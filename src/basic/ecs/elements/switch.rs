@@ -17,13 +17,27 @@ use super::{super::powerflow::systems::PowerFlowMat, *};
 mod comps;
 pub use comps::*;
 
-/// Represents the result of node aggregation as a resource in matrix form.
+/// Represents the result of node aggregation as a matrix resource.
 ///
-/// This structure holds the merged node matrices (`merge_mat` and `merge_mat_v`) after performing the node aggregation process.
+/// This structure stores the **expansion matrices** used to recover full node-space vectors
+/// from aggregated (merged) representations, typically after ideal switch-based node collapsing.
+///
+/// - `expand_mat` maps vectors from merged-node space back to full-node space.
+///     For example: `v_full = expand_mat * v_merged`.
+/// - `expand_mat_v` is a filtered version applied to voltage initialization,
+///     where only a subset of nodes (e.g., representative ones) retain values.
+///
+/// These matrices are especially useful in:
+/// - Reconstructing full-dimension results after power flow solves on reduced systems
+/// - Broadcasting merged states back to ECS components like `VBusPu`
+///
+/// Note:
+/// If aggregation is needed (from full → merged), use `.transpose()`:
+/// `v_merged = expand_mat.transpose() * v_full`
 #[derive(Default, Debug, Clone, Resource, serde::Serialize, serde::Deserialize)]
 pub struct NodeAggRes {
-    pub merge_mat: CscMatrix<f64>, // Aggregation matrix for the merged nodes.
-    pub merge_mat_v: CscMatrix<f64>, // Aggregation matrix for voltage values.
+    pub expand_mat: CscMatrix<f64>,     // From merged → full
+    pub expand_mat_v: CscMatrix<f64>,   // For voltage init expansion
 }
 
 /// Represents the merging of two nodes in the power network.
@@ -364,8 +378,8 @@ pub fn handle_node_merge(
     let mut mats = pf_mats;
     update_power_flow_matrix(&mut mats, pv, pq, ext, &mat, &mat_v, new_total_nodes);
     cmd.insert_resource(NodeAggRes {
-        merge_mat: mat,
-        merge_mat_v: mat_v,
+        expand_mat: mat,
+        expand_mat_v: mat_v,
     });
 }
 

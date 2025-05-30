@@ -48,8 +48,17 @@ impl Plugin for BasePFPlugin {
             max_it: None,
             tol: None,
         });
-
-        app.add_systems(Update, ecs_run_pf);
+        app.configure_sets(
+            Update,
+            (
+                SolverStage::BeforeSolve,
+                SolverStage::Solve,
+                SolverStage::AfterSolve,
+            )
+                .into_configs()
+                .chain(),
+        );
+        app.add_systems(Update, ecs_run_pf.in_set(SolverStage::Solve));
     }
 }
 
@@ -121,7 +130,6 @@ plugin_group! {
         // Basic plugin to run a power flow calculation.
 
         :BasePFPlugin,
-
         // convert the pandapower network to bevy ECS.
         :NewPPLoadPlugin,
         #[cfg(feature = "archive")]

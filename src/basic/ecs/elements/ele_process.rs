@@ -1,10 +1,11 @@
 use super::switch;
 use crate::basic::ecs::elements::*;
 use crate::basic::ecs::plugin::BeforePFInitStage;
-use bevy_app::PreUpdate;
-use bevy_app::Startup;
-use bevy_archive::prelude::SnapshotRegistry;
 
+use crate::prelude::ecs::network::SolverStage::BeforeSolve;
+use bevy_app::Startup;
+use bevy_app::Update;
+use bevy_archive::prelude::SnapshotRegistry;
 pub use bus::*;
 pub use generator::*;
 pub use line::*;
@@ -46,7 +47,7 @@ impl bevy_app::Plugin for ElementSetupPlugin {
                 .in_set(BeforePFInitStage),
         );
 
-        app.add_systems(PreUpdate, bus::systems::update_node_lookup);
+        app.add_systems(Update, bus::systems::update_node_lookup.in_set(BeforeSolve));
     }
 }
 pub fn build_snapshot_registry() -> SnapshotRegistry {

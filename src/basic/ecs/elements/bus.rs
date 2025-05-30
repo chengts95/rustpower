@@ -14,7 +14,7 @@ use bevy_ecs::name::Name;
 #[derive(Component, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VBusPu(pub Complex<f64>);
 #[derive(Component, Default, Clone, serde::Serialize, serde::Deserialize)]
-pub struct SBusPu(pub Complex<f64>);
+pub struct SBusInjPu(pub Complex<f64>);
 impl Default for VBusPu {
     fn default() -> Self {
         VBusPu(Complex::new(1.0, 0.0))
@@ -127,7 +127,7 @@ pub mod systems {
         bus_ids.iter().for_each(|(entity, bus_id)| {
             node_lookup.insert(bus_id.0, entity);
             cmd.entity(entity)
-                .insert((SBusPu::default(), VBusPu::default()));
+                .insert((SBusInjPu::default(), VBusPu::default()));
         });
         cmd.insert_resource(node_lookup);
     }

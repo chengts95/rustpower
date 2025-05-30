@@ -2,19 +2,20 @@
 use std::fmt;
 
 use bevy_app::prelude::*;
-use bevy_ecs::{
-    component::Mutable, prelude::*, system::RunSystemOnce,
-    world::error::EntityMutableFetchError,
-};
+use bevy_ecs::{component::Mutable, prelude::*, world::error::EntityMutableFetchError};
 
-use crate::{
-    basic::{newton_pf, solver::DefaultSolver},
-};
+use crate::basic::{newton_pf, solver::DefaultSolver};
 
 use super::{
     plugin::DefaultPlugins,
     powerflow::{init::BasePFInitPlugins, systems::*},
 };
+#[derive(Clone, SystemSet, Debug, Hash, PartialEq, Eq)]
+pub enum SolverStage {
+    BeforeSolve,
+    Solve,
+    AfterSolve,
+}
 
 /// Represents the ground node in the network.
 pub const GND: i64 = -1;
@@ -73,8 +74,8 @@ impl PowerFlow for PowerGrid {
     }
 
     fn run_pf(&mut self) {
-        // Executes the power flow system once within the ECS world.
-        self.world_mut().run_system_once(ecs_run_pf).unwrap();
+        self.app_mut().update();
+
     }
 }
 
@@ -197,7 +198,8 @@ mod tests {
 
     use crate::{
         basic::{self},
-        io::pandapower::load_csv_zip, prelude::PPNetwork,
+        io::pandapower::load_csv_zip,
+        prelude::PPNetwork,
     };
 
     use super::*;

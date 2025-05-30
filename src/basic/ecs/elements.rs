@@ -16,36 +16,7 @@ use bevy_ecs::prelude::*;
 use derive_more::{Deref, DerefMut};
 pub use ele_process::*;
 use nalgebra::Complex;
-/// Represents a node with specified power and bus information in a power system.
-#[derive(Debug, Clone, Copy, Default, Component, serde::Serialize, serde::Deserialize)]
-pub struct PQNode {
-    /// The complex power injected at the node.
-    pub s: Complex<f64>,
-    /// The bus identifier of the node.
-    pub bus: i64,
-}
 
-/// Represents a node with specified active power, voltage, and bus information in a power system.
-#[derive(Debug, Clone, Copy, Default, Component, serde::Serialize, serde::Deserialize)]
-pub struct PVNode {
-    /// The active power injected at the node.
-    pub p: f64,
-    /// The voltage magnitude at the node.
-    pub v: f64,
-    /// The bus identifier of the node.
-    pub bus: i64,
-}
-
-/// Represents an external grid node with voltage, phase, and bus information.
-#[derive(Debug, Clone, Copy, Component, serde::Serialize, serde::Deserialize)]
-pub struct ExtGridNode {
-    /// The voltage magnitude at the external grid node.
-    pub v: f64,
-    /// The phase angle at the external grid node.
-    pub phase: f64,
-    /// The bus identifier of the external grid node.
-    pub bus: i64,
-}
 
 /// Base voltage for a bus or system node.
 ///
@@ -152,51 +123,9 @@ pub struct PFCommonData {
     pub sbase: f64, // Base power (typically in MVA).
 }
 
-/// Enum representing different types of nodes in the power flow network.
-///
-/// `NodeType` differentiates between various node types such as PQ nodes, PV nodes, external grid nodes, and auxiliary nodes.
-#[derive(Debug, Component, serde::Serialize, serde::Deserialize)]
-pub enum NodeType {
-    PQ(PQNode),       // Load bus (PQ bus)
-    PV(PVNode),       // Generator bus (PV bus)
-    EXT(ExtGridNode), // External grid node
-    AUX(AuxNode),     // Auxiliary node
-}
 
-/// Default implementation for `NodeType`, which defaults to a `PQNode`.
-impl Default for NodeType {
-    fn default() -> Self {
-        NodeType::PQ(PQNode::default())
-    }
-}
 
-/// Allows converting a `PQNode` into a `NodeType`.
-impl From<PQNode> for NodeType {
-    fn from(node: PQNode) -> Self {
-        NodeType::PQ(node)
-    }
-}
 
-/// Allows converting a `PVNode` into a `NodeType`.
-impl From<PVNode> for NodeType {
-    fn from(node: PVNode) -> Self {
-        NodeType::PV(node)
-    }
-}
-
-/// Allows converting an `ExtGridNode` into a `NodeType`.
-impl From<ExtGridNode> for NodeType {
-    fn from(node: ExtGridNode) -> Self {
-        NodeType::EXT(node)
-    }
-}
-
-/// Allows converting an `AuxNode` into a `NodeType`.
-impl From<AuxNode> for NodeType {
-    fn from(node: AuxNode) -> Self {
-        NodeType::AUX(node)
-    }
-}
 
 impl NodeLookup {
     pub fn len(&self) -> usize {

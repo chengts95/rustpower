@@ -87,7 +87,7 @@ fn label_slack_nodes(
     }
 }
 
-pub fn p_mw_inj(mut target_p: NodeOp<TargetPMW, SBusPu>) {
+pub fn p_mw_inj(mut target_p: NodeOp<TargetPMW, SBusInjPu>) {
     target_p.inject(|val, state, sbase_frac| {
         state.0.re += val.0 * sbase_frac;
     });
@@ -117,7 +117,7 @@ pub fn v_inj(mut v: ParamSet<(NodeOp<TargetVmPu, VBusPu>, NodeOp<TargetVaDeg, VB
             data.0 = data.0.simd_modulus() * Complex::from_polar(1.0, target_va_deg.0.to_radians());
         });
 }
-pub fn q_mvar_inj(mut target_q: NodeOp<TargetQMVar, SBusPu>) {
+pub fn q_mvar_inj(mut target_q: NodeOp<TargetQMVar, SBusInjPu>) {
     target_q.inject(|val, state, sbase_frac| {
         state.0.im += val.0 * sbase_frac;
     });

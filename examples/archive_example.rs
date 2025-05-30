@@ -1,9 +1,15 @@
 #![allow(deprecated)]
 use std::env;
 
-use bevy_archive::prelude::{SnapshotRegistry, load_world_manifest, read_manifest_from_file};
+use bevy_archive::prelude::{load_world_manifest, read_manifest_from_file};
 use ecs::post_processing::PostProcessing;
-use rustpower::prelude::*;
+use rustpower::{
+    io::{
+        archive::aurora_format::{ArchiveSnapshotRes, RustPowerSnapshotTrait},
+        pandapower::load_csv_zip,
+    },
+    prelude::{ecs::powerflow::qlim::QLimPlugin, *},
+};
 
 #[macro_export]
 macro_rules! timeit {
@@ -42,15 +48,26 @@ macro_rules! timeit {
 
 fn main() {
     let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let file = format!("{}/cases/pegase9241/pegase9241.toml", dir);
-    let net = read_manifest_from_file(&file, None).unwrap();
+    let zipfile = format!("{}/cases/pegase9241/data.zip", dir);
+    let net = load_csv_zip(&zipfile).unwrap();
     // Initialize the default ECS application with predefined plugins
     let mut pf_net = default_app();
 
+    // Register the power network as a resource in the ECS world
+    pf_net.world_mut().insert_resource(PPNetwork(net));
+    pf_net.update(); //this will initalize the data for pf in the first run
+    let d = pf_net.to_case_file().unwrap();
+    let file = format!("{}/cases/pegase9241/pegase9241.toml", dir);
+    d.to_file(&file, None).unwrap();
+
+    let net = read_manifest_from_file(&file, None).unwrap();
+    // Initialize the default ECS application with predefined plugins
+    let mut pf_net = default_app();
+    pf_net.add_plugins(QLimPlugin);
     pf_net
         .world_mut()
-        .resource_scope::<SnapshotRegistry, _>(|world, registry| {
-            load_world_manifest(world, &net, &registry).unwrap();
+        .resource_scope::<ArchiveSnapshotRes, _>(|world, registry| {
+            load_world_manifest(world, &net, &registry.0.case_file_reg).unwrap();
         });
 
     pf_net.update(); //this will initalize the data for pf in the first run
