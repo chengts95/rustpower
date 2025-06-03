@@ -58,12 +58,14 @@ pub fn event_update(
 }
 pub fn sbus_pu_update(
     mut pfmat: ResMut<PowerFlowMat>,
-    sbus: Query<(&TargetBus, &SBusInjPu), Changed<SBusInjPu>>,
+    sbus: Query<(&BusID, &SBusInjPu), Changed<SBusInjPu>>,
 ) {
+    println!("test sbus:{}",sbus.iter().count());
     for (bus_id, s) in sbus.iter() {
-        let idx = pfmat.reorder_index(bus_id.0 as usize); // 原始 → 排序后的索引
+        let idx = pfmat.reorder_index(bus_id.0 as usize);
         pfmat.s_bus[idx] = s.0;
     }
+  
 }
 pub fn vbus_pu_update(
     mut pfmat: ResMut<PowerFlowMat>,
@@ -78,6 +80,7 @@ pub fn vbus_pu_update(
 
 
 pub fn structure_update(world: &mut World) {
+
     let flags = world.run_system_once(event_update).unwrap();
     if flags.structure_dirty || flags.admit_dirty {
         //TODO: this should only update ybus or node structure
