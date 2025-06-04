@@ -4,13 +4,11 @@ use simba::scalar::{SubsetOf, SupersetOf};
 pub(crate) trait Cast<T> {
     type Mat;
 
-    /// Returns the conjugate of the matrix.
     fn cast(&self) -> Self::Mat;
 }
 pub(crate) trait DownCast<T> {
     type Mat;
 
-    /// Returns the conjugate of the matrix.
     fn down_cast(&self) -> Self::Mat;
 }
 impl Cast<Complex<f64>> for CscMatrix<f64> {

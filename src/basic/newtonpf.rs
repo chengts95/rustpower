@@ -51,7 +51,9 @@ pub fn newton_pf<Solver: Solve>(
 
     let mut F = DVector::zeros(num_state);
     assemble_f(&mut F, n_bus, &mis, num_state, npv);
-
+    if F.norm() < tol {
+        return Ok((v, 0));
+    }
     let mut v_m = v.map(|e| e.simd_modulus());
     let mut v_a = v.map(|e| e.simd_argument());
     let mut cache: Option<JacobianCache> = None;
@@ -63,17 +65,15 @@ pub fn newton_pf<Solver: Solve>(
         let n = jacobian.nrows();
         let (mut Ap, mut Ai, mut Ax) = jacobian.disassemble();
 
-        let _err = unsafe {
-            solver
-                .solve(
-                    Ap.as_mut_slice(),
-                    Ai.as_mut_slice(),
-                    Ax.as_mut_slice(),
-                    F.data.as_mut_slice_unchecked(),
-                    n,
-                )
-                .unwrap()
-        };
+        let _err = solver
+            .solve(
+                Ap.as_mut_slice(),
+                Ai.as_mut_slice(),
+                Ax.as_mut_slice(),
+                F.data.as_mut_slice(),
+                n,
+            )
+            .unwrap();
 
         let dx = &F;
         update_v(

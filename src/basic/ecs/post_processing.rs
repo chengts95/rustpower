@@ -1,6 +1,5 @@
 use bevy_app::App;
 use bevy_ecs::{prelude::*, system::RunSystemOnce};
-use bevy_hierarchy::prelude::*;
 
 use nalgebra::*;
 use num_complex::{Complex64, ComplexFloat};
@@ -8,19 +7,19 @@ use num_traits::Zero;
 mod res_display;
 use res_display::*;
 use serde::{Deserialize, Serialize};
-use tabled::{settings::Style, Table};
+use tabled::{Table, settings::Style};
 
 use crate::basic::sparse::cast::Cast;
 
-use super::{elements::*, network::*};
+use super::{elements::*, network::*, powerflow::prelude::*};
 /// Component storing the result of SBus power flow calculation.
 /// The result is a complex number representing the power demand in MW in the bus.
-#[derive(Debug, Component, Clone)]
+#[derive(Debug, Component, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SBusResult(pub Complex64);
 
 /// Component storing the result of VBus power flow calculation.
 /// /// The result has a complex number representing the voltage magnitude in p.u.
-#[derive(Debug, Component, Clone)]
+#[derive(Debug, Component, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VBusResult(pub Complex64);
 /// Data structure for storing results of power flow calculations for a line.
 #[derive(Component, Debug, Default, Serialize, Deserialize)]
@@ -76,15 +75,16 @@ fn extract_res_bus(
     let cv = &res.v;
     let mis = &cv.component_mul(&(&mat.y_bus * cv).conjugate());
     let sbus_res = -mis.clone();
-    let sbus_res = &mat.reorder.transpose() * sbus_res;
-    let v = &mat.reorder.transpose() * &res.v;
+    let inv_order = &mat.reorder.transpose();
+    let sbus_res = inv_order * sbus_res;
+    let v = inv_order * &res.v;
     //Step 2: apply results to original bus
     let v = match &node_agg {
-        Some(node_agg) => &node_agg.merge_mat.cast() * &v,
+        Some(node_agg) => &node_agg.expand_mat_v.cast() * &v,
         None => v,
     };
     let mut sbus_res = match &node_agg {
-        Some(node_agg) => &node_agg.merge_mat.cast() * &sbus_res,
+        Some(node_agg) => &node_agg.expand_mat.cast() * &sbus_res,
         None => sbus_res,
     };
 
@@ -95,19 +95,19 @@ fn extract_res_bus(
         sbus_res[node] += s_shunt;
     });
 
-    for (idx, entity) in nodes.0.iter() {
-        cmd.entity(*entity).insert((
-            SBusResult(sbus_res[*idx as usize] * common.sbase),
-            VBusResult(v[*idx as usize]),
+    for (idx, entity) in nodes.iter() {
+        cmd.entity(entity).insert((
+            SBusResult(sbus_res[idx as usize] * common.sbase),
+            VBusResult(v[idx as usize]),
         ));
     }
 }
 
 /// Prints the results of the power flow for each bus.
-fn print_res_bus(q: Query<(&PFNode, &VBusResult, &SBusResult)>) {
+fn print_res_bus(q: Query<(&BusID, &VBusResult, &SBusResult)>) {
     let bus_res_table = q
         .iter()
-        .sort_by::<&PFNode>(|value_1, value_2| value_1.cmp(&value_2))
+        .sort_by::<&BusID>(|value_1, value_2| value_1.cmp(&value_2))
         .map(|(node, v, s)| {
             let vm = v.0.modulus();
             let angle = v.0.argument().to_degrees();
@@ -152,14 +152,14 @@ fn extract_res_line(
     mut cmd: Commands,
     node_agg: Option<Res<NodeAggRes>>,
     q: Query<(Entity, &Children, &Port2), With<Line>>,
-    admit: Query<(&Admittance, &VBase, &Port2), With<Parent>>,
+    admit: Query<(&Admittance, &VBase, &Port2), With<ChildOf>>,
     results: Res<PowerFlowResult>,
     common: Res<PFCommonData>,
     mat: Res<PowerFlowMat>,
 ) {
     let v = &mat.reorder.transpose() * &results.v;
     let v = match node_agg {
-        Some(agg) => &agg.merge_mat.cast() * v,
+        Some(agg) => &agg.expand_mat.cast() * v,
         None => v,
     };
     q.iter().for_each(|(e, children, p)| {
@@ -274,10 +274,7 @@ impl PostProcessing for App {
 mod tests {
     use super::*;
     use crate::basic::ecs::network::PowerFlow;
-    use crate::{
-        basic::{self, system::RunPF},
-        io::pandapower::load_csv_zip,
-    };
+    use crate::{basic, io::pandapower::load_csv_zip};
     use bevy_ecs::system::RunSystemOnce;
     use nalgebra::ComplexField;
     use std::env;
