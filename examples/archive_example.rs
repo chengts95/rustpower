@@ -2,7 +2,10 @@ use std::env;
 
 use bevy_archive::prelude::*;
 use ecs::post_processing::PostProcessing;
-use rustpower::{io::archive::aurora_format::ArchiveSnapshotRes, prelude::{ecs::powerflow::qlim::QLimPlugin, *}};
+use rustpower::{
+    io::archive::aurora_format::ArchiveSnapshotRes,
+    prelude::{ecs::powerflow::qlim::QLimPlugin, *},
+};
 
 #[macro_export]
 macro_rules! timeit {

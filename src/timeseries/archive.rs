@@ -74,4 +74,3 @@ impl Plugin for TimeSeriesArchivePlugin {
         register_all!(d, [ScheduledStaticActions]);
     }
 }
-
