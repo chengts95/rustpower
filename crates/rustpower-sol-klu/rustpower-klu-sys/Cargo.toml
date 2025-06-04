@@ -3,7 +3,7 @@ name = "rustpower-klu-sys"
 version = "0.1.0"
 edition = "2021"
 description = "Auto generated bindings for the klu library."
-license = "MIT OR Apache-2.0"
+license = "MPL-2.0"
 repository = "https://github.com/chengts95/rustpower"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
