@@ -1,8 +1,12 @@
 # Changelog
-## [0.3.0] - 2025-5-30
+## [0.3.0] - 2025-6-4
 
 - Refactor solvers and add `faer` solver as a new option.
-
+- Modularized solver interfaces to allow flexible backend switching.
+- Initial support for time-series simulations.
+- Initial support for native ECS archive files.
+- Initial native power grid elements as components.
+  
 ## [0.2.0] - 2024-11-21
 ### Added
 - **World’s First ECS-Based Power Flow Solver**:  
