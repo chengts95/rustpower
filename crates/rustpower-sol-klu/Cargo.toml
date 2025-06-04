@@ -9,4 +9,4 @@ repository = "https://github.com/chengts95/rustpower"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
-rustpower-klu-sys={path="./rustpower-klu-sys"}
+rustpower-klu-sys={path="./rustpower-klu-sys", version = "0.1.0"}
