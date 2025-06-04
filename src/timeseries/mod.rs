@@ -6,7 +6,9 @@ pub mod state;
 use bevy_app::plugin_group;
 use sim_time::TimePlugin;
 
-use crate::timeseries::{scheduled::ScheduledEventPlugin, state::StateTransferPlugin};
+use crate::timeseries::{
+    archive::TimeSeriesArchivePlugin, scheduled::ScheduledEventPlugin, state::StateTransferPlugin,
+};
 
 plugin_group! {
     /// Doc comments and annotations are supported: they will be added to the generated plugin
@@ -17,8 +19,8 @@ plugin_group! {
      :StateTransferPlugin ,
      :ScheduledEventPlugin,
 
-        // #[cfg(feature = "archive")]
-        // crate::io::archive::aurora_format:::ArchivePlugin,
+        #[cfg(feature = "archive")]
+        crate::timeseries:::TimeSeriesArchivePlugin,
 
 
     }

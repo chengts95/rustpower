@@ -51,7 +51,7 @@ macro_rules! timeit {
 
 fn main() {
     let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let file = format!("{}/cases/pegase9241/pegase9241.toml", dir);
+    let file = format!("{}/cases/pegase9241/time_series.toml", dir);
 
     // Initialize the default ECS application with predefined plugins
     let mut pf_net = default_app();
@@ -77,7 +77,6 @@ fn main() {
         ]
         .into(),
     });
-    let t_end = 24.0 * 60.0 * 60.0;
     let net = read_manifest_from_file(&file, None).unwrap();
     // Initialize the default ECS application with predefined plugins
 
@@ -87,6 +86,9 @@ fn main() {
         .resource_scope::<ArchiveSnapshotRes, _>(|world, registry| {
             load_world_manifest(world, &net, &registry.0.case_file_reg).unwrap();
         });
+    // let archive = pf_net.to_case_file().unwrap();
+    // archive.to_file("data_before.toml", None).unwrap();
+    let t_end = 24.0 * 60.0 * 60.0;
     let tstart = Instant::now();
     while pf_net.world().resource::<Time>().0 < t_end {
         pf_net.update();
@@ -100,5 +102,7 @@ fn main() {
     println!("ECS APP took {} ms", dur.as_millis());
     // Post-process and print the results
     pf_net.post_process();
+    pf_net.print_res_bus();
+
     timeit!(pegase9241, 10, || pf_net.update());
 }
