@@ -3,6 +3,11 @@
 RustPower is a cutting-edge power flow calculation library written in Rust, specifically designed for steady-state analysis of electrical power systems. With the introduction of **ECS-based architecture** in version 0.2.0, RustPower offers unparalleled modularity and extensibility.
 
 ---
+## **What's New in 0.3.0**
+- **New Solvers**:  
+  **faer**: A highly efficient and scalable solver for large-scale power systems.
+- **Inital support for native ECS archive files**
+- **Initali support for time-series simulations**
 
 ## **What's New in 0.2.0**
 - **World's First ECS-Based Power Flow Solver**:  
