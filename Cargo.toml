@@ -44,8 +44,9 @@ tabled = "^0.16.0"
 bevy_archive = {version = "0.1.4"}
 const_format = {version = "^0.2.34"}
 faer = {version = "^0.22", optional = true}
-rustpower_proc_marco = {path = "crates/rustpower_proc_marco"}
+rustpower_proc_marco = {path = "crates/rustpower_proc_marco", version = "0.3.0"}
 bumpalo = "^3.17.0"
 [dependencies.rustpower-sol-klu]
 path = "./crates/rustpower-sol-klu"
+version = "0.1.0"
 optional = true
