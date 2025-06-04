@@ -12,10 +12,6 @@ use serde::{Deserialize, Serialize};
 ///
 /// This defines a unit struct implementing [`UnitTrait`] with a specific suffix string.
 ///
-/// # Example
-/// ```rust
-/// define_unit!(MW, "mw");
-/// ```
 /// This creates a marker component `MW` representing the "megawatt" unit.
 macro_rules! define_unit {
     ($unit:ident, $suffix:literal) => {
@@ -37,9 +33,6 @@ macro_rules! define_unit {
 /// This adds [`SnapshotInfo`] and [`SnapShotReg`] implementations
 /// to allow registering named snapshot fields using both type and unit suffix.
 ///
-/// # Example
-/// ```rust
-/// define_snapshot!(Voltage, "v", KV);
 /// ```
 #[macro_export]
 macro_rules! define_snapshot {
