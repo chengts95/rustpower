@@ -1,5 +1,5 @@
 #![allow(deprecated)]
-use std::{collections::vec_deque, env};
+use std::env;
 
 use bevy_archive::prelude::{load_world_manifest, read_manifest_from_file};
 use ecs::post_processing::PostProcessing;
@@ -9,7 +9,7 @@ use rustpower::{
     timeseries::{
         TimeSeriesDefaultPlugins,
         scheduled::{ScheduledStaticAction, ScheduledStaticActions},
-        sim_time::{DeltaTime, Time, TimePlugin},
+        sim_time::{DeltaTime, Time},
         state::TimeSeriesData,
     },
 };
@@ -65,6 +65,12 @@ fn main() {
                 bus: 0,
                 value: 1000.0,
             },
+        },ScheduledStaticAction {
+            execute_at: 120.0 * 60.0,
+            action: rustpower::timeseries::scheduled::ScheduledActionKind::SetTargetPMW {
+                bus: 9235,
+                value: 209.0,
+            },
         }]
         .into(),
     });
@@ -89,6 +95,6 @@ fn main() {
 
     // Post-process and print the results
     pf_net.post_process();
-    //  pf_net.print_res_bus();
+    pf_net.print_res_bus();
     timeit!(pegase9241, 10, || pf_net.update());
 }

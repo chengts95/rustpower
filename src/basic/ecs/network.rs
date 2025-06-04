@@ -108,7 +108,6 @@ pub fn ecs_run_pf(mut cmd: Commands, mat: Res<PowerFlowMat>, cfg: Res<PowerFlowC
     let max_it = cfg.max_it;
     let tol = cfg.tol;
     let mut solver = DefaultSolver::default();
-    println!("{:?}", mat.s_bus[mat.reorder_index(0)]);
     let v = newton_pf(
         &mat.y_bus,
         &mat.s_bus,
