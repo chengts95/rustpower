@@ -6,24 +6,36 @@ use super::systems::PowerFlowResult;
 use crate::basic::ecs::network::ecs_run_pf;
 use crate::prelude::ecs::network::SolverStage::Solve;
 
-// `NonLinearErrorCheck` is the schedule for checking NR convergence and triggering further iteration
+/// A custom schedule label used to trigger nonlinear error checking after each solver pass.
+/// Typically placed after the `Update` stage to determine convergence and whether further iterations are needed.
 #[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NonLinearErrorCheck;
-/// Convergence tracking status
+
+/// Stores the convergence status of the current iteration process.
+/// Updated after each NR solve pass.
 #[derive(Resource, Clone, Default)]
 pub struct ConvergedResult {
-    pub converged: NonlinearConvType, // iteration status
+    pub converged: NonlinearConvType, // Tracks current convergence status
 }
-/// Enum for nonlinear system convergence type
+
+/// Represents the state of convergence for a nonlinear system.
+/// - `Converged`: The iteration has reached a solution.
+/// - `Continue`: Iteration should proceed.
+/// - `MaxIter`: Maximum number of iterations has been reached.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub enum NonlinearConvType {
     #[default]
-    Converged, // error is below threshold
-    Continue, // more iterations needed
-    MaxIter,  // max iterations reached
+    Converged,
+    Continue,
+    MaxIter,
 }
 
+/// Plugin responsible for setting up custom iteration and convergence checking schedules
+/// used in nonlinear solvers such as Newton-Raphson for power flow analysis.
 pub struct NonLinearSchedulePlugin;
+
+/// Updates the convergence status resource (`ConvergedResult`) based on the outcome of power flow computation.
+/// This system is expected to run after each nonlinear solve pass.
 pub fn update_convergence(mut res: ResMut<ConvergedResult>, pf_res: Res<PowerFlowResult>) {
     if pf_res.converged {
         res.converged = NonlinearConvType::Converged;
@@ -31,11 +43,24 @@ pub fn update_convergence(mut res: ResMut<ConvergedResult>, pf_res: Res<PowerFlo
         res.converged = NonlinearConvType::MaxIter;
     }
 }
+
+/// Runs the sequence of schedules for one nonlinear iteration cycle.
+/// Starts from `Startup`, executes `Main`-ordered schedules in sequence,
+/// and jumps back to `Update` if convergence is not yet achieved.
+/// This effectively implements a loop over schedule stages until convergence.
+///
+/// # Behavior
+/// - Executes all labels in `MainScheduleOrder`
+/// - When `NonLinearErrorCheck` is reached:
+///   - If converged: stop
+///   - If max iterations: panic
+///   - Else: rewind to `PreUpdate` stage and repeat
 pub fn run_outer_iteration(
     world: &mut World,
     mut run_at_least_once: Local<bool>,
     mut cached_nr_idx: Local<usize>,
 ) {
+    // First-time setup: run all Startup stages and locate `PreUpdate` index
     if !*run_at_least_once {
         world.resource_scope(|world, order: Mut<MainScheduleOrder>| {
             for &label in &order.startup_labels {
@@ -53,23 +78,27 @@ pub fn run_outer_iteration(
         *run_at_least_once = true;
     }
 
+    // Main iteration loop over schedules in `MainScheduleOrder`
     world.resource_scope(|world, order: Mut<MainScheduleOrder>| {
         let mut index = 0;
 
         while index < order.labels.len() {
             let label = order.labels[index];
-
             let _ = world.try_run_schedule(label);
 
             index += 1;
+
             if label == NonLinearErrorCheck.intern() {
                 let c = world.resource_mut::<ConvergedResult>();
                 match c.converged {
-                    NonlinearConvType::Converged => {}
+                    NonlinearConvType::Converged => {
+                        // Exit iteration loop
+                    }
                     NonlinearConvType::MaxIter => {
                         panic!("Max Iteration reached");
                     }
                     _ => {
+                        // Rewind to `PreUpdate` and continue iteration
                         index = *cached_nr_idx;
                     }
                 }
@@ -80,24 +109,25 @@ pub fn run_outer_iteration(
 
 impl Plugin for NonLinearSchedulePlugin {
     fn build(&self, app: &mut App) {
+        // 1. Initialize convergence result resource
         app.init_resource::<ConvergedResult>();
 
+        // 2. Register the main iteration schedule (label = `Main`)
         let mut main_schedule = Schedule::new(Main);
-        main_schedule.set_executor_kind(ExecutorKind::SingleThreaded);
+        main_schedule.set_executor_kind(ExecutorKind::SingleThreaded); // deterministic
         app.add_schedule(main_schedule);
 
-        // 2. 设置 NR 检查阶段（Update 之后）
+        // 3. Add a custom post-update stage for NR convergence checking
         let mut nl_post_schedule = Schedule::new(NonLinearErrorCheck);
         nl_post_schedule.set_executor_kind(ExecutorKind::SingleThreaded);
         app.add_schedule(nl_post_schedule);
 
-        // 3. 注册主迭代驱动系统
+        // 4. Register outer iteration driver and convergence updater systems
         app.add_systems(Main, run_outer_iteration);
         app.add_systems(Update, update_convergence.after(ecs_run_pf).in_set(Solve));
 
-        // 4. 修改调度顺序（从 bevy_app::MainScheduleOrder）
+        // 5. Insert NonLinearErrorCheck into the schedule order after Update
         let mut order = app.world_mut().resource_mut::<MainScheduleOrder>();
-
-        order.insert_after(Update, NonLinearErrorCheck); // 类似 PostUpdate
+        order.insert_after(Update, NonLinearErrorCheck);
     }
 }

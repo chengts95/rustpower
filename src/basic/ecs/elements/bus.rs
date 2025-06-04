@@ -1,3 +1,8 @@
+//! ECS definitions and utilities for representing power system buses.
+//!
+//! Includes voltage state components, identity markers, unit-aware limits,
+//! and snapshot-compatible serialization logic.
+
 use std::marker::PhantomData;
 
 use bevy_archive::prelude::SnapshotRegistry;
@@ -93,7 +98,10 @@ define_snapshot!(VNominal, "Vn", KV);
 pub trait SnaptShotRegGroup {
     fn register_snap_shot(_reg: &mut SnapshotRegistry) {}
 }
-
+/// Registers all bus-related ECS components for serialization into snapshots.
+///
+/// Includes identity (ID, zone), metadata (`Name` via wrapper),
+/// and voltage attributes (`VmLimit`, `VNominal`) via customized serialization.
 pub struct BusSnapShotReg;
 impl SnaptShotRegGroup for BusSnapShotReg {
     fn register_snap_shot(reg: &mut SnapshotRegistry) {
@@ -122,6 +130,10 @@ pub mod systems {
     use crate::basic::ecs::elements::NodeLookup;
 
     use super::*;
+    /// Initializes the [`NodeLookup`] resource from all existing [`BusID`] components.
+    ///
+    /// Also inserts default values for [`SBusInjPu`] and [`VBusPu`] into each bus entity.
+
     pub fn init_node_lookup(mut cmd: Commands, bus_ids: Query<(Entity, &BusID)>) {
         let mut node_lookup = NodeLookup::default();
         bus_ids.iter().for_each(|(entity, bus_id)| {
@@ -131,17 +143,19 @@ pub mod systems {
         });
         cmd.insert_resource(node_lookup);
     }
+    /// Updates the [`NodeLookup`] in response to changes in [`BusID`] components.
+    ///
+    /// Handles both changes and removals, ensuring consistent ID ↔ entity mapping.
+
     pub fn update_node_lookup(
         mut lookup: ResMut<NodeLookup>,
         changed: Query<(Entity, &BusID), Changed<BusID>>,
         mut removed: RemovedComponents<BusID>,
     ) {
-        // 1️⃣ 清理已移除的
         for entity in removed.read() {
             lookup.remove_entity(entity);
         }
 
-        // 2️⃣ 更新变更/新增的
         for (entity, bus_id) in changed.iter() {
             if lookup.contains_entity(entity) {
                 lookup.remove_entity(entity);

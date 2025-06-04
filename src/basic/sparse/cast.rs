@@ -4,7 +4,6 @@ use simba::scalar::{SubsetOf, SupersetOf};
 pub(crate) trait Cast<T> {
     type Mat;
 
-   
     fn cast(&self) -> Self::Mat;
 }
 pub(crate) trait DownCast<T> {

@@ -9,35 +9,77 @@ use super::bus::{OutOfService, SnaptShotRegGroup};
 use crate::prelude::ecs::defer_builder::*;
 use bevy_ecs::name::Name;
 
+/// Source bus ID (i64) for a  connection.
+///
+/// Identifies the originating bus of the line.
+/// Must correspond to a valid `BusID` entity in the system.
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FromBus(pub i64);
 
+/// Destination bus ID (i64) for a  connection.
+///
+/// Identifies the target or receiving bus of the line.
+/// Must correspond to a valid `BusID` entity in the system.
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
-
 pub struct ToBus(pub i64);
 
+/// Physical and electrical parameters of a transmission line.
+///
+/// All parameters are per-unit-length (per km) unless noted otherwise.
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LineParams {
+    /// Resistance (Ohm/km)
     pub r_ohm_per_km: f64,
+    /// Reactance (Ohm/km)
     pub x_ohm_per_km: f64,
+    /// Shunt conductance (μS/km)
     pub g_us_per_km: f64,
+    /// Capacitance (nF/km)
     pub c_nf_per_km: f64,
+    /// Physical length of the line (km)
     pub length_km: f64,
-    pub df: f64, // dielectric factor?
+    /// Dielectric factor (unitless)
+    ///
+    /// Usually used for correction of charging effect or insulation model.
+    pub df: f64,
+    /// Number of parallel lines (integer)
+    ///
+    /// Indicates how many identical lines are in parallel between the buses.
     pub parallel: i32,
 }
 
+/// Bundle for initializing a transmission line entity in the ECS world.
+///
+/// Combines connection endpoints, physical parameters, optional naming,
+/// standard specification and operational status.
 #[derive(Clone, DeferBundle)]
 pub struct LineBundle {
+    /// Source bus ID
     pub from: FromBus,
+    /// Target bus ID
     pub to: ToBus,
+    /// Line electrical parameters
     pub params: LineParams,
+    /// Optional human-readable name (e.g. "Line_1")
     pub name: Option<Name>,
+    /// Optional standard type name (e.g. "NAYY150SE")
+    ///
+    /// For referencing predefined line specifications.
     pub std_spec: Option<StandardModelType>,
+    /// Optional marker if this line is out of service
     pub out: Option<OutOfService>,
 }
+
+/// Standard line model name (e.g. from library or external spec).
+///
+/// This allows referencing a known cable type or vendor model
+/// for reuse of parameter templates. **Currently no use.**
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct StandardModelType(pub String); // std_type only
+pub struct StandardModelType(pub String);
+/// Registers components relevant to line modeling in the snapshot system.
+///
+/// Ensures that line connections and parameters can be persisted
+/// and restored across simulation snapshots or saved ECS states.
 pub struct LineSnapShotReg;
 impl From<&Line> for LineBundle {
     fn from(line: &Line) -> Self {

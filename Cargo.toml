@@ -41,7 +41,7 @@ bevy_ecs = "^0.16.0"
 bevy_app = "^0.16.0"
 derive_more = { version = "^1.0", features = ["full"] }
 tabled = "^0.16.0"
-bevy_archive = {git="https://github.com/chengts95/bevy_archive"}
+bevy_archive = {version = "0.1.4"}
 const_format = {version = "^0.2.34"}
 faer = {version = "^0.22", optional = true}
 rustpower_proc_marco = {path = "crates/rustpower_proc_marco"}

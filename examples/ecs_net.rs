@@ -1,10 +1,7 @@
 use std::env;
 
 use ecs::{elements::PPNetwork, network::*, post_processing::*};
-use rustpower::{
-    io::pandapower::*,
-    prelude::*,
-};
+use rustpower::{io::pandapower::*, prelude::*};
 #[macro_export]
 macro_rules! timeit {
     ($name:ident, $times:expr, $block:expr) => {{
@@ -76,5 +73,4 @@ fn main() {
     );
     pf_net.post_process();
     pf_net.print_res_bus();
- 
 }

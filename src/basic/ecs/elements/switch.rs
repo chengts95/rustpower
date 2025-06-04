@@ -36,8 +36,8 @@ pub use comps::*;
 /// `v_merged = expand_mat.transpose() * v_full`
 #[derive(Default, Debug, Clone, Resource, serde::Serialize, serde::Deserialize)]
 pub struct NodeAggRes {
-    pub expand_mat: CscMatrix<f64>,     // From merged → full
-    pub expand_mat_v: CscMatrix<f64>,   // For voltage init expansion
+    pub expand_mat: CscMatrix<f64>,   // From merged → full
+    pub expand_mat_v: CscMatrix<f64>, // For voltage init expansion
 }
 
 /// Represents the merging of two nodes in the power network.

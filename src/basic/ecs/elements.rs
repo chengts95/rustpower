@@ -17,7 +17,6 @@ use derive_more::{Deref, DerefMut};
 pub use ele_process::*;
 use nalgebra::Complex;
 
-
 /// Base voltage for a bus or system node.
 ///
 /// `VBase` is a wrapper around a `f64` value representing the base voltage of a node.
@@ -74,14 +73,6 @@ pub struct AdmittanceBranch {
 #[derive(Debug, Resource, Deref, DerefMut, serde::Serialize, serde::Deserialize)]
 pub struct PPNetwork(pub pandapower::Network);
 
-/// Component that stores an index, typically referring to an element within the power network.
-#[derive(Debug, Component, Deref, DerefMut, serde::Serialize, serde::Deserialize)]
-pub struct ElemIdx(pub usize);
-
-/// Component that stores an index, typically referring to a power flow node within the network.
-#[derive(Debug, Component, Deref, DerefMut, serde::Serialize, serde::Deserialize)]
-pub struct PFNode(pub usize);
-
 /// Resource that maps node indices (i64) to ECS entities.
 ///
 /// `NodeLookup` helps in quickly finding the ECS entity corresponding to a node in the power flow network.
@@ -122,10 +113,6 @@ pub struct PFCommonData {
     pub f_hz: f64,  // Base frequency (typically in Hz).
     pub sbase: f64, // Base power (typically in MVA).
 }
-
-
-
-
 
 impl NodeLookup {
     pub fn len(&self) -> usize {

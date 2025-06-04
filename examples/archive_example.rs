@@ -3,10 +3,7 @@ use std::env;
 
 use bevy_archive::prelude::{load_world_manifest, read_manifest_from_file};
 use ecs::post_processing::PostProcessing;
-use rustpower::{
-    io::archive::aurora_format::ArchiveSnapshotRes,
-    prelude::*,
-};
+use rustpower::{io::archive::aurora_format::ArchiveSnapshotRes, prelude::*};
 
 #[macro_export]
 macro_rules! timeit {

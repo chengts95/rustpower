@@ -10,40 +10,69 @@ use super::{
     line::{FromBus, StandardModelType, ToBus},
 };
 
+/// Represents the electrical and modeling parameters of a transformer.
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TransformerDevice {
+    /// Dielectric factor (unitless), used to scale impedance. Common default is 1.0.
     pub df: f64,
+    /// No-load current as a percentage of rated current (%). Used to model magnetizing branch.
     pub i0_percent: f64,
+    /// Iron losses (core losses) in kilowatts (kW).
     pub pfe_kw: f64,
+    /// Short-circuit voltage (%), representing the magnitude of leakage impedance.
     pub vk_percent: f64,
+    /// Resistive portion of the short-circuit voltage (%), used to separate R/X ratio.
     pub vkr_percent: f64,
+    /// Phase shift angle in degrees (°), used for phase-shifting transformers.
     pub shift_degree: f64,
+    /// Rated apparent power of the transformer in megavolt-amperes (MVA).
     pub sn_mva: f64,
+    /// Rated voltage of the high-voltage side (kV).
     pub vn_hv_kv: f64,
+    /// Rated voltage of the low-voltage side (kV).
     pub vn_lv_kv: f64,
+    /// Optional upper limit on transformer loading in percentage (%).
     pub max_loading_percent: Option<f64>,
+    /// Number of parallel transformers. Used to scale impedance or capacity.
     pub parallel: i32,
+    /// Optional tap changer configuration.
     #[serde(flatten)]
     pub tap: Option<TapChanger>,
 }
+
+/// Configuration of a tap changer for voltage or phase regulation.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TapChanger {
+    /// Side on which the tap changer is installed, e.g., "hv" or "lv".
     pub side: Option<String>,
+    /// Neutral tap position (typically 0.0).
     pub neutral: Option<f64>,
+    /// Maximum tap position.
     pub max: Option<f64>,
+    /// Minimum tap position.
     pub min: Option<f64>,
+    /// Current tap position.
     pub pos: Option<f64>,
+    /// Phase shift per tap in degrees (°), for phase shifter modeling.
     pub step_degree: Option<f64>,
+    /// Voltage change per tap in percentage (%), for tap ratio modeling.
     pub step_percent: Option<f64>,
+    /// Indicates whether this tap changer acts as a phase shifter.
     pub is_phase_shifter: bool,
 }
 
+/// ECS bundle representing a transformer entity.
 #[derive(DeferBundle, Debug, Clone)]
 pub struct TransformerBundle {
+    /// Transformer device parameters.
     pub device: TransformerDevice,
-    pub from_bus: FromBus, // hv_bus
-    pub to_bus: ToBus,     //  lv_bus
+    /// The high-voltage side connection (from bus).
+    pub from_bus: FromBus,
+    /// The low-voltage side connection (to bus).
+    pub to_bus: ToBus,
+    /// Optional transformer name.
     pub name: Option<Name>,
+    /// Optional standard type string (e.g., "25MVA_110/10kV_OFAF").
     pub std_type: Option<StandardModelType>,
 }
 

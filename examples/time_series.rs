@@ -1,5 +1,5 @@
 #![allow(deprecated)]
-use std::{collections::vec_deque, env};
+use std::env;
 
 use bevy_archive::prelude::{load_world_manifest, read_manifest_from_file};
 use ecs::post_processing::PostProcessing;
@@ -9,7 +9,7 @@ use rustpower::{
     timeseries::{
         TimeSeriesDefaultPlugins,
         scheduled::{ScheduledStaticAction, ScheduledStaticActions},
-        sim_time::{DeltaTime, Time, TimePlugin},
+        sim_time::{DeltaTime, Time},
         state::TimeSeriesData,
     },
 };

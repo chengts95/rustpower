@@ -1,9 +1,15 @@
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
-use crate::basic::{ecs::{elements::*, network::ecs_run_pf}, sparse::cast::Cast};
+use crate::basic::{
+    ecs::{elements::*, network::ecs_run_pf},
+    sparse::cast::Cast,
+};
 
-use super::{structure_update::VoltageChangeEvent, systems::{PowerFlowMat, PowerFlowResult}};
+use super::{
+    structure_update::VoltageChangeEvent,
+    systems::{PowerFlowMat, PowerFlowResult},
+};
 use crate::prelude::ecs::network::SolverStage::Solve;
 
 pub fn extract_powerflow_results(

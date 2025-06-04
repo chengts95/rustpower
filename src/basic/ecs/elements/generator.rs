@@ -1,3 +1,10 @@
+//! ECS definitions for generator and external grid control parameters.
+//!
+//! This module defines the control targets (`TargetXXX`) and metadata components
+//! for generator and external grid entities. These components guide the simulation
+//! logic (e.g., power flow solver) by specifying voltage setpoints, output limits,
+//! and slack behavior.
+
 use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
 use derive_more::From;
@@ -21,7 +28,10 @@ pub struct TargetPMW(pub f64);
 
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TargetQMVar(pub f64);
-/// PU电压目标
+
+/// Voltage magnitude target in per-unit (pu).
+///
+/// Default = 1.0 pu if unspecified.
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TargetVmPu(pub f64);
 impl Default for TargetVmPu {
@@ -29,7 +39,9 @@ impl Default for TargetVmPu {
         Self(1.0)
     }
 }
-/// PU电压目标
+/// Voltage phase angle target in degrees.
+///
+/// Default = 0.0 deg if unspecified.
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TargetVaDeg(pub f64);
 impl Default for TargetVaDeg {
@@ -37,7 +49,14 @@ impl Default for TargetVaDeg {
         Self(0.0)
     }
 }
-/// 发电机的有功/无功出力限值
+/// Active/reactive power limits of a generator.
+///
+/// Used to constrain its dispatch range in simulation.
+/// Internally contains:
+/// - `p`: Active power range in MW
+/// - `q`: Reactive power range in MVAr
+///
+/// Supports serialization via `PQRangeProxy` for better field access.
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(from = "PQRangeProxy", into = "PQRangeProxy")]
 pub struct PQLim {
@@ -90,17 +109,25 @@ impl From<PQLim> for PQRangeProxy {
         }
     }
 }
-/// 是否为平衡节点
+/// Marker for a slack generator (voltage reference node).
+///
+/// Typically used in external grids or special dispatch models.
 #[derive(Component, Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 #[component(storage = "SparseSet")]
 pub struct Slack;
 
-/// 不可控标记
+/// Marker for uncontrollable entity (for opf which is not implemented yet).
+
 #[derive(Component, Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 #[component(storage = "SparseSet")]
 pub struct Uncontrollable;
 
-/// 发电机元信息（不参与计算）
+/// Generator metadata that affects its control behavior but not calculation directly.
+///
+/// - `scaling`: Global scaling multiplier applied to its output
+/// - `gen_type`: Optional string indicating generation type ("pv", "coal", etc.)
+/// - `slack_weight`: Relative contribution in multi-slack dispatch scenarios
+
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GeneratorCfg {
     pub scaling: f64,
@@ -116,6 +143,10 @@ impl Default for GeneratorCfg {
         }
     }
 }
+/// ECS bundle for generator initialization from Pandapower `Gen`.
+///
+/// This bundle supports optional fields (slack, name, scaling)
+/// and can represent both PQ and PV generators.
 
 #[derive(DeferBundle, Debug, Clone)]
 pub struct GeneratorBundle {
@@ -130,7 +161,8 @@ pub struct GeneratorBundle {
     pub name: Option<Name>,
 }
 
-/// 可以重用 Generator 架构
+/// ECS bundle for generator initialization from Pandapower `ExtGrid`.
+
 #[derive(Bundle, DeferBundle)]
 pub struct ExtGridBundle {
     pub target_bus: TargetBus,
@@ -197,6 +229,12 @@ impl From<&ExtGrid> for ExtGridBundle {
         }
     }
 }
+
+/// Registers snapshot-compatible generator components for serialization.
+///
+/// This includes target values (p, q, vm, va), mode flags (slack/uncontrol),
+/// and configuration metadata (e.g., `gen_cfg`, `pq_range`).
+
 pub struct GenSnapShotReg;
 
 impl SnaptShotRegGroup for GenSnapShotReg {
