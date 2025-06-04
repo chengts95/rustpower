@@ -7,7 +7,6 @@ Cargo.lock
 /.cargo/
 
 # Generated documentation
-/doc/
 /target/doc/
 
 # OS-specific files

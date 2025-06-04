@@ -90,7 +90,7 @@ fn main() {
 }
 ```
 
-For more examples, check the `cases` folder.
+For more examples, check the `examples` and `cases` folder.
 
 ---
 

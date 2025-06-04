@@ -1,9 +1,8 @@
-#![allow(deprecated)]
 use std::env;
 
-use bevy_archive::prelude::{load_world_manifest, read_manifest_from_file};
+use bevy_archive::prelude::*;
 use ecs::post_processing::PostProcessing;
-use rustpower::{io::archive::aurora_format::ArchiveSnapshotRes, prelude::*};
+use rustpower::{io::archive::aurora_format::ArchiveSnapshotRes, prelude::{ecs::powerflow::qlim::QLimPlugin, *}};
 
 #[macro_export]
 macro_rules! timeit {
@@ -50,7 +49,7 @@ fn main() {
     let net = read_manifest_from_file(&file, None).unwrap();
     // Initialize the default ECS application with predefined plugins
 
-    // pf_net.add_plugins(QLimPlugin);
+    pf_net.add_plugins(QLimPlugin);
     pf_net
         .world_mut()
         .resource_scope::<ArchiveSnapshotRes, _>(|world, registry| {
