@@ -2,7 +2,10 @@
 name = "rustpower_proc_marco"
 version = "0.3.0"
 edition = "2024"
-
+authors = ["cts chengts95@msn.cn"]
+description = "proc macro for rustpower."
+license = "MPL-2.0"
+repository = "https://github.com/chengts95/rustpower"
 [lib]
 proc-macro = true
 
