@@ -32,7 +32,6 @@ pub fn state_preserve(
 ) {
     data.t.push(time.0);
     data.data.push(pf_result.v.clone());
-    println!("t:{} v[0]:{}", time.0, data.data.last().unwrap()[0]);
 }
 
 pub fn state_update(

@@ -1,5 +1,5 @@
 #![allow(deprecated)]
-use std::env;
+use std::{env, time::Instant};
 
 use bevy_archive::prelude::{load_world_manifest, read_manifest_from_file};
 use ecs::post_processing::PostProcessing;
@@ -59,19 +59,22 @@ fn main() {
     pf_net.insert_resource(DeltaTime(15.0 * 60.0));
     pf_net.insert_resource(TimeSeriesData::default());
     pf_net.world_mut().spawn(ScheduledStaticActions {
-        queue: vec![ScheduledStaticAction {
-            execute_at: 30.0 * 60.0,
-            action: rustpower::timeseries::scheduled::ScheduledActionKind::SetTargetPMW {
-                bus: 0,
-                value: 1000.0,
+        queue: vec![
+            ScheduledStaticAction {
+                execute_at: 30.0 * 60.0,
+                action: rustpower::timeseries::scheduled::ScheduledActionKind::SetTargetPMW {
+                    bus: 0,
+                    value: 1000.0,
+                },
             },
-        },ScheduledStaticAction {
-            execute_at: 120.0 * 60.0,
-            action: rustpower::timeseries::scheduled::ScheduledActionKind::SetTargetPMW {
-                bus: 9235,
-                value: 209.0,
+            ScheduledStaticAction {
+                execute_at: 120.0 * 60.0,
+                action: rustpower::timeseries::scheduled::ScheduledActionKind::SetTargetPMW {
+                    bus: 9235,
+                    value: 209.0,
+                },
             },
-        }]
+        ]
         .into(),
     });
     let t_end = 24.0 * 60.0 * 60.0;
@@ -84,17 +87,18 @@ fn main() {
         .resource_scope::<ArchiveSnapshotRes, _>(|world, registry| {
             load_world_manifest(world, &net, &registry.0.case_file_reg).unwrap();
         });
+    let tstart = Instant::now();
     while pf_net.world().resource::<Time>().0 < t_end {
         pf_net.update();
         //this will initalize the data for pf in the first run
         // Extract and validate the results
-        let results = pf_net.world().get_resource::<PowerFlowResult>().unwrap();
-        assert_eq!(results.converged, true);
-        println!("ECS APP converged within {} iterations", results.iterations);
+        // let results = pf_net.world().get_resource::<PowerFlowResult>().unwrap();
+        // assert_eq!(results.converged, true);
+        // println!("ECS APP converged within {} iterations", results.iterations);
     }
-
+    let dur = Instant::now() - tstart;
+    println!("ECS APP took {} ms", dur.as_millis());
     // Post-process and print the results
     pf_net.post_process();
-    pf_net.print_res_bus();
     timeit!(pegase9241, 10, || pf_net.update());
 }

@@ -1,5 +1,5 @@
 use bevy_app::prelude::*;
-use bevy_ecs::{prelude::*, system::RunSystemOnce};
+use bevy_ecs::prelude::*;
 
 use crate::basic::ecs::{elements::*, network::apply_permutation};
 
