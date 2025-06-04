@@ -16,6 +16,10 @@ pub enum SolverStage {
     Solve,
     AfterSolve,
 }
+#[derive(Default, Resource)]
+pub struct PowerFlowSolver {
+    pub solver: DefaultSolver,
+}
 
 /// Represents the ground node in the network.
 pub const GND: i64 = -1;
@@ -103,12 +107,15 @@ fn apply_inversed_permutation(mut mat: ResMut<PowerFlowMat>) {
 /// - `cmd`: Command buffer to insert the result resource.
 /// - `mat`: Power flow matrices resource.
 /// - `cfg`: Power flow configuration resource.
-pub fn ecs_run_pf(mut cmd: Commands, mat: Res<PowerFlowMat>, cfg: Res<PowerFlowConfig>) {
+pub fn ecs_run_pf(
+    mut cmd: Commands,
+    mat: Res<PowerFlowMat>,
+    cfg: Res<PowerFlowConfig>,
+    mut solver: ResMut<PowerFlowSolver>,
+) {
     let v_init = &mat.v_bus_init;
     let max_it = cfg.max_it;
     let tol = cfg.tol;
-    let mut solver = DefaultSolver::default();
-    println!("{:?}", mat.s_bus[mat.reorder_index(0)]);
     let v = newton_pf(
         &mat.y_bus,
         &mat.s_bus,
@@ -117,7 +124,7 @@ pub fn ecs_run_pf(mut cmd: Commands, mat: Res<PowerFlowMat>, cfg: Res<PowerFlowC
         mat.npq,
         tol,
         max_it,
-        &mut solver,
+        &mut solver.solver,
     );
 
     // Handle the results of the power flow calculation.

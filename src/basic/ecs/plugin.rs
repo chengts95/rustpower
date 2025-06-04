@@ -48,6 +48,7 @@ impl Plugin for BasePFPlugin {
             max_it: None,
             tol: None,
         });
+        app.world_mut().insert_resource(PowerFlowSolver::default());
         app.configure_sets(
             Update,
             (

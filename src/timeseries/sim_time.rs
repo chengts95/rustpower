@@ -7,7 +7,7 @@ pub struct DeltaTime(pub f64); // in seconds
 #[derive(PartialEq, Default, From, Into, Add, Mul, Div, Resource, Serialize, Deserialize)]
 pub struct Time(pub f64); // in seconds
 
-impl Time{
+impl Time {
     pub fn elapsed_seconds(&self) -> f64 {
         self.0
     }

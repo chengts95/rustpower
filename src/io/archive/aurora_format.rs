@@ -31,6 +31,7 @@ impl Into<ChildOf> for ChildOfWrapper {
     }
 }
 #[allow(unused_macros)]
+
 macro_rules! register_all {
     ($reg:expr, [$($ty:ty),* $(,)?]) => {
         $( ($reg).register::<$ty>(); )*

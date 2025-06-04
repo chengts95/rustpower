@@ -14,7 +14,7 @@ mod rsparse;
 pub use rsparse::*;
 
 #[cfg(feature = "klu")]
-pub type DefaultSolver = KluSolver;
+pub type DefaultSolver = KLUSolver;
 
 #[cfg(all(not(feature = "klu"), feature = "faer"))]
 pub type DefaultSolver = FaerSolver;

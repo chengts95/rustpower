@@ -1,5 +1,5 @@
 use bevy_app::prelude::*;
-use bevy_ecs::{prelude::*, system::RunSystemOnce};
+use bevy_ecs::prelude::*;
 
 use crate::basic::ecs::{elements::*, network::apply_permutation};
 
@@ -81,37 +81,35 @@ pub fn sbus_pu_update(
     mut pfmat: ResMut<PowerFlowMat>,
     sbus: Query<(&BusID, &SBusInjPu), Changed<SBusInjPu>>,
 ) {
-    println!("test sbus:{}", sbus.iter().count());
-    for (bus_id, s) in sbus.iter() {
+    for (bus_id, s) in sbus {
         let idx = pfmat.reorder_index(bus_id.0 as usize);
         pfmat.s_bus[idx] = s.0;
     }
 }
-
-/// Updates the `v_bus` vector in [`PowerFlowMat`] when [`VBusPu`] values have changed.
+// Updates the `v_bus` vector in [`PowerFlowMat`] when [`VBusPu`] values have changed.
 /// Note: this assumes target voltage values are directly applied as injected power.
 pub fn vbus_pu_update(
     mut pfmat: ResMut<PowerFlowMat>,
     sbus: Query<(&TargetBus, &VBusPu), Changed<VBusPu>>,
 ) {
-    for (bus_id, v) in sbus.iter() {
-        let idx = pfmat.reorder_index(bus_id.0 as usize); // 原始 → 排序后的索引
-        pfmat.v_bus_init[idx] = v.0;
+    for (bus_id, s) in sbus {
+        let idx = pfmat.reorder_index(bus_id.0 as usize);
+        pfmat.s_bus[idx] = s.0;
     }
 }
 
 pub fn structure_update(world: &mut World) {
-    let flags = world.run_system_once(event_update).unwrap();
+    let flags = world.run_system_cached(event_update).unwrap();
     if flags.structure_dirty || flags.admit_dirty {
         //TODO: this should only update ybus or node structure
-        world.run_system_once(init_states).unwrap();
-        world.run_system_once(apply_permutation).unwrap();
+        world.run_system_cached(init_states).unwrap();
+        world.run_system_cached(apply_permutation).unwrap();
     } else {
         if flags.injection_dirty {
-            world.run_system_once(sbus_pu_update).unwrap();
+            world.run_system_cached(sbus_pu_update).unwrap();
         }
         if flags.voltage_dirty {
-            world.run_system_once(vbus_pu_update).unwrap();
+            world.run_system_cached(vbus_pu_update).unwrap();
         }
     }
 }
