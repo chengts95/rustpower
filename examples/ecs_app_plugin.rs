@@ -1,8 +1,6 @@
 use std::env;
 
-use ecs::{
-    elements::PPNetwork, network::PowerFlowResult, post_processing::PostProcessing,
-};
+use ecs::{elements::PPNetwork, post_processing::PostProcessing};
 use rustpower::{io::pandapower::*, prelude::*};
 
 #[macro_export]

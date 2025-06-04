@@ -1,18 +1,25 @@
-use bevy_app::prelude::*;
+use bevy_app::{plugin_group, prelude::*};
 use bevy_ecs::prelude::*;
 
-use crate::io::pandapower::ecs_net_conv::PandaPowerStartupPlugin;
+use crate::io::pandapower::ecs_net_conv::pandapower_init_system;
 
-use super::{network::*, switch::*, systems::init_states};
+use super::{elements::*, network::*, powerflow::prelude::*};
+
+#[derive(Debug, SystemSet, Hash, Eq, PartialEq, Clone)]
+pub struct BeforePFInitStage;
 
 /// Represents the power flow initialization stage for Bevy's ECS system.
 #[derive(Debug, SystemSet, Hash, Eq, PartialEq, Clone)]
 pub struct PFInitStage;
 
+#[derive(Debug, SystemSet, Hash, Eq, PartialEq, Clone)]
+pub struct AfterPFInitStage;
+
 /// Base plugin for initializing power flow calculations.
 ///
 /// This plugin sets up the basic configuration required for power flow computation,
 /// and registers necessary systems to run during the application startup and update phases.
+#[derive(Default)]
 pub struct BasePFPlugin;
 
 /// Plugin for initializing switch handling using Type A logic.
@@ -20,6 +27,7 @@ pub struct BasePFPlugin;
 /// SwitchPluginTypeA includes node aggregation logic that results in merging nodes in the network.
 /// This plugin is used when merging nodes is required, typically involving matrix operations
 /// to aggregate nodes for power flow calculation purposes.
+#[derive(Default)]
 pub struct SwitchPluginTypeA;
 
 /// Plugin for initializing switch handling using Type B logic.
@@ -27,6 +35,7 @@ pub struct SwitchPluginTypeA;
 /// SwitchPluginTypeB does not involve node merging and instead focuses on directly processing
 /// switch admittance without the need for complex aggregation operations. This is used when
 /// performance optimization is required, as node merging and matrix operations are not necessary.
+#[derive(Default)]
 pub struct SwitchPluginTypeB;
 
 impl Plugin for BasePFPlugin {
@@ -39,17 +48,18 @@ impl Plugin for BasePFPlugin {
             max_it: None,
             tol: None,
         });
-        app.add_systems(
-            Startup,
+        app.world_mut().insert_resource(PowerFlowSolver::default());
+        app.configure_sets(
+            Update,
             (
-                init_states.run_if(not(resource_exists::<PowerFlowMat>)),
-                apply_permutation,
+                SolverStage::BeforeSolve,
+                SolverStage::Solve,
+                SolverStage::AfterSolve,
             )
-                .chain()
-                .in_set(PFInitStage),
+                .into_configs()
+                .chain(),
         );
-
-        app.add_systems(Update, ecs_run_pf);
+        app.add_systems(Update, ecs_run_pf.in_set(SolverStage::Solve));
     }
 }
 
@@ -59,10 +69,6 @@ impl Plugin for SwitchPluginTypeA {
     /// Sets up the systems for processing switch states, aggregating nodes, and handling node merges.
     /// This plugin is suitable for scenarios where node merging and matrix operations are necessary.
     fn build(&self, app: &mut bevy_app::App) {
-        app.world_mut().insert_resource(PowerFlowConfig {
-            max_it: None,
-            tol: None,
-        });
         app.add_systems(
             Startup,
             (process_switch_state)
@@ -76,7 +82,7 @@ impl Plugin for SwitchPluginTypeA {
                 .chain()
                 .after(init_states)
                 .before(apply_permutation)
-                .in_set(PFInitStage),
+                .in_set(AfterPFInitStage),
         );
     }
 }
@@ -87,10 +93,6 @@ impl Plugin for SwitchPluginTypeB {
     /// Sets up the systems for processing switch states without node aggregation. This approach is more
     /// performant for networks where node merging is not necessary, as it avoids complex matrix operations.
     fn build(&self, app: &mut bevy_app::App) {
-        app.world_mut().insert_resource(PowerFlowConfig {
-            max_it: None,
-            tol: None,
-        });
         app.add_systems(
             Startup,
             (process_switch_state_admit)
@@ -107,8 +109,36 @@ impl Plugin for SwitchPluginTypeB {
 /// `SwitchPluginTypeB` can be added based on the use case.
 pub fn default_app() -> App {
     let mut app = App::new();
-    app.add_plugins((PandaPowerStartupPlugin, BasePFPlugin));
+
+    app.add_plugins((BasePFInitPlugins, DefaultPlugins));
+
     app
+}
+#[derive(Default)]
+pub struct NewPPLoadPlugin;
+impl Plugin for NewPPLoadPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Startup, (pandapower_init_system).before(BeforePFInitStage));
+    }
+}
+
+plugin_group! {
+    /// Doc comments and annotations are supported: they will be added to the generated plugin
+    /// group.
+    #[derive(Debug)]
+    pub struct DefaultPlugins {
+
+        // Basic plugin to run a power flow calculation.
+
+        :BasePFPlugin,
+        // convert the pandapower network to bevy ECS.
+        :NewPPLoadPlugin,
+        #[cfg(feature = "archive")]
+        crate::io::archive::aurora_format:::ArchivePlugin,
+
+
+    }
+
 }
 
 #[cfg(test)]
