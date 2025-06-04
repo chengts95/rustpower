@@ -38,23 +38,7 @@ macro_rules! timeit {
 }
 
 fn main() {
-    // t.add_type("vlim", Some(StorageTypeFlag::Table));
 
-    // let v = VMagLimitPU(RangeUnit {
-    //     min: 1.0.into(),
-    //     max: 2.0.into(),
-    // });
-    // t.entities.push(0);
-    // t.columns[0].push(serde_json::to_value(&v).unwrap());
-
-    // println!("{:?}", serde_json::to_value(&t).unwrap());
-    // let mut st = Vec::new();
-    // unsafe {
-    //     columnar_from_snapshot_unchecked(&t)
-    //         .to_csv_writer(&mut st)
-    //         .unwrap()
-    // };
-    // println!("{:?}", std::string::String::from_utf8(st));
     let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let zipfile = format!("{}/cases/IEEE118/data.zip", dir);
     let net = load_csv_zip(&zipfile).unwrap();

@@ -1,3 +1,4 @@
+#![doc = include_str!("../doc/manifest.md")]
 mod basic;
 pub mod io;
 pub mod testcases;

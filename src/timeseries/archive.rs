@@ -32,22 +32,46 @@ impl<T> ArcMutExt<T> for Arc<T> {
         unsafe { &mut *ptr }
     }
 }
+/// Plugin that integrates time-series related resources into the archive system.
+///
+/// Registers all relevant time-dependent resources such as:
+/// - [`TimeSeriesData`] for voltage history
+/// - [`ScheduledLog`] for executed events
+/// - [`Time`], [`DeltaTime`] for time progression
+/// - [`ScheduledStaticActions`] for queued actions
+///
+/// # Dependencies
+/// Automatically includes [`ArchivePlugin`] to enable snapshot/export functionality.
+///
+/// # Behavior
+/// - Registers resources to both output archive and case file registry.
+/// - Uses `unsafe` to bypass interior mutability of archive registries.
+///
+/// # Usage
+/// Add this plugin when using the `archive` feature to enable persistent logging or exporting of time-series data.
 #[derive(Default)]
 pub struct TimeSeriesArchivePlugin;
 
 impl Plugin for TimeSeriesArchivePlugin {
     fn build(&self, app: &mut App) {
+        // Ensure ArchivePlugin is loaded
         if !app.is_plugin_added::<ArchivePlugin>() {
             app.add_plugins(ArchivePlugin);
         }
-        let a = app.world_mut().resource_mut::<ArchiveSnapshotRes>();
-        let mut output_reg = a.0.output_reg.clone();
 
+        // Access global archive snapshot resource
+        let a = app.world_mut().resource_mut::<ArchiveSnapshotRes>();
+
+        // Register output-only resources (e.g., for result visualization)
+        let mut output_reg = a.0.output_reg.clone();
         let d = unsafe { output_reg.get_mut_unchecked() };
         register_res_all!(d, [TimeSeriesData]);
+
+        // Register input/output resources (for full snapshot/restore)
         let mut reg = a.0.case_file_reg.clone();
         let d = unsafe { reg.get_mut_unchecked() };
         register_res_all!(d, [ScheduledLog, Time, DeltaTime]);
         register_all!(d, [ScheduledStaticActions]);
     }
 }
+

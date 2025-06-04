@@ -14,6 +14,15 @@ use bevy_ecs::hierarchy::ChildOf;
 use bevy_ecs::resource::Resource;
 use serde::Deserialize;
 use serde::Serialize;
+
+/// Plugin for enabling ECS snapshotting and restoration in the RustPower framework.
+///
+/// This plugin sets up multiple `SnapshotRegistry` groups for different purposes:
+/// - `case_file_reg`: Stores simulation setup/configuration data.
+/// - `pf_state_reg`: Stores intermediate simulation state (e.g., voltage vectors).
+/// - `output_reg`: Stores output data (e.g., post-processed results).
+///
+/// These registries are wrapped in an [`ArchiveSnapshotRes`] resource and made available globally.
 #[derive(Default)]
 pub struct ArchivePlugin;
 
@@ -42,12 +51,22 @@ macro_rules! register_res_all {
         $( ($reg).resource_register::<$ty>(); )*
     };
 }
+
+/// Wraps all snapshot registries for RustPower's ECS state serialization.
+///
+/// Fields are wrapped in `Arc` to allow shared reference usage across systems and plugins.
+/// - `case_file_reg`: simulation configuration
+/// - `pf_state_reg`: intermediate or runtime simulation state
+/// - `output_reg`: post-simulation results
 #[derive(Debug, Clone, Default)]
 pub struct ArchiveSnapshotReg {
     pub case_file_reg: Arc<SnapshotRegistry>,
     pub pf_state_reg: Arc<SnapshotRegistry>,
     pub output_reg: Arc<SnapshotRegistry>,
 }
+/// Global ECS resource storing the [`ArchiveSnapshotReg`] container.
+///
+/// This resource is required to save or load any simulation snapshot.
 #[derive(Resource, Clone)]
 pub struct ArchiveSnapshotRes(pub Arc<ArchiveSnapshotReg>); // Defines the interface for creating and restoring snapshots of the RustPower application state.
 ///
@@ -81,7 +100,7 @@ pub trait RustPowerSnapshotTrait {
         Self: Sized;
 }
 
-/// Implementation of the `RustPowerSnapshotTrait` for `App`.
+/// Provides snapshot interface on [`App`] for saving/loading full simulation state.
 impl RustPowerSnapshotTrait for App {
     fn to_case_file(&self) -> Result<AuroraWorldManifest, String> {
         let reg = self
@@ -118,7 +137,10 @@ impl RustPowerSnapshotTrait for App {
         Ok(app)
     }
 }
-
+/// Internal helper trait to allow unchecked mutable access to `Arc<T>`.
+///
+/// # Safety
+/// This must only be used if the `Arc<T>` is guaranteed to be uniquely owned.
 trait ArcMutExt<T> {
     unsafe fn get_mut_unchecked(&mut self) -> &mut T;
 }
