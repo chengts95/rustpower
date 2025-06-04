@@ -2,39 +2,23 @@
 use std::fmt;
 
 use bevy_app::prelude::*;
-use bevy_ecs::{prelude::*, schedule, system::RunSystemOnce, world::error::EntityFetchError};
-use nalgebra::*;
-use nalgebra_sparse::*;
-use num_complex::Complex64;
+use bevy_ecs::{component::Mutable, prelude::*, world::error::EntityMutableFetchError};
 
-use crate::{
-    basic::{self, newton_pf, solver::RSparseSolver, system::PFNetwork},
-    io::pandapower::ecs_net_conv::*,
+use crate::basic::{newton_pf, solver::DefaultSolver};
+
+use super::{
+    plugin::DefaultPlugins,
+    powerflow::{init::BasePFInitPlugins, systems::*},
 };
-
-use super::{elements::*, systems::init_states};
+#[derive(Clone, SystemSet, Debug, Hash, PartialEq, Eq)]
+pub enum SolverStage {
+    BeforeSolve,
+    Solve,
+    AfterSolve,
+}
 
 /// Represents the ground node in the network.
 pub const GND: i64 = -1;
-
-/// Extracts nodes from the ECS world based on a given extractor function.
-///
-/// # Parameters
-/// - `world`: The ECS world containing the nodes.
-/// - `extractor`: A closure that defines how to extract specific node information from `NodeType`.
-///
-/// # Returns
-/// A vector of extracted node information based on the provided extractor.
-fn extract_node<T, F>(world: &mut World, extractor: F) -> Vec<T>
-where
-    F: Fn(&NodeType) -> Option<T>,
-{
-    world
-        .query::<&NodeType>()
-        .iter(world)
-        .filter_map(extractor)
-        .collect()
-}
 
 /// Represents the power grid, managing the ECS world for power flow calculations.
 #[derive(Default)]
@@ -42,45 +26,15 @@ pub struct PowerGrid {
     data_storage: App,
 }
 
-/// Resource that wraps the power flow network (PFNetwork).
-#[derive(Debug, Resource, Clone)]
-pub struct ResPFNetwork(pub PFNetwork);
-
-/// Resource that holds the power flow configuration options, such as the initial voltage guess,
-/// maximum iterations, and tolerance for convergence.
-#[derive(Debug, Resource, Clone)]
-pub struct PowerFlowConfig {
-    pub max_it: Option<usize>, // Maximum number of iterations
-    pub tol: Option<f64>,      // Tolerance for convergence
-}
-
-/// Resource for storing the results of power flow calculation, including the final voltage vector,
-/// number of iterations taken, and whether the solution converged.
-#[derive(Debug, Default, Resource, Clone)]
-pub struct PowerFlowResult {
-    pub v: DVector<Complex64>, // Final voltage vector after convergence
-    pub iterations: usize,     // Number of iterations taken
-    pub converged: bool,       // Convergence status
-}
-
-/// Resource holding various matrices required for power flow calculations, including the reordered
-/// matrix, admittance matrix (Y-bus), and the power injection vector (S-bus).
-#[derive(Debug, Resource, Clone)]
-pub struct PowerFlowMat {
-    pub reorder: CsrMatrix<Complex<f64>>, // Reordering matrix
-    pub y_bus: CscMatrix<Complex<f64>>,   // Y-bus admittance matrix
-    pub s_bus: DVector<Complex64>,        // S-bus power injections
-    pub v_bus_init: DVector<Complex64>,   // V-bus power injections
-    pub npv: usize,                       // Number of PV buses
-    pub npq: usize,                       // Number of PQ buses
-}
-
 /// Trait for performing operations on ECS data, such as getting and mutating components of entities.
 pub trait DataOps {
-    fn get_entity_mut(&mut self, entity: Entity) -> Result<EntityWorldMut<'_>, EntityFetchError> ;
+    fn get_entity_mut(
+        &mut self,
+        entity: Entity,
+    ) -> Result<EntityWorldMut<'_>, EntityMutableFetchError>;
     fn get_mut<T>(&mut self, entity: Entity) -> Option<Mut<T>>
     where
-        T: Component;
+        T: Component<Mutability = Mutable>;
     fn get<T>(&self, entity: Entity) -> Option<&T>
     where
         T: Component;
@@ -105,25 +59,22 @@ impl PowerFlow for PowerGrid {
             max_it: None,
             tol: None,
         });
-        let mut schedule = Schedule::default();
-        schedule.set_executor_kind(schedule::ExecutorKind::SingleThreaded);
-        schedule.add_systems(
-            (
-                (init_pf).run_if(resource_exists::<PPNetwork>),
-                process_switch_state,
-                init_states.run_if(not(resource_exists::<PowerFlowMat>)),
-                apply_permutation,
-            )
-                .chain(),
-        );
 
-        schedule.run(self.world_mut());
+        self.app_mut()
+            .add_plugins((BasePFInitPlugins, DefaultPlugins));
+        let world = self.world_mut();
+
+        let mut schedules = world.get_resource_mut::<Schedules>().unwrap();
+
+        let mut s = schedules.remove(Startup).unwrap();
+
+        s.run(world);
+        let mut schedules = world.get_resource_mut::<Schedules>().unwrap();
+        schedules.insert(s);
     }
 
     fn run_pf(&mut self) {
-        // Executes the power flow system once within the ECS world.
-        self.world_mut().run_system_once(ecs_run_pf).unwrap();
-        self.world_mut().run_system_once(ecs_run_pf).unwrap();
+        self.app_mut().update();
     }
 }
 
@@ -156,12 +107,8 @@ pub fn ecs_run_pf(mut cmd: Commands, mat: Res<PowerFlowMat>, cfg: Res<PowerFlowC
     let v_init = &mat.v_bus_init;
     let max_it = cfg.max_it;
     let tol = cfg.tol;
-
-    #[cfg(feature = "klu")]
-    let mut solver = KLUSolver::default();
-    #[cfg(not(feature = "klu"))]
-    let mut solver = RSparseSolver {};
-
+    let mut solver = DefaultSolver::default();
+    println!("{:?}", mat.s_bus[mat.reorder_index(0)]);
     let v = newton_pf(
         &mat.y_bus,
         &mat.s_bus,
@@ -195,21 +142,34 @@ pub fn ecs_run_pf(mut cmd: Commands, mat: Res<PowerFlowMat>, cfg: Res<PowerFlowC
         }
     }
 }
-
+impl PowerGrid {
+    pub fn app(&self) -> &App {
+        &self.data_storage
+    }
+    pub fn app_mut(&mut self) -> &mut App {
+        &mut self.data_storage
+    }
+}
 impl DataOps for PowerGrid {
     fn world(&self) -> &World {
-        self.data_storage.world()
+        self.app().world()
     }
     fn world_mut(&mut self) -> &mut World {
-        self.data_storage.world_mut()
+        self.app_mut().world_mut()
     }
     fn get<T: Component>(&self, entity: Entity) -> Option<&T> {
         self.world().get(entity)
     }
-    fn get_mut<T: Component>(&mut self, entity: Entity) -> Option<Mut<T>> {
+    fn get_mut<T: Component>(&mut self, entity: Entity) -> Option<Mut<T>>
+    where
+        T: Component<Mutability = Mutable>,
+    {
         self.world_mut().get_mut(entity)
     }
-    fn get_entity_mut(&mut self, entity: Entity) -> Result<EntityWorldMut<'_>, EntityFetchError> {
+    fn get_entity_mut(
+        &mut self,
+        entity: Entity,
+    ) -> Result<EntityWorldMut<'_>, EntityMutableFetchError> {
         self.world_mut().get_entity_mut(entity)
     }
 }
@@ -230,69 +190,6 @@ impl fmt::Display for ParseError {
 }
 impl std::error::Error for ParseError {}
 
-impl TryFrom<&mut PowerGrid> for PFNetwork {
-    type Error = ParseError;
-
-    fn try_from(value: &mut PowerGrid) -> Result<Self, Self::Error> {
-        use crate::basic::ecs::network::DataOps;
-        let world = value.world_mut();
-        if world.get_resource::<PPNetwork>().is_none() {
-            return Err(ParseError::ConversionError(
-                "Net resource not found".to_string(),
-            ));
-        }
-
-        let net = &world.get_resource::<PPNetwork>().unwrap();
-        let buses = net.bus.clone();
-        let v_base = net.bus[0].vn_kv;
-        let s_base = net.sn_mva;
-        let pq_loads = extract_node(world, |x| {
-            if let NodeType::PQ(v) = x {
-                Some(v.clone())
-            } else {
-                None
-            }
-        });
-        let pv_nodes = extract_node(world, |x| {
-            if let NodeType::PV(v) = x {
-                Some(v.clone())
-            } else {
-                None
-            }
-        });
-        let binding = extract_node(world, |x| {
-            if let NodeType::EXT(v) = x {
-                Some(v.clone())
-            } else {
-                None
-            }
-        });
-        let ext = binding
-            .get(0)
-            .ok_or_else(|| ParseError::ConversionError("No external node found".to_string()))?;
-        let ext = ext.clone();
-        let y_br: Vec<_> = world
-            .query::<(&Admittance, &Port2, &VBase)>()
-            .iter(world)
-            .map(|(a, p, vb)| basic::system::AdmittanceBranch {
-                y: basic::system::Admittance(a.0),
-                port: basic::system::Port2(p.0.cast()),
-                v_base: vb.0,
-            })
-            .collect();
-
-        let net = PFNetwork {
-            v_base,
-            s_base,
-            buses,
-            pq_loads,
-            pv_nodes,
-            ext,
-            y_br,
-        };
-        Ok(net)
-    }
-}
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
@@ -300,32 +197,13 @@ mod tests {
     use nalgebra::ComplexField;
 
     use crate::{
-        basic::{
-            self,
-            system::{PFNetwork, RunPF},
-        },
+        basic::{self},
         io::pandapower::load_csv_zip,
+        prelude::PPNetwork,
     };
 
     use super::*;
     use std::env;
-
-    #[test]
-    fn test_to_pf_net() {
-        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-        let folder = format!("{}/cases/IEEE118", dir);
-        let name = folder.to_owned() + "/data.zip";
-        let net = load_csv_zip(&name).unwrap();
-
-        let mut pf_net = PowerGrid::default();
-        pf_net.world_mut().insert_resource(PPNetwork(net));
-        pf_net.init_pf_net();
-        let net = PFNetwork::try_from(&mut pf_net).unwrap();
-        let v_init = net.create_v_init();
-        let tol = Some(1e-8);
-        let max_it = Some(10);
-        let (_v, _iter) = net.run_pf(v_init.clone(), max_it, tol);
-    }
 
     /// Test case for running power flow in the ECS system.
     #[test]

@@ -49,11 +49,11 @@ fn main() {
     // Register the power network as a resource in the ECS world
     pf_net.world_mut().insert_resource(PPNetwork(net));
     pf_net.update(); //this will initalize the data for pf in the first run
-                     // Extract and validate the results
+    // Extract and validate the results
     let results = pf_net.world().get_resource::<PowerFlowResult>().unwrap();
     assert_eq!(results.converged, true);
     println!("ECS APP converged within {} iterations", results.iterations);
-   
+
     // Post-process and print the results
     pf_net.post_process();
     pf_net.print_res_bus();

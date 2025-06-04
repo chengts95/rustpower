@@ -1,4 +1,7 @@
 # Changelog
+## [0.3.0] - 2025-5-30
+
+- Refactor solvers and add `faer` solver as a new option.
 
 ## [0.2.0] - 2024-11-21
 ### Added
