@@ -38,7 +38,6 @@ macro_rules! timeit {
 }
 
 fn main() {
-
     let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let zipfile = format!("{}/cases/IEEE118/data.zip", dir);
     let net = load_csv_zip(&zipfile).unwrap();

@@ -63,9 +63,6 @@ pub fn state_update(
     }
 }
 
-
-
-
 /// Plugin for managing simulation state transfer and archiving time series data.
 ///
 /// This plugin serves two main purposes:
