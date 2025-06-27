@@ -118,6 +118,7 @@ pub(crate) fn create_y_bus(
     common: Res<PFCommonData>,
     node_lookup: Res<NodeLookup>,
     y_br: Query<(&Admittance, &Port2, &VBase)>,
+    trans: Query<(&Port4MatPatch, &TransformerDevice, &FromBus, &ToBus)>,
 ) -> (CsrMatrix<Complex64>, CsrMatrix<Complex64>) {
     let nodes = node_lookup.len();
     let branches = y_br.iter();
@@ -149,6 +150,27 @@ pub(crate) fn create_y_bus(
     // Compute Y-bus matrix: Y = A * diag(admittance) * A^T
     let y_bus = &incidence_matrix * (diag_admit * incidence_matrix.transpose());
 
+    // Initialize incidence matrix in COO format
+    let mut trans_patch_matrix = CooMatrix::new(nodes, nodes);
+
+    for  (patch, trans, from, to) in trans.iter() {
+        let vbase = trans.vn_lv_kv;
+        // Compute branch admittance in per-unit system
+        let p = patch.0.scale((vbase * vbase) / s_base);
+
+        // Build incidence matrix
+        if from.0 >= 0 {
+            trans_patch_matrix.push(from.0 as usize, from.0 as usize, p[(0, 0)]);
+        }
+        if to.0 >= 0 {
+            trans_patch_matrix.push(to.0 as usize, to.0 as usize, p[(1, 1)]);
+        }
+        if from.0 >= 0 && to.0 >= 0 {
+            trans_patch_matrix.push(from.0 as usize, to.0 as usize, p[(0, 1)]);
+            trans_patch_matrix.push(to.0 as usize, from.0 as usize, p[(1, 0)]);
+        }
+    }
+    let y_bus = y_bus + CsrMatrix::from(&trans_patch_matrix);
     (incidence_matrix, y_bus)
 }
 

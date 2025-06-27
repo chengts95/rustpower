@@ -3,13 +3,22 @@ use crate::prelude::ecs::defer_builder::DeferBundle;
 use crate::prelude::ecs::defer_builder::DeferredBundleBuilder;
 use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
+use nalgebra::Complex;
+use nalgebra::Matrix2;
+use nalgebra::Vector2;
 use rustpower_proc_marco::DeferBundle;
 
 use super::{
     bus::SnaptShotRegGroup,
     line::{FromBus, StandardModelType, ToBus},
 };
-
+#[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Port4MatPatch(pub Matrix2<Complex<f64>>);
+// #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
+// pub struct Port4 {
+//     pub from_port: Vector2<i64>,
+//     pub to_port: Vector2<i64>,
+// }
 /// Represents the electrical and modeling parameters of a transformer.
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TransformerDevice {
@@ -131,14 +140,13 @@ pub mod systems {
     ) {
         q.iter().for_each(|(entity, transformer, from, to)| {
             let port = Port2::new(from.0, to.0);
-            setup_transformer_admittance(&mut commands, entity, transformer, &port);
+            setup_transformer_admittance(&mut commands, entity, transformer );
         });
     }
     fn setup_transformer_admittance(
         commands: &mut Commands,
         parent: Entity,
-        dev: &TransformerDevice,
-        port: &Port2,
+        dev: &TransformerDevice
     ) {
         commands.entity(parent).despawn_related::<Children>();
 
@@ -158,31 +166,15 @@ pub mod systems {
         let im = (z.powi(2) - re.powi(2)).sqrt();
         let y = 1.0 / (Complex::new(re, im) * dev.parallel as f64);
 
-        let gnd_port = |idx: usize| Port2(vector![port.0[idx], GND.into()]);
-        let spawn_branch =
-            |c: &mut RelatedSpawnerCommands<'_, ChildOf>, y: Complex<f64>, p: Port2| {
-                c.spawn(AdmittanceBranch {
-                    y: Admittance(y),
-                    port: p,
-                    v_base: VBase(v_base),
-                });
-            };
-
-        commands.entity(parent).with_children(|child| {
-            spawn_branch(child, y / tap_m, port.clone());
-            spawn_branch(child, (1.0 - tap_m) * y / tap_m.powi(2), gnd_port(0));
-            spawn_branch(child, (1.0 - 1.0 / tap_m) * y, gnd_port(1));
-        });
-
-        let re_core = z_base * 0.001 * dev.pfe_kw / dev.sn_mva;
-        let im_core = z_base / (0.01 * dev.i0_percent);
-        let c = dev.parallel as f64 / Complex::new(re_core, im_core);
-
-        if c.is_finite() {
-            commands.entity(parent).with_children(|child| {
-                spawn_branch(child, 0.5 * c / tap_m.powi(2), gnd_port(0));
-                spawn_branch(child, 0.5 * c, gnd_port(1));
-            });
-        }
+        let a = tap_m * Complex::from_polar(1.0, dev.shift_degree.to_radians());
+        let mut g = Matrix2::new(
+            Complex::from(1.0),
+            -a,
+            -a.conj(),
+            Complex::from(a.norm_sqr()),
+        );
+        g.apply(|x| *x = y * (*x));
+        
+        commands.entity(parent).insert(Port4MatPatch(g));
     }
 }
