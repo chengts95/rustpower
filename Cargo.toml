@@ -1,6 +1,6 @@
  [package]
 name = "rustpower"
-version = "0.3.1-dev"
+version = "0.3.1"
 edition = "2024"
 authors = ["cts chengts95@msn.cn"]
 description = "An experimental ECS world snapshot system built on Bevy, featuring structured archetype storage and manifest-based serialization."
@@ -25,7 +25,7 @@ archive = []
 [profile.release]
 opt-level = 3              
 overflow-checks = false     # Disable integer overflow checks.
-lto = "fat"
+
 
 [dependencies]
 ordered-float = { version = ">3.0", default-features = false }

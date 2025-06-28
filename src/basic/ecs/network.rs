@@ -71,10 +71,11 @@ impl PowerFlow for PowerGrid {
         let mut schedules = world.get_resource_mut::<Schedules>().unwrap();
 
         let mut s = schedules.remove(Startup).unwrap();
-
         s.run(world);
-        let mut schedules = world.get_resource_mut::<Schedules>().unwrap();
-        schedules.insert(s);
+
+        //let mut schedules = world.get_resource_mut::<Schedules>().unwrap();
+        //.schedules.insert(s); termporarily removed to avoid double insertion
+ 
     }
 
     fn run_pf(&mut self) {
