@@ -5,7 +5,6 @@ use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
 use nalgebra::Complex;
 use nalgebra::Matrix2;
-use nalgebra::Vector2;
 use rustpower_proc_marco::DeferBundle;
 
 use super::{
@@ -125,28 +124,18 @@ impl SnaptShotRegGroup for TransSnapShotReg {
     }
 }
 pub mod systems {
-    use bevy_ecs::relationship::RelatedSpawnerCommands;
-    use nalgebra::{Complex, vector};
-
-    use crate::basic::ecs::{
-        elements::{Admittance, AdmittanceBranch, Port2, VBase},
-        network::GND,
-    };
+    use nalgebra::{Complex, ComplexField};
 
     use super::*;
-    pub fn setup_transformer(
-        mut commands: Commands,
-        q: Query<(Entity, &TransformerDevice, &FromBus, &ToBus)>,
-    ) {
-        q.iter().for_each(|(entity, transformer, from, to)| {
-            let port = Port2::new(from.0, to.0);
-            setup_transformer_admittance(&mut commands, entity, transformer );
+    pub fn setup_transformer(mut commands: Commands, q: Query<(Entity, &TransformerDevice)>) {
+        q.iter().for_each(|(entity, transformer)| {
+            setup_transformer_admittance(&mut commands, entity, transformer);
         });
     }
     fn setup_transformer_admittance(
         commands: &mut Commands,
         parent: Entity,
-        dev: &TransformerDevice
+        dev: &TransformerDevice,
     ) {
         commands.entity(parent).despawn_related::<Children>();
 
@@ -164,17 +153,27 @@ pub mod systems {
         let z = z_base * vk;
         let re = z_base * vkr;
         let im = (z.powi(2) - re.powi(2)).sqrt();
-        let y = 1.0 / (Complex::new(re, im) * dev.parallel as f64);
-
+        let y = dev.parallel as f64 / Complex::new(re, im);
+        let re_core = z_base * 0.001 * dev.pfe_kw / dev.sn_mva;
+        let im_core = z_base / (0.01 * dev.i0_percent);
+        let z_m = Complex::new(re_core, im_core);
         let a = tap_m * Complex::from_polar(1.0, dev.shift_degree.to_radians());
-        let mut g = Matrix2::new(
-            Complex::from(1.0),
-            -a,
-            -a.conj(),
-            Complex::from(a.norm_sqr()),
+        let a = a.recip();
+        let t = Matrix2::new(
+            a,
+            Complex::new(0.0, 0.0),
+            Complex::new(0.0, 0.0),
+            Complex::new(1.0, 0.0),
         );
-        g.apply(|x| *x = y * (*x));
-        
+        let mut g = Matrix2::new(y, -y, -y, y);
+        let y_m = dev.parallel as f64 / z_m;
+        if y_m.is_finite() {
+            g[(0, 0)] += 0.5 * y_m;
+            g[(1, 1)] += 0.5 * y_m;
+        }
+
+        let g = t.conjugate() * g * t;
+        println!("Transformer admittance matrix: {g:?}");
         commands.entity(parent).insert(Port4MatPatch(g));
     }
 }
