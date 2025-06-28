@@ -71,8 +71,8 @@ As `rustpower` is not yet published on [Crates.io](https://crates.io/), you can 
 ### **Basic ECS Example**
 
 ```rust
-use ecs::post_processing::PostProcessing; // for print bus results
 use rustpower::{io::pandapower::*, prelude::*};
+use ecs::post_processing::PostProcessing; // for print bus results
 
 fn main() {
     let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
