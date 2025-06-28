@@ -1,4 +1,10 @@
 # Changelog
+
+## [0.3.1] - 2025-6-27
+- Allow asymmetrical transfomer `Ybus` injections.
+- Temporal fix for `ecs_net` example.
+
+
 ## [0.3.0] - 2025-6-4
 - Refactor power grid elements as ECS components and removed the legacy OOP `PFNetwork`.
 - Refactor solvers and add `faer` solver as a new option.
