@@ -1,4 +1,6 @@
 # Changelog
+## [0.3.2] - 2025-7-31
+- Remove the debug print in transformer module.
 
 ## [0.3.1] - 2025-6-27
 - Allow asymmetrical transfomer `Ybus` injections.
