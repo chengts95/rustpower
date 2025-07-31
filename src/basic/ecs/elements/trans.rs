@@ -172,8 +172,7 @@ pub mod systems {
             g[(1, 1)] += 0.5 * y_m;
         }
 
-        let g = t.conjugate() * g * t;
-        println!("Transformer admittance matrix: {g:?}");
+        let g = t.conjugate() * g * t; 
         commands.entity(parent).insert(Port4MatPatch(g));
     }
 }
