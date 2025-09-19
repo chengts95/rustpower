@@ -46,6 +46,9 @@ impl Solve for KLUSolver {
         }
         Ok(())
     }
+    fn reset(&mut self) {
+        self.0.reset();
+    }
 }
 
 #[cfg(feature = "klu")]

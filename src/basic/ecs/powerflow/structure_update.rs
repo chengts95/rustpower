@@ -1,6 +1,8 @@
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
+#[cfg(feature = "rsparse")]
+use crate::basic::ecs::network::PowerFlowSolver;
 use crate::basic::ecs::{elements::*, network::apply_permutation};
 
 use super::systems::{PowerFlowMat, init_states};
@@ -76,6 +78,15 @@ pub fn event_update(
     flags
 }
 
+ 
+
+pub fn reset_solvers(world: &mut World) {
+    use crate::basic::solver::*;
+
+    if let Some(mut solver) = world.get_resource_mut::<PowerFlowSolver>() {
+        solver.solver.reset();
+    }
+}
 /// Updates the `s_bus` vector in [`PowerFlowMat`] when [`SBusInjPu`] values have changed.
 pub fn sbus_pu_update(
     mut pfmat: ResMut<PowerFlowMat>,
@@ -102,6 +113,7 @@ pub fn structure_update(world: &mut World) {
     let flags = world.run_system_cached(event_update).unwrap();
     if flags.structure_dirty || flags.admit_dirty {
         //TODO: this should only update ybus or node structure
+        world.run_system_cached(reset_solvers).unwrap();
         world.run_system_cached(init_states).unwrap();
         world.run_system_cached(apply_permutation).unwrap();
     } else {
