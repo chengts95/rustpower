@@ -1,4 +1,8 @@
 # Changelog
+
+## [0.3.3] - 2025-9-19
+- Fix solvers to reset symbolic lu factorizations after structure changes.
+
 ## [0.3.2] - 2025-7-31
 - Remove the debug print in transformer module.
 
