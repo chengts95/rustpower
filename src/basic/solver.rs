@@ -46,4 +46,6 @@ pub trait Solve {
         _b: &mut [f64],
         _n: usize,
     ) -> Result<(), &'static str>;
+
+    fn reset(& mut self);
 }

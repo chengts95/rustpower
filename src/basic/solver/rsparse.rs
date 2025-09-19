@@ -59,6 +59,10 @@ impl Solve for RSparseSolver {
 
         Ok(())
     }
+    
+    fn reset(& mut self) {
+        self.symbolic = None;
+    }
 }
 
 fn ipvec_identity<T: Numeric<T>>(b: &[T], x: &mut [T]) {

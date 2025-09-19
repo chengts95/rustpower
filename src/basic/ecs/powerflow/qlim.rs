@@ -102,7 +102,7 @@ fn modify_qlim_system(
                 q_target.deref_mut().0.im = qlim.max / common.sbase;
             }
         });
-    if structure_change {
+    if structure_change { 
         mat.v_bus_init.clone_from(&res.v);
         res_convergence.converged = NonlinearConvType::Continue;
         event.write(NodeTypeChangeEvent);

@@ -52,4 +52,7 @@ impl PoSolve for FaerSolver {
         self.lu.as_ref().unwrap().solve_in_place(mat_ref);
         Ok(())
     }
+    fn reset(&mut self) {
+        self.symbolic = None;
+    }
 }
