@@ -36,7 +36,7 @@ pub trait DataOps {
         &mut self,
         entity: Entity,
     ) -> Result<EntityWorldMut<'_>, EntityMutableFetchError>;
-    fn get_mut<T>(&mut self, entity: Entity) -> Option<Mut<T>>
+    fn get_mut<T>(&'_ mut self, entity: Entity) -> Option<Mut<'_, T>>
     where
         T: Component<Mutability = Mutable>;
     fn get<T>(&self, entity: Entity) -> Option<&T>
@@ -168,7 +168,7 @@ impl DataOps for PowerGrid {
     fn get<T: Component>(&self, entity: Entity) -> Option<&T> {
         self.world().get(entity)
     }
-    fn get_mut<T: Component>(&mut self, entity: Entity) -> Option<Mut<T>>
+    fn get_mut<T: Component>(&'_ mut self, entity: Entity) -> Option<Mut<'_, T>>
     where
         T: Component<Mutability = Mutable>,
     {
