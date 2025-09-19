@@ -1,6 +1,6 @@
  [package]
 name = "rustpower"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2024"
 authors = ["cts chengts95@msn.cn"]
 description = "An experimental ECS world snapshot system built on Bevy, featuring structured archetype storage and manifest-based serialization."
