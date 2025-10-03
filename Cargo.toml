@@ -1,6 +1,6 @@
  [package]
 name = "rustpower"
-version = "0.3.3"
+version = "0.4.0-dev"
 edition = "2024"
 authors = ["cts chengts95@msn.cn"]
 description = "An experimental ECS world snapshot system built on Bevy, featuring structured archetype storage and manifest-based serialization."
@@ -17,15 +17,22 @@ default-members = [
     "crates/rustpower_proc_marco",
 ]
 [features]
-default=["rsparse","archive"]
+default=["rsparse", "arrow"]
 klu = ["dep:rustpower-sol-klu"]
 faer = ["dep:faer"]
 rsparse = ["dep:rsparse"]
-archive = []
+archive = []   
+arrow = ["dep:bevy_archive","archive"] 
 [profile.release]
 opt-level = 3              
 overflow-checks = false     # Disable integer overflow checks.
 
+[profile.dev.package.faer]
+opt-level = 3
+[profile.dev.package.nalgebra]
+opt-level = 3
+[profile.dev.package.nalgebra-sparse]
+opt-level = 3
 
 [dependencies]
 ordered-float = { version = ">3.0", default-features = false }
@@ -39,14 +46,14 @@ num-derive = ">=0.3"
 num-complex = ">=0.4"
 rsparse = {version ="^1.2", optional = true}
 csv = "^1.3.0"
-zip = "^4.0.0"
-bevy_ecs = "^0.16.0"
-bevy_app = "^0.16.0"
+zip = "^5.0.0"
+bevy_ecs = "^0.17.0"
+bevy_app = "^0.17.0"
 derive_more = { version = "^1.0", features = ["full"] }
 tabled = "^0.16.0"
-bevy_archive = {version = "0.1.4"}
+bevy_archive = {  git = "https://github.com/chengts95/bevy_archive",branch = "bevy_0.17",features=["arrow_rs"],optional=true} 
 const_format = {version = "^0.2.34"}
-faer = {version = "^0.22", optional = true}
+faer = {version = "^0.23", optional = true}
 rustpower_proc_marco = {path = "crates/rustpower_proc_marco", version = "0.3.0"}
 bumpalo = "^3.17.0"
 [dependencies.rustpower-sol-klu]

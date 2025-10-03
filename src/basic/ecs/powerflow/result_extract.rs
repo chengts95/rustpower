@@ -18,7 +18,7 @@ pub fn extract_powerflow_results(
     buses: Res<NodeLookup>,
     mut q: Query<&mut VBusPu>,
     node_agg: Option<Res<NodeAggRes>>,
-    mut event: EventWriter<VoltageChangeEvent>,
+    mut event: MessageWriter<VoltageChangeEvent>,
 ) {
     let v = &mat.reorder.transpose() * &res.v;
     let v = match &node_agg {

@@ -166,7 +166,7 @@ pub mod systems {
 }
 #[cfg(test)]
 mod tests {
-    use std::env;
+    use std::{env, fs::remove_file};
 
     use bevy_archive::prelude::{SnapshotRegistry, save_world_manifest};
 
@@ -197,5 +197,6 @@ mod tests {
         let world = pf_net.world();
         let a = save_world_manifest(world, &registry).unwrap();
         a.to_file("test_bus.toml", None).unwrap();
+        remove_file("test_bus.toml").unwrap(); 
     }
 }
