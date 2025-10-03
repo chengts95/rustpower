@@ -52,7 +52,7 @@ pub struct QLimEnv<'w, 's> {
 /// - Requires consistent ordering with matrix reordering / aggregation structure.
 fn modify_qlim_system(
     mut cmd: Commands,
-    mut event: EventWriter<NodeTypeChangeEvent>,
+    mut event: MessageWriter<NodeTypeChangeEvent>,
     env: QLimEnv,
 ) {
     let QLimEnv {

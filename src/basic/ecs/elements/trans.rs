@@ -2,6 +2,7 @@ use crate::io::pandapower::Transformer;
 use crate::prelude::ecs::defer_builder::DeferBundle;
 use crate::prelude::ecs::defer_builder::DeferredBundleBuilder;
 use bevy_archive::prelude::SnapshotRegistry;
+
 use bevy_ecs::prelude::*;
 use nalgebra::Complex;
 use nalgebra::Matrix2;
@@ -46,6 +47,73 @@ pub struct TransformerDevice {
     /// Optional tap changer configuration.
     #[serde(flatten)]
     pub tap: Option<TapChanger>,
+}
+#[cfg(feature = "arrow")]
+/// Represents the electrical and modeling parameters of a transformer.
+#[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TransformerDeviceArrow {
+    /// Dielectric factor (unitless), used to scale impedance. Common default is 1.0.
+    pub df: f64,
+    /// No-load current as a percentage of rated current (%). Used to model magnetizing branch.
+    pub i0_percent: f64,
+    /// Iron losses (core losses) in kilowatts (kW).
+    pub pfe_kw: f64,
+    /// Short-circuit voltage (%), representing the magnitude of leakage impedance.
+    pub vk_percent: f64,
+    /// Resistive portion of the short-circuit voltage (%), used to separate R/X ratio.
+    pub vkr_percent: f64,
+    /// Phase shift angle in degrees (°), used for phase-shifting transformers.
+    pub shift_degree: f64,
+    /// Rated apparent power of the transformer in megavolt-amperes (MVA).
+    pub sn_mva: f64,
+    /// Rated voltage of the high-voltage side (kV).
+    pub vn_hv_kv: f64,
+    /// Rated voltage of the low-voltage side (kV).
+    pub vn_lv_kv: f64,
+    /// Optional upper limit on transformer loading in percentage (%).
+    pub max_loading_percent: Option<f64>,
+    /// Number of parallel transformers. Used to scale impedance or capacity.
+    pub parallel: i32,
+    /// Optional tap changer configuration.
+    pub tap: Option<TapChanger>,
+}
+#[cfg(feature = "arrow")]
+impl From<TransformerDeviceArrow> for TransformerDevice {
+    fn from(value: TransformerDeviceArrow) -> Self {
+        TransformerDevice {
+            df: value.df,
+            i0_percent: value.i0_percent,
+            pfe_kw: value.pfe_kw,
+            vk_percent: value.vk_percent,
+            vkr_percent: value.vkr_percent,
+            shift_degree: value.shift_degree,
+            sn_mva: value.sn_mva,
+            vn_hv_kv: value.vn_hv_kv,
+            vn_lv_kv: value.vn_lv_kv,
+            max_loading_percent: value.max_loading_percent,
+            parallel: value.parallel,
+            tap: value.tap,
+        }
+    }
+}
+#[cfg(feature = "arrow")]
+impl From<&TransformerDevice> for TransformerDeviceArrow {
+    fn from(value: &TransformerDevice) -> Self {
+        TransformerDeviceArrow {
+            df: value.df,
+            i0_percent: value.i0_percent,
+            pfe_kw: value.pfe_kw,
+            vk_percent: value.vk_percent,
+            vkr_percent: value.vkr_percent,
+            shift_degree: value.shift_degree,
+            sn_mva: value.sn_mva,
+            vn_hv_kv: value.vn_hv_kv,
+            vn_lv_kv: value.vn_lv_kv,
+            max_loading_percent: value.max_loading_percent,
+            parallel: value.parallel,
+            tap: value.tap.clone(),
+        }
+    }
 }
 
 /// Configuration of a tap changer for voltage or phase regulation.
@@ -121,6 +189,15 @@ pub struct TransSnapShotReg;
 impl SnaptShotRegGroup for TransSnapShotReg {
     fn register_snap_shot(reg: &mut SnapshotRegistry) {
         reg.register_named::<TransformerDevice>("trafo");
+        #[cfg(feature = "arrow")]
+        {
+            use bevy_archive::prelude::vec_snapshot_factory::ArrowSnapshotFactory;
+            reg.get_factory_mut("trafo").unwrap().arrow =
+                Some(ArrowSnapshotFactory::new_with_wrapper_full::<
+                    TransformerDevice,
+                    TransformerDeviceArrow,
+                >());
+        }
     }
 }
 pub mod systems {
@@ -172,7 +249,7 @@ pub mod systems {
             g[(1, 1)] += 0.5 * y_m;
         }
 
-        let g = t.conjugate() * g * t; 
+        let g = t.conjugate() * g * t;
         commands.entity(parent).insert(Port4MatPatch(g));
     }
 }

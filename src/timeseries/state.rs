@@ -50,8 +50,8 @@ pub fn state_preserve(
 ///
 /// This system ensures proper triggering of rebuild logic without direct component comparison.
 pub fn state_update(
-    mut voltage: EventWriter<VoltageChangeEvent>,
-    mut sbus: EventWriter<SBusChangeEvent>,
+    mut voltage: MessageWriter<VoltageChangeEvent>,
+    mut sbus: MessageWriter<SBusChangeEvent>,
     v: Query<&BusID, Changed<VBusPu>>,
     s: Query<&VBusPu, Changed<SBusInjPu>>,
 ) {
