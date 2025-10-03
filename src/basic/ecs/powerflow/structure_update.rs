@@ -10,22 +10,22 @@ use crate::prelude::ecs::network::SolverStage::*;
 
 /// Fired when the voltage (VBusPu) of one or more nodes has changed.
 /// Triggers voltage vector update in the solver matrix.
-#[derive(Event, Default, Debug, Clone, Copy)]
+#[derive(Message, Default, Debug, Clone, Copy)]
 pub struct VoltageChangeEvent;
 
 /// Fired when the SBus injection (SBusInjPu) has changed at any node.
 /// Indicates active/reactive power has been updated.
-#[derive(Event, Default, Debug, Clone, Copy)]
+#[derive(Message, Default, Debug, Clone, Copy)]
 pub struct SBusChangeEvent;
 
 /// Forces a complete structure rebuild, including YBus, node tags, etc.
 /// Typically triggered by initialization or topology changes.
-#[derive(Event, Default, Debug, Clone, Copy)]
+#[derive(Message, Default, Debug, Clone, Copy)]
 pub struct FullRebuildEvent;
 
 /// Indicates that the bus type (PV/PQ/Slack) of one or more nodes has changed.
 /// Requires matrix structure update (e.g., PV to PQ downgrades).
-#[derive(Event, Default, Debug, Clone, Copy)]
+#[derive(Message, Default, Debug, Clone, Copy)]
 pub struct NodeTypeChangeEvent;
 
 /// Flags representing which parts of the simulation state are dirty and need update.
@@ -46,10 +46,10 @@ pub struct SimStateFlags {
 /// Aggregates all recent event types into a unified [`SimStateFlags`] structure.
 /// Clears all event queues after reading them.
 pub fn event_update(
-    mut e_sbus: EventReader<SBusChangeEvent>,
-    mut e_vbus: EventReader<VoltageChangeEvent>,
-    mut e_full: EventReader<FullRebuildEvent>,
-    mut e_node_type: EventReader<NodeTypeChangeEvent>,
+    mut e_sbus: MessageReader<SBusChangeEvent>,
+    mut e_vbus: MessageReader<VoltageChangeEvent>,
+    mut e_full: MessageReader<FullRebuildEvent>,
+    mut e_node_type: MessageReader<NodeTypeChangeEvent>,
 ) -> SimStateFlags {
     let mut flags = SimStateFlags::default();
 
@@ -147,10 +147,10 @@ pub struct StructureUpdatePlugin;
 
 impl Plugin for StructureUpdatePlugin {
     fn build(&self, app: &mut App) {
-        app.add_event::<VoltageChangeEvent>();
-        app.add_event::<SBusChangeEvent>();
-        app.add_event::<FullRebuildEvent>();
-        app.add_event::<NodeTypeChangeEvent>();
+        app.add_message::<VoltageChangeEvent>();
+        app.add_message::<SBusChangeEvent>();
+        app.add_message::<FullRebuildEvent>();
+        app.add_message::<NodeTypeChangeEvent>();
         app.add_systems(Update, structure_update.after(BeforeSolve).before(Solve));
     }
 }

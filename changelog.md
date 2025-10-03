@@ -1,4 +1,7 @@
 # Changelog
+## [0.4.0] - 2025-10-4
+- Update to bevy 0.17. 
+- Enable Arrow-based Parquet snapshot and binary file format.
 
 ## [0.3.3] - 2025-9-19
 - Fix solvers to reset symbolic lu factorizations after structure changes.
