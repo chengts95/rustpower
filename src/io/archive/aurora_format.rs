@@ -34,9 +34,9 @@ impl From<&ChildOf> for ChildOfWrapper {
     }
 }
 
-impl Into<ChildOf> for ChildOfWrapper {
-    fn into(self) -> ChildOf {
-        ChildOf(Entity::from_raw_u32(self.0).unwrap())
+impl From<ChildOfWrapper> for ChildOf {
+    fn from(v: ChildOfWrapper) -> ChildOf {
+        ChildOf(Entity::from_raw_u32(v.0).unwrap())
     }
 }
 #[allow(unused_macros)]
