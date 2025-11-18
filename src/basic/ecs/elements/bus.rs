@@ -120,8 +120,8 @@ impl From<&Name> for NameWrapper {
     }
 }
 impl From<NameWrapper> for Name {
-    fn from(value: NameWrapper) -> Self {
-        Name::new(value.0)
+    fn from(v: NameWrapper) -> Name {
+        Name::new(v.0)
     }
 }
 pub mod systems {
