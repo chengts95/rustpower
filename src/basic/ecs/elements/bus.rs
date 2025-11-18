@@ -119,12 +119,11 @@ impl From<&Name> for NameWrapper {
         NameWrapper(value.into())
     }
 }
-impl Into<Name> for NameWrapper {
-    fn into(self) -> Name {
-        Name::new(self.0)
+impl From<NameWrapper> for Name {
+    fn from(value: NameWrapper) -> Self {
+        Name::new(value.0)
     }
 }
-
 pub mod systems {
 
     use crate::basic::ecs::elements::NodeLookup;
@@ -197,6 +196,6 @@ mod tests {
         let world = pf_net.world();
         let a = save_world_manifest(world, &registry).unwrap();
         a.to_file("test_bus.toml", None).unwrap();
-        remove_file("test_bus.toml").unwrap(); 
+        remove_file("test_bus.toml").unwrap();
     }
 }
