@@ -35,8 +35,8 @@ impl From<&ChildOf> for ChildOfWrapper {
 }
 
 impl From<ChildOfWrapper> for ChildOf {
-    fn from(value: ChildOfWrapper) -> Self {
-        ChildOf(Entity::from_raw_u32(value.0).unwrap())
+    fn from(v: ChildOfWrapper) -> ChildOf {
+        ChildOf(Entity::from_raw_u32(v.0).unwrap())
     }
 }
 #[allow(unused_macros)]
