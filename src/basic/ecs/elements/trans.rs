@@ -193,7 +193,7 @@ impl SnaptShotRegGroup for TransSnapShotReg {
         {
             use bevy_archive::prelude::vec_snapshot_factory::ArrowSnapshotFactory;
             reg.get_factory_mut("trafo").unwrap().arrow =
-                Some(ArrowSnapshotFactory::new_with_wrapper_full::<
+                Some(ArrowSnapshotFactory::new_with::<
                     TransformerDevice,
                     TransformerDeviceArrow,
                 >());
