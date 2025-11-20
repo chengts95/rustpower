@@ -1,6 +1,6 @@
  [package]
 name = "rustpower"
-version = "0.4.0-dev"
+version = "0.4.0"
 edition = "2024"
 authors = ["cts chengts95@msn.cn"]
 description = "An experimental ECS world snapshot system built on Bevy, featuring structured archetype storage and manifest-based serialization."
@@ -51,7 +51,7 @@ bevy_ecs = "^0.17.0"
 bevy_app = "^0.17.0"
 derive_more = { version = "^1.0", features = ["full"] }
 tabled = "^0.16.0"
-bevy_archive = {  git = "https://github.com/chengts95/bevy_archive",features=["arrow_rs"],optional=true} 
+bevy_archive = {  version = "^0.2.1",features=["arrow_rs"],optional=true} 
 const_format = {version = "^0.2.34"}
 faer = {version = "^0.23", optional = true}
 rustpower_proc_marco = {path = "crates/rustpower_proc_marco", version = "0.3.0"}
