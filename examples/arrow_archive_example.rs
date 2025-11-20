@@ -7,11 +7,10 @@ use bevy_archive::{
 };
 use ecs::post_processing::PostProcessing;
 use rustpower::{
-    io::archive::aurora_format::{ArchivePlugin, ArchiveSnapshotRes},
-    prelude::{
-        ecs::{elements::TapChanger, powerflow::qlim::QLimPlugin},
-        *,
-    },
+    io::archive::aurora_format::ArchiveSnapshotRes,
+    prelude::
+        *
+    ,
 };
 
 #[macro_export]
@@ -48,7 +47,7 @@ macro_rules! timeit {
         );
     }};
 }
-
+#[allow(dead_code)]
 trait ZipRustPowerSnapshotTrait {
     fn to_case_file_zip(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>>;
     fn to_case_file(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>>;
@@ -112,7 +111,7 @@ impl ZipRustPowerSnapshotTrait for App {
 }
 fn main() {
     let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let file = format!("{}/cases/pegase9241/test_9241.zip", dir);
+    let file = format!("{}/cases/pegase9241/pegase9241_parquet.zip", dir);
 
     // Initialize the default ECS application with predefined plugins
     let zip = std::fs::read(&file).unwrap();
