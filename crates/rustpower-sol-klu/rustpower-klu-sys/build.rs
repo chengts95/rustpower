@@ -32,6 +32,11 @@ fn main() {
         .header("wrapper.h")
         .clang_arg(format!("-I{}/include", suitesparse_dir))
         .clang_arg(format!("-I{}/include/suitesparse", suitesparse_dir))
+        .blocklist_item("FP_NORMAL")
+        .blocklist_item("FP_SUBNORMAL")
+        .blocklist_item("FP_ZERO")
+        .blocklist_item("FP_INFINITE")
+        .blocklist_item("FP_NAN")
         .derive_default(true)
         // Tell cargo to invalidate the built crate whenever any of the
         // included header files changed.
@@ -78,6 +83,11 @@ fn main() {
         // Tell cargo to invalidate the built crate whenever any of the
         // included header files changed.
         .parse_callbacks(Box::new(bindgen::CargoCallbacks))
+        .blocklist_item("FP_NORMAL")
+        .blocklist_item("FP_SUBNORMAL")
+        .blocklist_item("FP_ZERO")
+        .blocklist_item("FP_INFINITE")
+        .blocklist_item("FP_NAN")
         // Finish the builder and generate the bindings.
         .generate()
         // Unwrap the Result and panic on failure.
@@ -116,6 +126,12 @@ fn main() {
         // bindings for.
         .header("wrapper.h")
         .derive_default(true)
+        .clang_arg("-I/usr/local/include/suitesparse")
+        .blocklist_item("FP_NORMAL")
+        .blocklist_item("FP_SUBNORMAL")
+        .blocklist_item("FP_ZERO")
+        .blocklist_item("FP_INFINITE")
+        .blocklist_item("FP_NAN")
         // Tell cargo to invalidate the built crate whenever any of the
         // included header files changed.
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
