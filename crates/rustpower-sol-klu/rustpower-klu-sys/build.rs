@@ -111,7 +111,7 @@ fn main() {
     println!("cargo:rustc-link-lib=static=ccolamd");
     println!("cargo:rustc-link-lib=static=colamd");
     println!("cargo:rustc-link-lib=static=suitesparseconfig");
-    println!("cargo:rustc-link-lib=iomp5");
+    println!("cargo:rustc-link-lib=omp");
 
     println!("cargo:rustc-link-search=/usr/local/lib");
 
