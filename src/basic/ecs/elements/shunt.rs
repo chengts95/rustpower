@@ -71,7 +71,7 @@ impl SnaptShotRegGroup for ShuntSnapShotReg {
     }
 }
 
-pub mod systems {
+pub mod shunt_systems {
 
     use crate::basic::ecs::{elements::*, network::GND};
     use bevy_ecs::prelude::Commands;
