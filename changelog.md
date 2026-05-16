@@ -1,4 +1,8 @@
 # Changelog
+## [0.5.0-rc.1] - Pre-release
+- Upgrade to Bevy 0.19.0-rc.1.
+- Upgrade bevy_archive to 0.4.0-rc.1.
+
 ## [0.4.0] - 2025-11-20
 - Update to `bevy` 0.17.x. 
 - Enable Arrow-based Parquet snapshot and binary file format (`bevy_archive` 0.2.x).
