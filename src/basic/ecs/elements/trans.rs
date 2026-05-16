@@ -199,7 +199,7 @@ impl SnaptShotRegGroup for TransSnapShotReg {
         }
     }
 }
-pub mod systems {
+pub mod trans_systems {
     use nalgebra::{Complex, ComplexField};
 
     use super::*;
