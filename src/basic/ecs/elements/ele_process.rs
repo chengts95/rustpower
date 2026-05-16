@@ -64,18 +64,18 @@ impl bevy_app::Plugin for ElementSetupPlugin {
         app.add_systems(
             Startup,
             (
-                bus::systems::init_node_lookup.in_set(BeforePFInitStage),
+                bus::bus_systems::init_node_lookup.in_set(BeforePFInitStage),
                 (
-                    trans::systems::setup_transformer,
-                    line::systems::setup_line_systems,
-                    shunt::systems::setup_shunt_systems,
+                    trans::trans_systems::setup_transformer,
+                    line::line_systems::setup_line_systems,
+                    shunt::shunt_systems::setup_shunt_systems,
                 ),
             )
                 .chain()
                 .in_set(BeforePFInitStage),
         );
 
-        app.add_systems(Update, bus::systems::update_node_lookup.in_set(BeforeSolve));
+        app.add_systems(Update, bus::bus_systems::update_node_lookup.in_set(BeforeSolve));
     }
 }
 
