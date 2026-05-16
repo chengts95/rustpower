@@ -1,6 +1,6 @@
 use bevy_app::{MainScheduleOrder, prelude::*};
 use bevy_ecs::prelude::*;
-use bevy_ecs::schedule::{ExecutorKind, ScheduleLabel};
+use bevy_ecs::schedule::ScheduleLabel;
 
 use super::systems::PowerFlowResult;
 use crate::basic::ecs::network::ecs_run_pf;
@@ -113,13 +113,12 @@ impl Plugin for NonLinearSchedulePlugin {
         app.init_resource::<ConvergedResult>();
 
         // 2. Register the main iteration schedule (label = `Main`)
-        let mut main_schedule = Schedule::new(Main);
-        main_schedule.set_executor_kind(ExecutorKind::SingleThreaded); // deterministic
+        let main_schedule = Schedule::new(Main);
+        // Bevy 0.19: schedules are single-threaded by default; set_executor_kind removed
         app.add_schedule(main_schedule);
 
         // 3. Add a custom post-update stage for NR convergence checking
-        let mut nl_post_schedule = Schedule::new(NonLinearErrorCheck);
-        nl_post_schedule.set_executor_kind(ExecutorKind::SingleThreaded);
+        let nl_post_schedule = Schedule::new(NonLinearErrorCheck);
         app.add_schedule(nl_post_schedule);
 
         // 4. Register outer iteration driver and convergence updater systems
