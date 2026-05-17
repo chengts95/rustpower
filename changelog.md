@@ -7,8 +7,7 @@
   - **Element-wise `dSbus_dV`**: Replaces the original 5× SpGEMM path with a single-pass O(nnz) traversal, avoiding expensive sparse matrix multiplications.
   - Combined, the optimized Newton-Raphson (`newton_pf`, using `fill_jacobian_ultimate`) achieves  **1.82×** on PEGASE9241.
   - **Benchmark results** (10 loops, PEGASE9241, release mode,intel 10700K):
-    | Variant | rsparse | KL
-    U |
+    | Variant | rsparse | KLU |
     |---------|---------|-----|
     | no opt (original CSC path) | 216.92 ms | 184.72 ms |
     | half opt (element-wise dSbus_dV) | 175.50 ms (1.24×) | 139.11 ms (1.33×) |
