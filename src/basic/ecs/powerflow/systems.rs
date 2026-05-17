@@ -153,7 +153,7 @@ pub(crate) fn create_y_bus(
     // Initialize incidence matrix in COO format
     let mut trans_patch_matrix = CooMatrix::new(nodes, nodes);
 
-    for  (patch, trans, from, to) in trans.iter() {
+    for (patch, trans, from, to) in trans.iter() {
         let vbase = trans.vn_lv_kv;
         // Compute branch admittance in per-unit system
         let p = patch.0.scale((vbase * vbase) / s_base);

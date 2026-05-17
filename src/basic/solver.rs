@@ -47,5 +47,5 @@ pub trait Solve {
         _n: usize,
     ) -> Result<(), &'static str>;
 
-    fn reset(& mut self);
+    fn reset(&mut self);
 }
