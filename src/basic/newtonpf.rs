@@ -139,6 +139,21 @@ pub fn newton_pf<Solver: Solve>(
     let mut v_a = v.map(|e| e.simd_argument());
     let mut v_norm = v.map(|e| e.simd_signum());
 
+    // Use unsafe to pass Ap and Ai as mutable slices without cloning, 
+    // since we know the solver does not modify the sparsity pattern.
+    let Ap = unsafe {
+        std::slice::from_raw_parts_mut(
+            j_pattern.j_col_ptrs.as_ptr() as *mut usize,
+            j_pattern.j_col_ptrs.len(),
+        )
+    };
+    let Ai = unsafe {
+        std::slice::from_raw_parts_mut(
+            j_pattern.j_row_indices.as_ptr() as *mut usize,
+            j_pattern.j_row_indices.len(),
+        )
+    };
+
     for it in 0..max_iter {
         // ibus = Ybus * v  (sparse × dense)
         let ibus = Ybus * &v;
@@ -155,13 +170,9 @@ pub fn newton_pf<Solver: Solve>(
             &mut j_values,
         );
 
-        // Prepare (Ap, Ai, Ax) for the sparse linear solver
-        let mut Ap: Vec<usize> = j_pattern.j_col_ptrs.clone();
-        let mut Ai: Vec<usize> = j_pattern.j_row_indices.clone();
-
         let _ = solver.solve(
-            Ap.as_mut_slice(),
-            Ai.as_mut_slice(),
+            Ap,
+            Ai,
             j_values.as_mut_slice(),
             F.data.as_mut_slice(),
             n_state,

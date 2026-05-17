@@ -1,5 +1,17 @@
 # Changelog
-
+## [0.5.0-rc.1] - Pre-release
+- Upgrade to Bevy 0.19.0-rc.1.
+- Upgrade bevy_archive to 0.4.0-rc.1.
+- **Newton-Raphson performance optimization**: Three variants benchmarked on PEGASE9241 (9241-bus):
+  - **`fill_jacobian_ultimate`**: Directly fills the real-valued Jacobian matrix from `Ybus` + `V` + `Vnorm` + `Ibus` using a pre-computed sparsity pattern (`JacobianPattern`), bypassing the complex dS/dVm, dS/dVa CSC construction and slice/stack assembly entirely.
+  - **Element-wise `dSbus_dV`**: Replaces the original 5× SpGEMM path with a single-pass O(nnz) traversal, avoiding expensive sparse matrix multiplications.
+  - Combined, the optimized Newton-Raphson (`newton_pf`, using `fill_jacobian_ultimate`) achieves  **1.82×** on PEGASE9241.
+  - **Benchmark results** (10 loops, PEGASE9241, release mode,intel 10700K):
+    | Variant | rsparse | KLU |
+    |---------|---------|-----|
+    | no opt (original CSC path) | 216.92 ms | 184.72 ms |
+    | half opt (element-wise dSbus_dV) | 175.50 ms (1.24×) | 139.11 ms (1.33×) |
+    | opt (fill_jacobian_ultimate) | 152.34 ms (1.42×) | 119.19 ms (1.55×) |
 
 ## [0.4.1] - 2026-5-17
 - Backport 0.5.0 new jacobian matrix formation, around 20-40% speed-up for a round of netwon iteration.

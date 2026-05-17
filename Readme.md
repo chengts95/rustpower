@@ -41,28 +41,61 @@ RustPower is a cutting-edge power flow calculation library written in Rust, spec
 
 ## **Performance Comparison**
 
-RustPower achieves industry-leading performance in power flow calculations:
-- **IEEE 39-Bus System**:  
-  - ~300 microseconds with KLU (3 iterations).  
-  - ~500 microseconds with RSparse solver.  
-  10x faster than Python/Numba implementations.
+RustPower is designed for extreme performance and memory efficiency. Below is a comparison between established industry standards and RustPower (all using the KLU solver where applicable).
 
-- **PEGASE 9241 System**:  
-  Demonstrates significant performance advantages over Python-based solutions, even without multi-threading. RustPower is highly optimized for speed and avoids the complexity of C/C++ memory management.  
-![Performance Chart 1](imgs/performance_1.png)  
-![Performance Chart 2](imgs/performance_2.png)
-(Measured in Pandapower 2.14.11,  Pandapower 3.0 becomes much faster).
+### **Core Solve Time (Newton-Raphson)**
+
+| Case | Pandapower 3 (Default) | LightSim2Grid (Native KLU) | **RustPower (KLU)** |
+| :--- | :--- | :--- | :--- |
+| **IEEE 39** | 38.9 ms | 0.12 ms | **0.04 ms** |
+| **IEEE 118** | 42.8 ms | 0.35 ms | **0.10 ms** |
+| **PEGASE 9241** | 145.5 ms | 51.2 ms | **30.5 ms** |
+
+![Performance Comparison](docs/performance_comparison.png)
+
+### **Key Advantages**
+- **Extreme Memory Efficiency**: For the 9241-node case, RustPower peaks at only **~34 MB** of memory, while Python-based environments typically require **500+ MB**. This **15x reduction** enables running massive parallel simulations (e.g., N-1 analysis, Monte-Carlo) on standard hardware or cloud/docker containers with high resource utilization.
+- **Zero-Clone Solver Path**: Leveraging Rust's memory safety and our ECS-based architecture, the power flow loop avoids any heap allocations during iterations.
+- **Interoperability**: While RustPower provides a significant speedup for core calculations, it remains friendly to the ecosystem by supporting `pandapower` network formats.
+
 ---
 
-## **Installation**
+### **Advanced Features**
 
-As `rustpower` is not yet published on [Crates.io](https://crates.io/), you can add it to your project directly from GitHub:
+### **Plugin-Based Architecture**
+RustPower leverages the **Bevy Plugin System**, allowing users to extend the solver with custom logic without modifying the core. Current official plugins include:
+- **Archive Plugin**: A high-performance state persistence system.
+- **QLim Plugin**: Automatically enforces generator reactive power limits by dynamically switching PV buses to PQ during the iteration process.
+- **Switch Plugins**: Optional modeling for switch elements:
+  - **Type A**: Node-merging method (aggregates nodes for simplified modeling).
+  - **Type B**: Admittance-based method (directly processes switch admittance).
+- **Time-Series Plugin**: A complex, high-level plugin for handling quasi-static time-series simulations with scheduled events.
 
-1. Add the following line to your `Cargo.toml`:
+### **High-Performance Data Archiving**
 
-   ```toml
-   [dependencies]
-   rustpower = { git = "https://github.com/chengts95/rustpower", branch = "main" }
+RustPower features a unique **Archive System** (based on `bevy_archive`) that enables flexible runtime handling of any ECS structure:
+- **Custom Arrow Integration**: To handle complex power system structures that are difficult for standard `serde`, we implemented **custom schema overrides**. This ensures type-safe and efficient data transition.
+- **Multi-Format Persistence**: Seamlessly save the entire network state and results into:
+  - **Apache Parquet**: For compressed, high-performance binary storage (ideal for large-scale time-series).
+  - **CSV**: For easy inspection and interoperability with Excel/Pandas.
+
+### **Time-Series Simulations**
+By combining the ECS architecture with the Archive system, RustPower can execute large-scale time-series simulations with minimal overhead. Check the `examples/time_series.rs` for a complete workflow.
+
+---
+
+RustPower is available on [Crates.io](https://crates.io/crates/rustpower). You can add it to your project using:
+
+```bash
+cargo add rustpower
+```
+
+Or by adding the following to your `Cargo.toml`:
+
+```toml
+[dependencies]
+rustpower = "0.5.0-rc.1"
+```
 
 ---
 
