@@ -9,7 +9,6 @@ pub use bevy_archive::archetype_archive::load_world_resource;
 pub use bevy_archive::archetype_archive::save_world_resource;
 
 pub use bevy_archive::prelude::*;
-use bevy_ecs::entity::Entity;
 use bevy_ecs::hierarchy::ChildOf;
 use bevy_ecs::resource::Resource;
 use serde::Deserialize;
@@ -30,13 +29,13 @@ pub struct ArchivePlugin;
 pub struct ChildOfWrapper(pub u32);
 impl From<&ChildOf> for ChildOfWrapper {
     fn from(c: &ChildOf) -> Self {
-        ChildOfWrapper(c.0.index())
+        ChildOfWrapper(entity_to_index(&c.0))
     }
 }
 
 impl From<ChildOfWrapper> for ChildOf {
     fn from(v: ChildOfWrapper) -> ChildOf {
-        ChildOf(Entity::from_raw_u32(v.0).unwrap())
+        ChildOf(entity_from_index(v.0))
     }
 }
 #[allow(unused_macros)]

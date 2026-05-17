@@ -59,8 +59,8 @@ impl Solve for RSparseSolver {
 
         Ok(())
     }
-    
-    fn reset(& mut self) {
+
+    fn reset(&mut self) {
         self.symbolic = None;
     }
 }
