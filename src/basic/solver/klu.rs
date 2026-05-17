@@ -29,16 +29,41 @@ impl Solve for KLUSolver {
         n: usize,
     ) -> Result<(), &'static str> {
         unsafe {
-            let mut ret = self.0.solve_sym(
-                Ap.as_mut_ptr() as *mut i64,
-                Ai.as_mut_ptr() as *mut i64,
-                n as i64,
-            );
-            ret |= self.0.factor(
-                Ap.as_mut_ptr() as *mut i64,
-                Ai.as_mut_ptr() as *mut i64,
-                Ax.as_mut_ptr(),
-            );
+            if self.0.symbolic.is_null() {
+                self.0.solve_sym(
+                    Ap.as_mut_ptr() as *mut i64,
+                    Ai.as_mut_ptr() as *mut i64,
+                    n as i64,
+                );
+            }
+            
+            let mut ret = if self.0.numeric.is_null() {
+                self.0.factor(
+                    Ap.as_mut_ptr() as *mut i64,
+                    Ai.as_mut_ptr() as *mut i64,
+                    Ax.as_mut_ptr(),
+                )
+            } else {
+                // Try refactor first for speed
+                let status = self.0.refactor(
+                    Ap.as_mut_ptr() as *mut i64,
+                    Ai.as_mut_ptr() as *mut i64,
+                    Ax.as_mut_ptr(),
+                    n as i64,
+                );
+                // status > 0 means singular, status < 0 means error. 
+                // In both cases, we try a full factor.
+                if status != 0 {
+                    self.0.factor(
+                        Ap.as_mut_ptr() as *mut i64,
+                        Ai.as_mut_ptr() as *mut i64,
+                        Ax.as_mut_ptr(),
+                    )
+                } else {
+                    0
+                }
+            };
+
             ret |= self.0.solve(b.as_mut_ptr(), n as i64, 1);
             if ret != 0 {
                 return Err("error occurred when calling KLU routines!");
