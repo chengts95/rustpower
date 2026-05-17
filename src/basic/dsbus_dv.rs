@@ -29,7 +29,7 @@ use nalgebra_sparse::CscMatrix;
 ///  Technical Note 2, February 2010.U{http://www.pserc.cornell.edu/matpower/TN2-OPF-Derivatives.pdf}
 ///  @author: Ray Zimmerman (PSERC Cornell)
 ///
-#[allow(non_snake_case)]
+#[allow(non_snake_case, dead_code)]
 pub fn dSbus_dV_old(
     Ybus: &CscMatrix<Complex<f64>>,
     v: &DVector<Complex<f64>>,
