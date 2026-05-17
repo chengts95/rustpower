@@ -8,7 +8,7 @@ mod tests {
 
     use crate::basic::new_dsdvbus::JacobianPattern;
     use crate::basic::newtonpf::Slice;
-    use crate::basic::sparse::{conj::RealImage, slice::*, stack::*};
+    use crate::basic::sparse::{conj::RealImage, stack::*};
 
     /// Build a small 6x6 Ybus-like CSC matrix (already permuted PV→PQ→Ext):
     /// PV buses: {0,1}  PQ buses: {2,3}  External: {4,5}
@@ -49,7 +49,6 @@ mod tests {
         let n_ext = n - npv - npq;
 
         // --- inline build_jacobian (non-cached) ---
-        use nalgebra_sparse::CscMatrix as NCsc;
         let ds_dva = ds_dva.block((0, 0), (ds_dva.nrows() - n_ext, ds_dva.ncols() - n_ext));
         let ds_dvm = ds_dvm.block((0, 0), (ds_dvm.nrows() - n_ext, ds_dvm.ncols() - n_ext));
         let (real, imag) = ds_dva.real_imag();
