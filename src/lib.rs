@@ -3,6 +3,9 @@ mod basic;
 pub mod io;
 pub mod testcases;
 pub mod timeseries;
+
+#[cfg(feature = "python")]
+pub mod python;
 pub mod prelude {
     use crate::basic;
     pub use crate::io::pandapower;
