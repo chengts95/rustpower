@@ -58,6 +58,10 @@ fn run_benchmark(name: &str, net: Network, iterations: u32) {
         return;
     }
     println!("{} converged in {} iterations", name, res.iterations);
+    let vm: Vec<f64> = res.v.iter().map(|c| c.norm()).collect();
+    let min_v = vm.iter().fold(f64::MAX, |a, &b| a.min(b));
+    let max_v = vm.iter().fold(f64::MIN, |a, &b| a.max(b));
+    println!("  Vm range: [{:.4}, {:.4}]", min_v, max_v);
 
     timeit!(name, iterations, || {
         pf_net.run_pf();
@@ -84,7 +88,7 @@ fn main() {
     let zip_9241 = format!("{}/cases/pegase9241/data.zip", dir);
     if std::path::Path::new(&zip_9241).exists() {
         let net_9241 = load_csv_zip(&zip_9241).unwrap();
-        run_benchmark("PEGASE 9241", net_9241, 10);
+        run_benchmark("PEGASE 9241", net_9241, 300);
     } else {
         println!("PEGASE 9241 data not found at {}", zip_9241);
     }
