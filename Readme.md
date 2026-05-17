@@ -60,14 +60,19 @@ RustPower is designed for extreme performance and memory efficiency. Below is a 
 
 ---
 
-## **Advanced Features**
+### **Advanced Features**
 
 ### **Plugin-Based Architecture**
 RustPower leverages the **Bevy Plugin System**, allowing users to extend the solver with custom logic without modifying the core. Current official plugins include:
 - **Archive Plugin**: A high-performance state persistence system.
-- **Time-Series Plugin**: For handling quasi-static time-series simulations.
+- **QLim Plugin**: Automatically enforces generator reactive power limits by dynamically switching PV buses to PQ during the iteration process.
+- **Switch Plugins**: Optional modeling for switch elements:
+  - **Type A**: Node-merging method (aggregates nodes for simplified modeling).
+  - **Type B**: Admittance-based method (directly processes switch admittance).
+- **Time-Series Plugin**: A complex, high-level plugin for handling quasi-static time-series simulations with scheduled events.
 
 ### **High-Performance Data Archiving**
+
 RustPower features a unique **Archive System** (based on `bevy_archive`) that enables flexible runtime handling of any ECS structure:
 - **Custom Arrow Integration**: To handle complex power system structures that are difficult for standard `serde`, we implemented **custom schema overrides**. This ensures type-safe and efficient data transition.
 - **Multi-Format Persistence**: Seamlessly save the entire network state and results into:
