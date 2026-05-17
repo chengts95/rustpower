@@ -6,12 +6,7 @@ use bevy_archive::{
     prelude::*,
 };
 use ecs::post_processing::PostProcessing;
-use rustpower::{
-    io::archive::aurora_format::ArchiveSnapshotRes,
-    prelude::
-        *
-    ,
-};
+use rustpower::{io::archive::aurora_format::ArchiveSnapshotRes, prelude::*};
 
 #[macro_export]
 macro_rules! timeit {
@@ -96,7 +91,7 @@ impl ZipRustPowerSnapshotTrait for App {
     where
         Self: Sized,
     {
-        let mut app = default_app(); 
+        let mut app = default_app();
 
         let archive = app
             .world()

@@ -113,7 +113,7 @@ impl SnaptShotRegGroup for LineSnapshotReg {
     }
 }
 
-pub mod systems {
+pub mod line_systems {
     use nalgebra::{Complex, vector};
 
     use crate::basic::ecs::{elements::*, network::GND};
