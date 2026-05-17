@@ -18,11 +18,13 @@ default-members = [
 ]
 [features]
 default=["rsparse", "arrow"]
+scirs2_dep = ["dep:scirs2", "dep:scirs2-sparse", "dep:ndarray"]
 klu = ["dep:rustpower-sol-klu"]
 faer = ["dep:faer"]
 rsparse = ["dep:rsparse"]
 archive = ["dep:bevy_archive"]   
 arrow = ["dep:bevy_archive", "bevy_archive/arrow_rs", "archive"] 
+
 [profile.release]
 opt-level = 3              
 overflow-checks = false     # Disable integer overflow checks.
@@ -56,6 +58,9 @@ const_format = {version = "^0.2.34"}
 faer = {version = "^0.24", optional = true}
 rustpower_proc_marco = {path = "crates/rustpower_proc_marco", version = "0.3.0"}
 bumpalo = "^3.20.0"
+scirs2 = { version = "0.4.4", optional = true }
+scirs2-sparse = { version = "0.4.4", optional = true }
+ndarray = { version = "0.17", optional = true }
 [dependencies.rustpower-sol-klu]
 path = "./crates/rustpower-sol-klu"
 version = "0.1.0"
