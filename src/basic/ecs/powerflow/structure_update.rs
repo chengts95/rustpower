@@ -78,8 +78,6 @@ pub fn event_update(
     flags
 }
 
- 
-
 pub fn reset_solvers(world: &mut World) {
     use crate::basic::solver::*;
 
