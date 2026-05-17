@@ -75,7 +75,10 @@ impl bevy_app::Plugin for ElementSetupPlugin {
                 .in_set(BeforePFInitStage),
         );
 
-        app.add_systems(Update, bus::bus_systems::update_node_lookup.in_set(BeforeSolve));
+        app.add_systems(
+            Update,
+            bus::bus_systems::update_node_lookup.in_set(BeforeSolve),
+        );
     }
 }
 
