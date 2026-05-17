@@ -6,7 +6,6 @@ authors = ["cts chengts95@msn.cn"]
 description = "An experimental ECS world snapshot system built on Bevy, featuring structured archetype storage and manifest-based serialization."
 license = "MPL-2.0"
 repository = "https://github.com/chengts95/rustpower"
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [workspace]
 members = [
@@ -16,6 +15,10 @@ default-members = [
     ".",
     "crates/rustpower_proc_marco",
 ]
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
 [features]
 default=["rsparse", "arrow"]
 scirs2_dep = ["dep:scirs2", "dep:scirs2-sparse", "dep:ndarray"]
@@ -24,10 +27,11 @@ faer = ["dep:faer"]
 rsparse = ["dep:rsparse"]
 archive = ["dep:bevy_archive"]   
 arrow = ["dep:bevy_archive", "bevy_archive/arrow_rs", "archive"] 
+python = ["dep:pyo3", "dep:numpy"]
 
 [profile.release]
 opt-level = 3              
-overflow-checks = false     # Disable integer overflow checks.
+overflow-checks = false     
 
 [profile.dev.package.faer]
 opt-level = 3
@@ -61,6 +65,9 @@ bumpalo = "^3.20.0"
 scirs2 = { version = "0.4.4", optional = true }
 scirs2-sparse = { version = "0.4.4", optional = true }
 ndarray = { version = "0.17", optional = true }
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py310"], optional = true }
+numpy = { version = "0.23", optional = true }
+
 [dependencies.rustpower-sol-klu]
 path = "./crates/rustpower-sol-klu"
 version = "0.1.2"
