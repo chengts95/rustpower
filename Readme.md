@@ -5,6 +5,18 @@
 RustPower is a cutting-edge power flow calculation library written in Rust, specifically designed for steady-state analysis of electrical power systems. With the introduction of **ECS-based architecture** in version 0.2.0, RustPower offers unparalleled modularity and extensibility.
 
 ---
+## **What's New in 0.5.0**
+- **Massive Performance Breakthrough**: 
+  - **1.6x faster than LightSim2Grid (C++ Native)** on PEGASE 9241 grid.
+  - **3.5x faster than LightSim2Grid** on IEEE 118 grid.
+- **KLU Refactor Integration**: Implemented `klu_l_refactor` support, bypassing expensive symbolic analysis and pivoting for iterations 2-5 of the NR process and subsequent time-series steps.
+- **Zero-Allocation Hot Path**: Optimized the core Newton-Raphson loop to eliminate all heap allocations (`Vec` clones) during iterations via `unsafe` pointer passing.
+- **Bevy 0.19**: Rustpower 0.5 deps on Bevy 0.19, which can iterate ECS archetype tables with true SIMD parallelism.
+
+## **What's New in 0.4.1**
+- **Jacobian Optimization Backport**: Backported the new Jacobian matrix formation from 0.5.0, resulting in a **20-40% speed-up** per Newton-Raphson iteration.
+- **Upgraded Archive System**: Updated `bevy_archive` to 0.3.0 for enhanced ECS state persistence and case file management.
+
 ## **What's New in 0.3.0**
 - **New Solvers**:  
   **faer**: A highly efficient and scalable solver for large-scale power systems.
