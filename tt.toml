@@ -1,0 +1,16 @@
+[world]
+version = "0.1"
+
+[[world.archetypes]]
+name = "arch_0"
+components = ["vm_pu"]
+source = "embed://arch_0"
+
+[world.embed.arch_0]
+format = "csv"
+data = """
+id,vm_pu.min,vm_pu.max
+7,0.9,1.1
+"""
+
+[world.resources]
