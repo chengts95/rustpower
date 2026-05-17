@@ -53,7 +53,7 @@ RustPower is a cutting-edge power flow calculation library written in Rust, spec
 
 ## **Performance Comparison**
 
-RustPower is designed for extreme performance and memory efficiency. Below is a comparison between established industry standards and RustPower (all using the KLU solver where applicable).
+RustPower is designed for extreme performance and memory efficiency. Below is a comparison between established industry standards and RustPower (all using the KLU solver where applicable, tested on Intel i7 10700K with 32GB DDR4 3000 MHz).
 
 ### **Core Solve Time (Newton-Raphson)**
 
