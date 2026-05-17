@@ -5,3 +5,4 @@ pub mod ecs;
 pub mod solver;
 pub(crate) mod sparse;
 pub use newtonpf::newton_pf;
+pub mod new_dsdvbus;

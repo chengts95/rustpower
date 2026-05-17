@@ -1,4 +1,10 @@
 # Changelog
+
+
+## [0.4.1] - 2026-5-17
+- Backport 0.5.0 new jacobian matrix formation, around 20-40% speed-up for a round of netwon iteration.
+- Use bevy_archive 0.3.0 for archive case file.
+  
 ## [0.4.0] - 2025-11-20
 - Update to `bevy` 0.17.x. 
 - Enable Arrow-based Parquet snapshot and binary file format (`bevy_archive` 0.2.x).
