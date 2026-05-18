@@ -107,7 +107,7 @@ Or by adding the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rustpower = "0.5.0-rc.1"
+rustpower = "0.5.0-rc.2"
 ```
 
 ---
