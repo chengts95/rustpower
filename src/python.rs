@@ -5,11 +5,9 @@ use numpy::IntoPyArray;
 #[cfg(feature = "python")]
 use crate::prelude::*;
 #[cfg(feature = "python")]
-use crate::basic::ecs::network::{PowerGrid as CoreGrid, PowerFlow, DataOps};
-#[cfg(feature = "python")]
-use crate::basic::ecs::post_processing::{PostProcessing, VBusResult, SBusResult};
-#[cfg(feature = "python")]
 use crate::basic::ecs::elements::BusID;
+#[cfg(feature = "python")]
+use crate::basic::ecs::post_processing::{VBusResult, SBusResult};
 #[cfg(feature = "python")]
 use crate::io::pandapower::load_csv_zip;
 #[cfg(feature = "python")]
@@ -20,7 +18,7 @@ use pyo3::types::PyDictMethods;
 #[cfg(feature = "python")]
 #[pyclass(unsendable)]
 pub struct PowerGrid {
-    inner: CoreGrid,
+    inner: crate::prelude::PowerGrid,
 }
 
 #[cfg(feature = "python")]
@@ -29,7 +27,7 @@ impl PowerGrid {
     #[new]
     #[pyo3(signature = (case_path=None, _qlim=false, **kwargs))]
     fn new(case_path: Option<String>, _qlim: bool, kwargs: Option<Bound<'_, pyo3::types::PyDict>>) -> PyResult<Self> {
-        let mut inner = CoreGrid::default();
+        let mut inner = crate::prelude::PowerGrid::default();
         
         // Handle additional plugins from kwargs BEFORE init_pf_net
         if let Some(args) = kwargs {

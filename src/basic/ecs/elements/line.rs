@@ -46,6 +46,8 @@ pub struct LineParams {
     ///
     /// Indicates how many identical lines are in parallel between the buses.
     pub parallel: i32,
+    /// Maximum current (kA)
+    pub max_i_ka: f64,
 }
 
 /// Bundle for initializing a transmission line entity in the ECS world.
@@ -97,6 +99,7 @@ impl From<&Line> for LineBundle {
                 df: line.df,
                 length_km: line.length_km,
                 parallel: line.parallel,
+                max_i_ka: line.max_i_ka,
             },
             name: line.name.clone().map(Name::new),
             std_spec: line.std_type.clone().map(StandardModelType),
