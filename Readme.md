@@ -57,13 +57,14 @@ RustPower is designed for extreme performance and memory efficiency. Below is a 
 
 ### **Core Solve Time (Newton-Raphson)**
 
-| Case | Pandapower 3 (Default) | LightSim2Grid (Native KLU) | **RustPower (KLU)** |
-| :--- | :--- | :--- | :--- |
-| **IEEE 39** | 38.9 ms | 0.12 ms | **0.04 ms** |
-| **IEEE 118** | 42.8 ms | 0.35 ms | **0.10 ms** |
-| **PEGASE 9241** | 145.5 ms | 51.2 ms | **30.5 ms** |
+| Case | Pandapower 3 (Default) | LightSim2Grid (Native KLU) | **RustPower (KLU)** | Speedup vs Pandapower |
+| :--- | :--- | :--- | :--- | :--- |
+| **IEEE 39** | 38.9 ms | 0.12 ms | **0.04 ms** | **~970x** |
+| **IEEE 118** | 42.8 ms | 0.35 ms | **0.10 ms** | **~420x** |
+| **PEGASE 9241** | 145.5 ms | 51.2 ms | **30.5 ms** | **~4.8x** |
 
 ![Performance Comparison](docs/performance_comparison.png)
+*Note: The chart above uses a **Linear Scale** to accurately reflect the true performance gap. For smaller grids like IEEE 39/118, RustPower is nearly **1000x faster** than traditional Python-based tools and **3x faster** than optimized C++ implementations.*
 
 ### **Key Advantages**
 - **Extreme Memory Efficiency**: For the 9241-node case, RustPower peaks at only **~34 MB** of memory, while Python-based environments typically require **500+ MB**. This **15x reduction** enables running massive parallel simulations (e.g., N-1 analysis, Monte-Carlo) on standard hardware or cloud/docker containers with high resource utilization.

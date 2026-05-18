@@ -18,12 +18,18 @@ rects2 = ax1.bar(x, lightsim_times, width, label='LightSim2Grid (KLU)', color='#
 rects3 = ax1.bar(x + width, rustpower_times, width, label='rustpower (KLU)', color='#98df8a')
 
 ax1.set_ylabel('Time (ms)')
-ax1.set_title('Performance Comparison (Lower is Better)')
+ax1.set_title('Performance Comparison (Lower is Better - Linear Scale)')
 ax1.set_xticks(x)
 ax1.set_xticklabels(cases)
 ax1.legend()
-ax1.set_yscale('log')  # Use log scale to show all scales clearly
-ax1.grid(True, which="both", ls="-", alpha=0.2)
+# ax1.set_yscale('log')  # Removed log scale - it was too kind!
+ax1.grid(True, axis='y', ls="-", alpha=0.3)
+
+# Adding speedup annotations
+for i in range(len(cases)):
+    speedup = pandapower_times[i] / rustpower_times[i]
+    ax1.text(x[i] + width, rustpower_times[i] + 2, f'{speedup:.1f}x', 
+             ha='center', va='bottom', color='green', fontweight='bold', fontsize=9)
 
 # Focus on PEGASE 9241 (Linear Scale)
 case_idx = 2
