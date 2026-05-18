@@ -168,7 +168,7 @@ impl Plugin for ArchivePlugin {
 
         let out_reg = Arc::new({
             let mut out_reg = SnapshotRegistry::default();
-            register_all!(out_reg, [BusID, VBusResult, SBusResult]);
+            register_all!(out_reg, [BusID, VBusResult, SBusResult, crate::basic::ecs::post_processing::LineResultData]);
             out_reg
         });
         reg.pf_state_reg = pf_reg;
