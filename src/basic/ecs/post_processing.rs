@@ -151,10 +151,10 @@ fn determine_branch(parent: &Port2, child: &Port2) -> AdmittanceType {
 fn extract_res_line(
     mut cmd: Commands,
     node_agg: Option<Res<NodeAggRes>>,
-    q: Query<(Entity, &Children, &FromBus, &ToBus), With<Line>>,
+    q: Query<(Entity, &Children, &FromBus, &ToBus, &LineParams), With<Line>>,
     admit: Query<(&Admittance, &VBase, &Port2), With<ChildOf>>,
     results: Res<PowerFlowResult>,
-    common: Res<PFCommonData>,
+    _common: Res<PFCommonData>,
     mat: Res<PowerFlowMat>,
 ) {
     let v = &mat.reorder.transpose() * &results.v;
@@ -163,7 +163,7 @@ fn extract_res_line(
         None => v,
     };
     
-    q.iter().for_each(|(e, children, from, to)| {
+    q.iter().for_each(|(e, children, from, to, params)| {
         let mut data = LineResultData::default();
         let p_port = Port2::new(from.0, to.0);
         
@@ -212,6 +212,10 @@ fn extract_res_line(
         data.i_from_ka = i_f.modulus();
         data.i_to_ka = i_t.modulus();
         data.i_ka = data.i_from_ka.max(data.i_to_ka);
+
+        if params.max_i_ka > 0.0 {
+            data.loading_percent = (data.i_ka / params.max_i_ka) * 100.0;
+        }
 
         cmd.entity(e).insert(data);
     });

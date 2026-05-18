@@ -1,5 +1,6 @@
 #![doc = include_str!("../doc/manifest.md")]
 mod basic;
+pub use basic::ecs::network;
 pub mod io;
 pub mod testcases;
 pub mod timeseries;
@@ -11,5 +12,7 @@ pub mod prelude {
     pub use crate::io::pandapower;
     pub use basic::*;
 
+    pub use crate::basic::ecs::network::{DataOps, PowerFlow, PowerGrid};
+    pub use crate::basic::ecs::post_processing::PostProcessing;
     pub use ecs::{elements::PPNetwork, plugin::default_app, powerflow::prelude::PowerFlowResult};
 }
