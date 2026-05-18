@@ -139,6 +139,74 @@ impl PowerGrid {
         dict.set_item("shape", (res.incidence.nrows(), res.incidence.ncols()))?;
         Ok(dict)
     }
+
+    /// Save simulation results (Vm, Va, P, Q) to a Parquet ZIP archive.
+    #[cfg(feature = "archive")]
+    fn save_results(&self, path: String) -> PyResult<()> {
+        use bevy_archive::binary_archive::WorldArrowSnapshot;
+        use crate::io::archive::aurora_format::ArchiveSnapshotRes;
+        use std::io::Write;
+        
+        let world = self.inner.world();
+        let archive_res = world.get_resource::<ArchiveSnapshotRes>()
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Archive feature enabled but ArchivePlugin not added"))?;
+        
+        let output_reg = &archive_res.0.output_reg;
+        let arrow_snap = WorldArrowSnapshot::from_world_reg(world, output_reg)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Failed to create Arrow snapshot: {}", e)))?;
+        
+        let zip_data = arrow_snap.to_zip(None)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Failed to convert to zip: {}", e)))?;
+            
+        let mut f = std::fs::File::create(path)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Failed to create file: {}", e)))?;
+        f.write_all(&zip_data)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("Failed to write data: {}", e)))?;
+            
+        Ok(())
+    }
+
+    /// Get the case configuration as a ZIP archive (bytes) containing Parquet files.
+    /// This includes network topology and electrical parameters.
+    #[cfg(feature = "archive")]
+    fn get_parquet_case<'py>(&self, py: Python<'py>) -> PyResult<Vec<u8>> {
+        use bevy_archive::binary_archive::WorldArrowSnapshot;
+        use crate::io::archive::aurora_format::ArchiveSnapshotRes;
+        
+        let world = self.inner.world();
+        let archive_res = world.get_resource::<ArchiveSnapshotRes>()
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Archive feature enabled but ArchivePlugin not added"))?;
+        
+        let case_reg = &archive_res.0.case_file_reg;
+        let arrow_snap = WorldArrowSnapshot::from_world_reg(world, case_reg)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Failed to create Arrow snapshot: {}", e)))?;
+        
+        let zip_data = arrow_snap.to_zip(None)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Failed to convert to zip: {}", e)))?;
+            
+        Ok(zip_data)
+    }
+
+    /// Get simulation results as a ZIP archive (bytes) containing Parquet files.
+    /// In Python, use io.BytesIO(data) and zipfile.ZipFile to read the contents.
+    #[cfg(feature = "archive")]
+    fn get_parquet_results<'py>(&self, py: Python<'py>) -> PyResult<Vec<u8>> {
+        use bevy_archive::binary_archive::WorldArrowSnapshot;
+        use crate::io::archive::aurora_format::ArchiveSnapshotRes;
+        
+        let world = self.inner.world();
+        let archive_res = world.get_resource::<ArchiveSnapshotRes>()
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Archive feature enabled but ArchivePlugin not added"))?;
+        
+        let output_reg = &archive_res.0.output_reg;
+        let arrow_snap = WorldArrowSnapshot::from_world_reg(world, output_reg)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Failed to create Arrow snapshot: {}", e)))?;
+        
+        let zip_data = arrow_snap.to_zip(None)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Failed to convert to zip: {}", e)))?;
+            
+        Ok(zip_data)
+    }
 }
 
 #[cfg(feature = "python")]
@@ -148,9 +216,23 @@ fn version() -> String {
 }
 
 #[cfg(feature = "python")]
+#[pyfunction]
+fn features() -> Vec<&'static str> {
+    let mut f = Vec::new();
+    if cfg!(feature = "klu") { f.push("klu"); }
+    if cfg!(feature = "faer") { f.push("faer"); }
+    if cfg!(feature = "rsparse") { f.push("rsparse"); }
+    if cfg!(feature = "archive") { f.push("archive"); }
+    if cfg!(feature = "arrow") { f.push("arrow"); }
+    if cfg!(feature = "python") { f.push("python"); }
+    f
+}
+
+#[cfg(feature = "python")]
 #[pymodule]
 fn rustpower(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PowerGrid>()?;
     m.add_function(wrap_pyfunction!(version, m)?)?;
+    m.add_function(wrap_pyfunction!(features, m)?)?;
     Ok(())
 }
