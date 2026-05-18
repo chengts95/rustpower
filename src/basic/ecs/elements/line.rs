@@ -1,9 +1,9 @@
+use crate::basic;
+use crate::io::pandapower::Line;
 use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
 use derive_more::From;
 use rustpower_proc_marco::DeferBundle;
-
-use crate::io::pandapower::Line;
 
 use super::bus::{OutOfService, SnaptShotRegGroup};
 use crate::prelude::ecs::defer_builder::*;
@@ -46,6 +46,8 @@ pub struct LineParams {
     ///
     /// Indicates how many identical lines are in parallel between the buses.
     pub parallel: i32,
+    /// Maximum current (kA)
+    pub max_i_ka: f64,
 }
 
 /// Bundle for initializing a transmission line entity in the ECS world.
@@ -54,6 +56,8 @@ pub struct LineParams {
 /// standard specification and operational status.
 #[derive(Clone, DeferBundle)]
 pub struct LineBundle {
+    /// tag
+    pub tag: basic::ecs::elements::Line,
     /// Source bus ID
     pub from: FromBus,
     /// Target bus ID
@@ -84,6 +88,7 @@ pub struct LineSnapShotReg;
 impl From<&Line> for LineBundle {
     fn from(line: &Line) -> Self {
         Self {
+            tag: basic::ecs::elements::Line,
             from: FromBus(line.from_bus),
             to: ToBus(line.to_bus),
             params: LineParams {
@@ -94,6 +99,7 @@ impl From<&Line> for LineBundle {
                 df: line.df,
                 length_km: line.length_km,
                 parallel: line.parallel,
+                max_i_ka: line.max_i_ka,
             },
             name: line.name.clone().map(Name::new),
             std_spec: line.std_type.clone().map(StandardModelType),
@@ -110,6 +116,7 @@ impl SnaptShotRegGroup for LineSnapshotReg {
         reg.register::<ToBus>();
         reg.register::<LineParams>();
         reg.register::<StandardModelType>();
+        reg.register::<basic::ecs::elements::Line>();
     }
 }
 
@@ -141,7 +148,7 @@ pub mod line_systems {
             let vbase = lut.get_entity(from.0).unwrap();
             let vbase = buses.get(vbase).unwrap().0.0;
             // Shunt: from and to → GND
-            commands.entity(entity).with_children(|p| {
+            commands.entity(entity).insert(Line).with_children(|p| {
                 if g != 0.0 || b != 0.0 {
                     p.spawn(AdmittanceBranch {
                         y: Admittance(y_shunt),
