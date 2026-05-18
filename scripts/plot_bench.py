@@ -30,12 +30,12 @@ ax1.set_ylim(0, y_max)
 
 for i in range(len(cases)):
     speedup = pandapower_times[i] / rustpower_times[i]
-    # Place above the pandapower bar for clear context
+    # Point to the rustpower bar (x[i] + width)
     ax1.annotate(f'{speedup:.1f}x faster',
-                 xy=(x[i] - width, pandapower_times[i]),
-                 xytext=(30, 20), textcoords="offset points",
-                 arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=.2", color='#1f77b4'),
-                 ha='center', va='bottom', color='#1f77b4', fontweight='bold', fontsize=9)
+                 xy=(x[i] + width, rustpower_times[i]),
+                 xytext=(0, 40), textcoords="offset points",
+                 arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=0", color='#2ca02c'),
+                 ha='center', va='bottom', color='#2ca02c', fontweight='bold', fontsize=9)
 
 # Focus on PEGASE 9241 (Linear Scale)
 case_idx = 2
