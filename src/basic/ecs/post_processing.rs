@@ -22,22 +22,22 @@ pub struct SBusResult(pub Complex64);
 #[derive(Debug, Component, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VBusResult(pub Complex64);
 /// Data structure for storing results of power flow calculations for a line.
-#[derive(Component, Debug, Default, Serialize, Deserialize)]
-struct LineResultData {
-    p_from_mw: f64,       // Active power from the 'from' bus (MW)
-    q_from_mvar: f64,     // Reactive power from the 'from' bus (MVAr)
-    p_to_mw: f64,         // Active power to the 'to' bus (MW)
-    q_to_mvar: f64,       // Reactive power to the 'to' bus (MVAr)
-    pl_mw: f64,           // Line active power loss (MW)
-    ql_mvar: f64,         // Line reactive power loss (MVAr)
-    i_from_ka: f64,       // Current from the 'from' bus (kA)
-    i_to_ka: f64,         // Current to the 'to' bus (kA)
-    i_ka: f64,            // Line current (kA)
-    vm_from_pu: f64,      // Voltage magnitude at the 'from' bus (p.u.)
-    va_from_degree: f64,  // Voltage angle at the 'from' bus (degrees)
-    vm_to_pu: f64,        // Voltage magnitude at the 'to' bus (p.u.)
-    va_to_degree: f64,    // Voltage angle at the 'to' bus (degrees)
-    loading_percent: f64, // Line loading percentage (%)
+#[derive(Component, Debug, Default, Serialize, Deserialize, Clone)]
+pub struct LineResultData {
+    pub p_from_mw: f64,       // Active power from the 'from' bus (MW)
+    pub q_from_mvar: f64,     // Reactive power from the 'from' bus (MVAr)
+    pub p_to_mw: f64,         // Active power to the 'to' bus (MW)
+    pub q_to_mvar: f64,       // Reactive power to the 'to' bus (MVAr)
+    pub pl_mw: f64,           // Line active power loss (MW)
+    pub ql_mvar: f64,         // Line reactive power loss (MVAr)
+    pub i_from_ka: f64,       // Current from the 'from' bus (kA)
+    pub i_to_ka: f64,         // Current to the 'to' bus (kA)
+    pub i_ka: f64,            // Line current (kA)
+    pub vm_from_pu: f64,      // Voltage magnitude at the 'from' bus (p.u.)
+    pub va_from_degree: f64,  // Voltage angle at the 'from' bus (degrees)
+    pub vm_to_pu: f64,        // Voltage magnitude at the 'to' bus (p.u.)
+    pub va_to_degree: f64,    // Voltage angle at the 'to' bus (degrees)
+    pub loading_percent: f64, // Line loading percentage (%)
 }
 impl Into<LineResTable> for &LineResultData {
     fn into(self) -> LineResTable {
@@ -151,34 +151,37 @@ fn determine_branch(parent: &Port2, child: &Port2) -> AdmittanceType {
 fn extract_res_line(
     mut cmd: Commands,
     node_agg: Option<Res<NodeAggRes>>,
-    q: Query<(Entity, &Children, &Port2), With<Line>>,
+    q: Query<(Entity, &Children, &FromBus, &ToBus, &LineParams), With<Line>>,
     admit: Query<(&Admittance, &VBase, &Port2), With<ChildOf>>,
     results: Res<PowerFlowResult>,
-    common: Res<PFCommonData>,
+    _common: Res<PFCommonData>,
     mat: Res<PowerFlowMat>,
 ) {
     let v = &mat.reorder.transpose() * &results.v;
     let v = match node_agg {
-        Some(agg) => &agg.expand_mat.cast() * v,
+        Some(agg) => &agg.expand_mat_v.cast() * v,
         None => v,
     };
-    q.iter().for_each(|(e, children, p)| {
+    
+    q.iter().for_each(|(e, children, from, to, params)| {
         let mut data = LineResultData::default();
-        let v_from = v[p[0] as usize];
-        let v_to = v[p[1] as usize];
+        let p_port = Port2::new(from.0, to.0);
+        
+        let v_from = v[p_port[0] as usize];
+        let v_to = v[p_port[1] as usize];
 
         data.vm_from_pu = v_from.modulus();
         data.va_from_degree = v_from.argument().to_degrees();
         data.vm_to_pu = v_to.modulus();
         data.va_to_degree = v_to.argument().to_degrees();
 
-        let _s_base = common.sbase;
-        let (mut i_f, mut i_t, mut i_l) = (Complex64::zero(), Complex64::zero(), Complex64::zero());
+        let mut i_f = Complex64::zero();
+        let mut i_t = Complex64::zero();
         let mut v_base = 0.0;
 
         for child in children {
             let (a, vbase, pins) = admit.get(*child).unwrap();
-            match determine_branch(p, pins) {
+            match determine_branch(&p_port, pins) {
                 AdmittanceType::FromToGround => {
                     i_f += (v_from * vbase.0) * a.0;
                 }
@@ -186,10 +189,10 @@ fn extract_res_line(
                     i_t -= (v_to * vbase.0) * a.0;
                 }
                 AdmittanceType::BetweenBus => {
-                    let v = v_from - v_to;
-                    i_l = (v * vbase.0) * a.0;
-                    let s = (v * vbase.0) * i_l.conj();
-                    data.pl_mw = s.re();
+                    let vd = v_from - v_to;
+                    let i_l = (vd * vbase.0) * a.0;
+                    let s = (vd * vbase.0) * i_l.conj();
+                    data.pl_mw += s.re();
                     data.ql_mvar += s.im();
                     i_f += i_l;
                     i_t += i_l;
@@ -209,6 +212,10 @@ fn extract_res_line(
         data.i_from_ka = i_f.modulus();
         data.i_to_ka = i_t.modulus();
         data.i_ka = data.i_from_ka.max(data.i_to_ka);
+
+        if params.max_i_ka > 0.0 {
+            data.loading_percent = (data.i_ka / params.max_i_ka) * 100.0;
+        }
 
         cmd.entity(e).insert(data);
     });

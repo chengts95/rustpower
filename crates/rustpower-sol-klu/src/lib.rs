@@ -3,7 +3,6 @@
 #![allow(non_snake_case)]
 
 use rustpower_klu_sys::*;
-use std::alloc::{alloc, Layout};
 pub struct KLUSolver {
     pub common: *mut klu_l_common,
     pub symbolic: *mut klu_l_symbolic,
@@ -13,14 +12,14 @@ pub struct KLUSolver {
 impl Default for KLUSolver {
     fn default() -> Self {
         unsafe {
-            let tmp = KLUSolver {
-                common: alloc(Layout::for_value(&klu_l_common::default())) as *mut klu_l_common,
-                symbolic: std::ptr::null_mut() as *mut klu_l_symbolic,
-                numeric: std::ptr::null_mut() as *mut klu_l_numeric,
-            };
-
-            klu_l_defaults(tmp.common);
-            tmp
+            let common_ptr = Box::into_raw(Box::new(klu_l_common::default()));
+            klu_l_defaults(common_ptr);
+            
+            KLUSolver {
+                common: common_ptr,
+                symbolic: std::ptr::null_mut(),
+                numeric: std::ptr::null_mut(),
+            }
         }
     }
 }
@@ -28,8 +27,11 @@ impl Drop for KLUSolver {
     fn drop(&mut self) {
         unsafe {
             klu_l_free_symbolic(&mut self.symbolic as *mut *mut klu_l_symbolic, self.common);
-
             klu_l_free_numeric(&mut self.numeric as *mut *mut klu_l_numeric, self.common);
+            
+            if !self.common.is_null() {
+                let _ = Box::from_raw(self.common);
+            }
         };
     }
 }
