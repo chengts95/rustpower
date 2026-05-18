@@ -22,37 +22,46 @@ ax1.set_title('Performance Comparison (Lower is Better - Linear Scale)')
 ax1.set_xticks(x)
 ax1.set_xticklabels(cases)
 ax1.legend()
-# ax1.set_yscale('log')  # Removed log scale - it was too kind!
 ax1.grid(True, axis='y', ls="-", alpha=0.3)
 
-# Adding speedup annotations
+# Improve Speedup Annotations: Place them clearly above the Pandapower baseline
+y_max = max(pandapower_times) * 1.3
+ax1.set_ylim(0, y_max)
+
 for i in range(len(cases)):
     speedup = pandapower_times[i] / rustpower_times[i]
-    ax1.text(x[i] + width, rustpower_times[i] + 2, f'{speedup:.1f}x', 
-             ha='center', va='bottom', color='green', fontweight='bold', fontsize=9)
+    # Place above the pandapower bar for clear context
+    ax1.annotate(f'{speedup:.1f}x faster',
+                 xy=(x[i] - width, pandapower_times[i]),
+                 xytext=(30, 20), textcoords="offset points",
+                 arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=.2", color='#1f77b4'),
+                 ha='center', va='bottom', color='#1f77b4', fontweight='bold', fontsize=9)
 
 # Focus on PEGASE 9241 (Linear Scale)
 case_idx = 2
-ax2.bar(['pandapower 3', 'LightSim2Grid (KLU)', 'rustpower (KLU)'], 
+bars2 = ax2.bar(['pandapower 3', 'LightSim2Grid (KLU)', 'rustpower (KLU)'], 
         [pandapower_times[case_idx], lightsim_times[case_idx], rustpower_times[case_idx]],
         color=['#aec7e8', '#ffbb78', '#98df8a'])
 ax2.set_ylabel('Time (ms)')
 ax2.set_title(f'Focus: {cases[case_idx]} Core Solve Time')
 ax2.grid(axis='y', ls="-", alpha=0.5)
 
-# Adding value labels
+# Adding value labels with collision avoidance
 def autolabel(rects, ax):
     for rect in rects:
         height = rect.get_height()
-        ax.annotate(f'{height:.2f}',
+        # Only show labels if they won't cluster at the bottom
+        label_text = f'{height:.2f}' if height > 0.5 else f'{height:.3f}'
+        ax.annotate(label_text,
                     xy=(rect.get_x() + rect.get_width() / 2, height),
-                    xytext=(0, 3),
+                    xytext=(0, 5),
                     textcoords="offset points",
                     ha='center', va='bottom', fontsize=8)
 
 autolabel(rects1, ax1)
 autolabel(rects2, ax1)
 autolabel(rects3, ax1)
+autolabel(bars2, ax2)
 
 plt.tight_layout()
 plt.savefig('docs/performance_comparison.png', dpi=300)
