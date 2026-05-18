@@ -1,4 +1,8 @@
 # Changelog
+## [0.5.0-rc.2] - Pre-release
+- Fix KLU wrapper small memory leak.
+- Add intial python wrapper.
+
 ## [0.5.0-rc.1] - Pre-release
 - Upgrade to Bevy 0.19.0-rc.1.
 - Upgrade bevy_archive to 0.4.0-rc.1.
