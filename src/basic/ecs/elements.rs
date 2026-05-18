@@ -93,7 +93,7 @@ pub struct AuxNode {
 }
 
 /// Marker component for a line element in the power system.
-#[derive(Debug, Component, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Component, serde::Serialize, serde::Deserialize,Clone)]
 pub struct Line;
 
 /// Marker component for a transformer element in the power system.
