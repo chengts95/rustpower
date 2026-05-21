@@ -119,7 +119,7 @@ pub(crate) fn create_y_bus(
     node_lookup: Res<NodeLookup>,
     y_br: Query<(&Admittance, &Port2, &VBase)>,
     trans: Query<(&Port4MatPatch, &TransformerDevice, &FromBus, &ToBus)>,
-) -> (CsrMatrix<Complex64>, CsrMatrix<Complex64>) {
+) -> (CsrMatrix<Complex64>, CscMatrix<Complex64>) {
     let nodes = node_lookup.len();
     let branches = y_br.iter();
     let s_base = common.sbase;
@@ -157,7 +157,6 @@ pub(crate) fn create_y_bus(
         let vbase = trans.vn_lv_kv;
         // Compute branch admittance in per-unit system
         let p = patch.0.scale((vbase * vbase) / s_base);
-
         // Build incidence matrix
         if from.0 >= 0 {
             trans_patch_matrix.push(from.0 as usize, from.0 as usize, p[(0, 0)]);
@@ -171,7 +170,7 @@ pub(crate) fn create_y_bus(
         }
     }
     let y_bus = y_bus + CsrMatrix::from(&trans_patch_matrix);
-    (incidence_matrix, y_bus)
+    (incidence_matrix, CscMatrix::from(&y_bus))
 }
 
 /// Initializes the power flow calculation states and inserts necessary resources into the world.
@@ -187,8 +186,7 @@ pub(crate) fn create_y_bus(
 /// Inserts a `PowerFlowMat` resource into the world, containing matrices and vectors required for power flow analysis.
 pub fn init_states(world: &mut World) {
     let (_incidence_matrix, y_bus) = world.run_system_once(create_y_bus).unwrap();
-    let cfg = world.run_system_once(init_bus_status).unwrap();
-    let y_bus = y_bus.transpose_as_csc();
+    let cfg = world.run_system_once(init_bus_status).unwrap(); 
     let s_bus = cfg.s_bus;
     let v_bus_init = cfg.v_bus_init;
     let mut to_perm = vec![0; v_bus_init.len()]; // 原 → 新
