@@ -6,6 +6,9 @@ dS/dtheta, P*Ybus*P^T, and the reduced Jacobian J_red on a 2x2 spy plot. By
 Theorem 1 the top row matrices share the same nonzero pattern; by
 Corollary 1 the bottom row matrices share the same (N_pq + 2 N_pv)-square
 pattern.
+
+All bus-type reordering and projection are expressed as explicit sparse matrix
+products (T @ Ybus @ T.T and P @ Jfull @ P.T) to match the paper formulation.
 """
 import os
 import numpy as np
@@ -45,46 +48,51 @@ def main():
     V = Vm * np.exp(1j * Va)
 
     btype = ppc["bus"][:, 1].astype(int)
-    pv = np.where(btype == 2)[0]
-    pq = np.where(btype == 1)[0]
+    pv    = np.where(btype == 2)[0]
+    pq    = np.where(btype == 1)[0]
     slack = np.where(btype == 3)[0]
 
-    # Apply T: reorder buses into [PQ, PV, slack] (completeness order, the
-    # paper's Section II anchor).
-    T = np.concatenate([pq, pv, slack])
-    Ybus_p = Ybus[T, :][:, T]
-    V_p = V[T]
+    n     = Ybus.shape[0]
+    npv   = len(pv)
+    npq   = len(pq)
+    npvpq = npv + npq
+    m     = npvpq + npq          # dimension of Jred: (Npvpq + Npq)
 
-    npv = len(pv)
-    npq = len(pq)
+    # ── Permutation T: reorders buses to [PQ | PV | slack] ──────────────────
+    # T_mat is an n×n sparse permutation matrix; T_mat @ x permutes bus vector x.
+    T_perm = np.concatenate([pq, pv, slack])
+    T_mat  = sp.eye(n, format='csc')[T_perm, :]
+    TYT    = (T_mat @ Ybus @ T_mat.T).tocsc()   # T·Ybus·T^T
+    V_p    = T_mat @ V                           # T·V (complex)
 
-    dS_dVm, dS_dVa = dSbus_dV(Ybus_p, V_p)
+    # ── Full 2n×2n Jacobian assembled on the permuted system ─────────────────
+    dS_dVm_p, dS_dVa_p = dSbus_dV(TYT, V_p)
+    Jfull = sp.bmat([[dS_dVa_p.real, dS_dVm_p.real],
+                     [dS_dVa_p.imag, dS_dVm_p.imag]], format='csc')
 
-    # After permutation: pq buses are 0..npq-1, pv are npq..npq+npv-1.
-    pq_i = np.arange(0, npq)
-    pvpq_i = np.arange(0, npq + npv)
+    # ── Projection P: m×2n ───────────────────────────────────────────────────
+    # Selects the active rows/cols from Jfull to form Jred:
+    #   rows 0..npvpq-1     ← Jfull rows 0..npvpq-1    (∂P equations, pvpq buses)
+    #   rows npvpq..m-1     ← Jfull rows n..n+npq-1    (∂Q equations, pq buses)
+    # Same selection applies to columns (θ for pvpq, |V| for pq).
+    col_P = np.concatenate([np.arange(npvpq), n + np.arange(npq)])
+    P     = sp.csc_matrix((np.ones(m), (np.arange(m), col_P)), shape=(m, 2 * n))
+    Jred  = (P @ Jfull @ P.T).tocsc()
 
-    j11 = dS_dVa[pvpq_i, :][:, pvpq_i].real
-    j12 = dS_dVm[pvpq_i, :][:, pq_i].real
-    j21 = dS_dVa[pq_i, :][:, pvpq_i].imag
-    j22 = dS_dVm[pq_i, :][:, pq_i].imag
-    Jred = sp.bmat([[j11, j12], [j21, j22]], format="csc")
-
-    # Y_red: the same 2x2 stacking/projection applied to Y_bus's pattern. By
-    # Corollary 1 this is the structural reference Jred should be compared to,
-    # not Y_bus itself (Jred is not n*n and is not symmetric the same way).
-    y11 = Ybus_p[pvpq_i, :][:, pvpq_i]
-    y12 = Ybus_p[pvpq_i, :][:, pq_i]
-    y21 = Ybus_p[pq_i, :][:, pvpq_i]
-    y22 = Ybus_p[pq_i, :][:, pq_i]
-    Yred = sp.bmat([[y11, y12], [y21, y22]], format="csc")
+    # ── Structural projection P_Y: m×n ───────────────────────────────────────
+    # Same logical row/column selection applied to the n×n space of TYT:
+    #   rows 0..npvpq-1     ← TYT rows 0..npvpq-1
+    #   rows npvpq..m-1     ← TYT rows 0..npq-1   (pq is the leading block after T)
+    col_PY = np.concatenate([np.arange(npvpq), np.arange(npq)])
+    P_Y    = sp.csc_matrix((np.ones(m), (np.arange(m), col_PY)), shape=(m, n))
+    Yred   = (P_Y @ TYT @ P_Y.T).tocsc()
 
     fig, axes = plt.subplots(2, 2, figsize=(7.5, 7.5))
     panels = [
-        (Ybus_p, r"$\mathbf{Y}_{\mathrm{bus}}$"),
-        (dS_dVa, r"$\partial \mathbf{S}_{\mathrm{bus}} / \partial \boldsymbol{\theta}$"),
-        (Yred,   r"$\mathcal{P}\,\mathbf{Y}_{\mathrm{bus}}\,\mathcal{P}^{\!\top}$"),
-        (Jred,   r"$\mathbf{J}_{\mathrm{red}}$"),
+        (TYT,      r"$\mathbf{T}\mathbf{Y}_{\mathrm{bus}}\mathbf{T}^{\!\top}$"),
+        (dS_dVa_p, r"$\partial \mathbf{S}_{\mathrm{bus}} / \partial \boldsymbol{\theta}$"),
+        (Yred,     r"$\mathbf{P}\,(\mathbf{T}\mathbf{Y}_{\mathrm{bus}}\mathbf{T}^{\!\top})\,\mathbf{P}^{\!\top}$"),
+        (Jred,     r"$\mathbf{J}_{\mathrm{red}}$"),
     ]
     for ax, (M, t) in zip(axes.flat, panels):
         ax.spy(M, markersize=4, color="black")
@@ -95,6 +103,8 @@ def main():
     plt.tight_layout()
     plt.savefig(OUT, dpi=200, bbox_inches="tight")
     print(f"Saved {OUT}")
+    print(f"  n={n}  npq={npq}  npv={npv}  m={m}  (Jred: {m}×{m})")
+    print(f"  TYT nnz={TYT.nnz}  Jred nnz={Jred.nnz}  Yred nnz={Yred.nnz}")
 
 
 if __name__ == "__main__":

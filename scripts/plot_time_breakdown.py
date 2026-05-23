@@ -38,14 +38,14 @@ from pathlib import Path
 ASM_US = {
     '39':   {'V0': 29.68, 'V1': 6.19,  'V2': 1.84},
     '118':  {'V0': 101.8, 'V1': 16.71, 'V2': 6.03},
-    '9241': {'V0': 9155,  'V1': 2566,  'V2': 627},
+    '9241': {'V0': 13745, 'V1': 4635,  'V2': 641},
 }
 # KLU per-iteration (μs): refactor + back-substitution, measured directly.
 # Version-invariant (same KLU instance), so V0/V1/V2 share the same value.
 KLU_US = {
     '39':   3.64 + 0.76,    # refactor 3.64  back-sub 0.76
     '118':  8.73 + 1.82,    # refactor 8.73  back-sub 1.82
-    '9241': 3305 + 406,     # refactor 3305  back-sub 406
+    '9241': 2889 + 353,     # refactor 2889  back-sub 353
 }
 
 SYSTEMS  = ['39', '118', '9241']
@@ -62,13 +62,13 @@ for s in SYSTEMS:
         iter_ms[s][v] = {'asm': asm, 'lu': lu, 'total': asm + lu}
 
 # ─── Style ─────────────────────────────────────────────────────────────────────
-STYLE_ASM = dict(facecolor='0.20', hatch='////', edgecolor='white')
+STYLE_ASM = dict(facecolor='0.20', hatch='',     edgecolor='0.30')
 STYLE_LU  = dict(facecolor='0.82', hatch='',     edgecolor='0.40')
 
 VER_LABEL_FULL  = {
     'V0': 'V0  (MATPOWER)',
     'V1': "V1  (Sch\xe4fer '18)",
-    'V2': 'V2  (this work)',
+    'V2': 'V2  (Proposed)',
 }
 VER_LABEL_SHORT = {'V0': 'V0', 'V1': 'V1', 'V2': 'V2'}
 
@@ -91,6 +91,13 @@ Y = {'V0': 2, 'V1': 1, 'V2': 0}
 for idx, (ax, s) in enumerate(zip(axes, SYSTEMS)):
     x_max = iter_ms[s]['V0']['total']
 
+    # Consistent unit for this panel: determined by V0 (largest bar).
+    v0_total = iter_ms[s]['V0']['total']
+    if v0_total >= 0.5:      # ≥ 0.5 ms → use ms  (PEGASE)
+        unit, scale = 'ms', 1.0
+    else:                    # < 0.5 ms → use μs  (IEEE 39, IEEE 118)
+        unit, scale = 'μs', 1000.0
+
     for v in VERSIONS:
         y   = Y[v]
         asm = iter_ms[s][v]['asm']
@@ -108,12 +115,19 @@ for idx, (ax, s) in enumerate(zip(axes, SYSTEMS)):
         ax.barh(y, asm + lu, height=BAR_H,
                 facecolor='none', edgecolor='0.30', linewidth=0.6, zorder=4)
 
-        # Assembly fraction inside bar (only if bar is wide enough to fit)
+        # Assembly fraction: inside bar when wide enough, else annotate below bar
         pct = asm / (asm + lu) * 100
-        if asm > x_max * 0.10:   # skip label when segment is tiny
+        if asm > x_max * 0.10:
             ax.text(asm / 2, y, f'{pct:.0f}%',
                     ha='center', va='center', fontsize=5.8,
                     color='white', fontweight='bold', zorder=5)
+        # else: bar too short — percentage stated in paper text, omit label here
+
+        # Total time label — consistent unit per panel, 3 significant figures.
+        total = asm + lu
+        val   = total * scale
+        ax.text(total + x_max * 0.015, y, f'{val:.3g} {unit}',
+                ha='left', va='center', fontsize=5.5, color='0.25', zorder=5)
 
     ax.set_title(SYS_TITLE[s], fontsize=8.5, fontweight='bold', pad=3)
     ax.set_yticks([0, 1, 2])
@@ -128,7 +142,7 @@ for idx, (ax, s) in enumerate(zip(axes, SYSTEMS)):
     ax.set_xlabel('Per-iteration time (ms)', fontsize=8)
     ax.tick_params(axis='x', labelsize=7)
     ax.set_ylim(-0.55, 2.55)
-    ax.set_xlim(0, x_max * 1.08)
+    ax.set_xlim(0, x_max * 1.28)
     ax.grid(axis='x', linestyle=':', linewidth=0.4, color='0.65', zorder=0)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
