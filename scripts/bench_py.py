@@ -10,6 +10,12 @@ try:
 except ImportError:
     LS2G_AVAILABLE = False
 
+try:
+    import rustpower
+    RP_AVAILABLE = True
+except ImportError:
+    RP_AVAILABLE = False
+
 def benchmark(name, net_func, iterations=100):
     print(f"\nBenchmarking {name}...")
     net = net_func()
@@ -50,7 +56,29 @@ def benchmark(name, net_func, iterations=100):
         except Exception as e:
             print(f"LightSim2Grid KLU failed: {e}")
 
+def benchmark_rp(case_path, iterations=100):
+    """Time RustPower via Python wrapper to quantify FFI overhead."""
+    if not RP_AVAILABLE:
+        return
+    grid = rustpower.PowerGrid(case_path=case_path)
+    grid.init_pf()
+    grid.run_pf()  # warmup
+    times = []
+    for _ in range(iterations):
+        start = time.perf_counter()
+        grid.run_pf()
+        times.append(time.perf_counter() - start)
+    print(f"RustPower (Python wrapper): Avg: {np.mean(times)*1000:.3f} ms  "
+          f"min: {np.min(times)*1000:.3f} ms  (n={iterations})")
+    print(f"  [compare with Rust-native benchmark to isolate FFI overhead]")
+
 if __name__ == "__main__":
     benchmark("IEEE 39", pn.case39, 100)
     benchmark("IEEE 118", pn.case118, 100)
     benchmark("PEGASE 9241", pn.case9241pegase, 150)
+
+    print("\n--- RustPower FFI overhead check ---")
+    print("IEEE 118:")
+    benchmark_rp('cases/IEEE118/data.zip', iterations=300)
+    print("PEGASE 9241:")
+    benchmark_rp('cases/pegase9241/data.zip', iterations=30)

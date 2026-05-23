@@ -124,6 +124,18 @@ fn repermute_to_pq_first(mat: &PowerFlowMat) -> (PowerFlowMat, Vec<usize>) {
     (mat_new, perm)
 }
 
+/// Silent variant of `timeit`: same logic, no stdout output.
+fn timeit_quiet(repeats: usize, mut f: impl FnMut()) -> Duration {
+    f();
+    let mut total = Duration::ZERO;
+    for _ in 0..repeats {
+        let t = Instant::now();
+        f();
+        total += t.elapsed();
+    }
+    total / repeats as u32
+}
+
 /// Time `repeats` calls of `f` after one warm-up call; report average and min.
 fn timeit(label: &str, repeats: usize, mut f: impl FnMut()) -> Duration {
     f(); // warm-up
@@ -260,6 +272,14 @@ fn compare_assembly(name: &str, mat: &PowerFlowMat, repeats: usize) {
     });
 
     // V2: symbolic pattern once (PV-first), then the in-place fill with in-loop branches.
+    let t_sym = timeit("V2  build_from_permuted (symbolic)", repeats, || {
+        let _ = JacobianPattern::build_from_permuted(
+            mat.y_bus.col_offsets(),
+            mat.y_bus.row_indices(),
+            npv,
+            npq,
+        );
+    });
     let j_pattern = JacobianPattern::build_from_permuted(
         mat.y_bus.col_offsets(),
         mat.y_bus.row_indices(),
@@ -307,12 +327,17 @@ fn compare_assembly(name: &str, mat: &PowerFlowMat, repeats: usize) {
     });
 
     println!(
-        "    assembly speedup:  V0/V2={:.2}x  V0/V1={:.2}x  V1/V2={:.2}x  V2/V2'={:.2}x  V0/V2'={:.2}x\n",
+        "    assembly speedup:  V0/V2={:.2}x  V0/V1={:.2}x  V1/V2={:.2}x  V2/V2'={:.2}x  V0/V2'={:.2}x",
         t_v0.as_secs_f64() / t_v2.as_secs_f64(),
         t_v0.as_secs_f64() / t_v1.as_secs_f64(),
         t_v1.as_secs_f64() / t_v2.as_secs_f64(),
         t_v2.as_secs_f64() / t_v2p.as_secs_f64(),
         t_v0.as_secs_f64() / t_v2p.as_secs_f64(),
+    );
+    println!(
+        "    symbolic build:    {:.2} μs  ({:.1}x V2 per-iter assembly)\n",
+        t_sym.as_secs_f64() * 1e6,
+        t_sym.as_secs_f64() / t_v2.as_secs_f64(),
     );
 }
 
@@ -415,6 +440,158 @@ fn compare_klu_breakdown(name: &str, mat: &PowerFlowMat, repeats: usize) {
     );
 }
 
+/// Time the two one-per-solve KLU costs that compare_klu_breakdown does NOT cover:
+/// klu_l_analyze (symbolic) and klu_l_factor (first full numeric factorization).
+/// These are the missing pieces needed to explain the full per-solve time in tab:ablation.
+fn klu_one_time_costs(name: &str, mat: &PowerFlowMat, repeats: usize) {
+    let npv = mat.npv;
+    let npq = mat.npq;
+    let n_state = npv + 2 * npq;
+
+    println!("--- {}  KLU one-time costs (analyze + factor) ---", name);
+
+    // Converged voltage → build J once.
+    let mut solver = KLUSolver::default();
+    let (v_conv, _) = newton_pf(
+        &mat.y_bus, &mat.s_bus, &mat.v_bus_init, npv, npq,
+        None, None, &mut solver,
+    ).expect("warm-up solve failed");
+    let v_norm = v_conv.map(|e| e.simd_signum());
+    let j_pattern = JacobianPattern::build_from_permuted(
+        mat.y_bus.col_offsets(), mat.y_bus.row_indices(), npv, npq,
+    );
+    let mut j_values = vec![0.0_f64; j_pattern.nnz_j];
+    let ibus = &mat.y_bus * &v_conv;
+    fill_jacobian_ultimate(
+        &mat.y_bus, v_conv.as_slice(), v_norm.as_slice(), ibus.as_slice(),
+        &j_pattern, npv, npq, &mut j_values,
+    );
+    let mut ap: Vec<i64> = j_pattern.j_col_ptrs.iter().map(|&x| x as i64).collect();
+    let mut ai: Vec<i64> = j_pattern.j_row_indices.iter().map(|&x| x as i64).collect();
+
+    // klu_l_analyze: symbolic factorization (sparsity pattern only, values ignored).
+    // solve_sym frees + re-runs analyze each call, so the loop is self-contained.
+    let t_analyze = timeit("KLU klu_l_analyze (symbolic)   ", repeats, || unsafe {
+        solver.0.solve_sym(ap.as_mut_ptr(), ai.as_mut_ptr(), n_state as i64);
+    });
+
+    // klu_l_factor: first full numeric factorization (uses values).
+    // factor frees + re-runs each call.
+    let t_factor = timeit("KLU klu_l_factor  (full numeric)", repeats, || unsafe {
+        solver.0.factor(ap.as_mut_ptr(), ai.as_mut_ptr(), j_values.as_mut_ptr());
+    });
+
+    // klu_l_refactor for comparison (already in the figure, repeated here for ratio).
+    let t_refactor = timeit("KLU klu_l_refactor (re-factor) ", repeats, || unsafe {
+        solver.0.refactor(ap.as_mut_ptr(), ai.as_mut_ptr(), j_values.as_mut_ptr(), n_state as i64);
+    });
+
+    println!(
+        "    factor/refactor = {:.1}x   analyze/refactor = {:.1}x\n",
+        t_factor.as_secs_f64() / t_refactor.as_secs_f64(),
+        t_analyze.as_secs_f64() / t_refactor.as_secs_f64(),
+    );
+}
+
+/// Silently measure every component needed for the per-solve breakdown figure
+/// (assembly V0/V1/V2, symbolic build, KLU analyze/factor/refactor/backsolve)
+/// and append one CSV row per version to `path`.
+///
+/// CSV columns:
+///   system, n_iter, version, asm_us, sym_us,
+///   analyze_us, factor_us, refactor_us, backsolve_us
+fn export_solve_breakdown_csv(path: &str, name: &str, mat: &PowerFlowMat, repeats: usize) {
+    use std::io::Write as _;
+    let npv = mat.npv;
+    let npq = mat.npq;
+    let n_ext = mat.y_bus.ncols() - npv - npq;
+    let n_state = npv + 2 * npq;
+    let v = mat.v_bus_init.clone();
+    let v_norm = v.map(|e| e.simd_signum());
+
+    // Warm-up: converged voltage + iteration count.
+    let mut solver = KLUSolver::default();
+    let (v_conv, n_iter) = newton_pf(
+        &mat.y_bus, &mat.s_bus, &mat.v_bus_init, npv, npq,
+        None, None, &mut solver,
+    ).expect("warm-up");
+    let v_norm_conv = v_conv.map(|e| e.simd_signum());
+
+    // Assembly timings (per iteration, fixed voltage).
+    let t_v0 = timeit_quiet(repeats, || {
+        let (dsm, dsa) = dSbus_dV_old(&mat.y_bus, &v, &v_norm);
+        let _ = build_jacobian(&dsm, &dsa, npv, n_ext);
+    });
+    let mut cache: Option<JacobianCache> = None;
+    let t_v1 = timeit_quiet(repeats, || {
+        let (dsm, dsa) = dSbus_dV(&mat.y_bus, &v, &v_norm);
+        let _ = build_jacobian_cached(&dsm, &dsa, &mut cache, npv, n_ext);
+    });
+    let t_sym = timeit_quiet(repeats, || {
+        let _ = JacobianPattern::build_from_permuted(
+            mat.y_bus.col_offsets(), mat.y_bus.row_indices(), npv, npq,
+        );
+    });
+    let j_pattern = JacobianPattern::build_from_permuted(
+        mat.y_bus.col_offsets(), mat.y_bus.row_indices(), npv, npq,
+    );
+    let mut j_values = vec![0.0_f64; j_pattern.nnz_j];
+    let ibus_conv = &mat.y_bus * &v_conv;
+    fill_jacobian_ultimate(
+        &mat.y_bus, v_conv.as_slice(), v_norm_conv.as_slice(),
+        ibus_conv.as_slice(), &j_pattern, npv, npq, &mut j_values,
+    );
+    let t_v2 = timeit_quiet(repeats, || {
+        let ibus = &mat.y_bus * &v_conv;
+        fill_jacobian_ultimate(
+            &mat.y_bus, v_conv.as_slice(), v_norm_conv.as_slice(),
+            ibus.as_slice(), &j_pattern, npv, npq, &mut j_values,
+        );
+    });
+
+    // KLU timings (using V2 J structure — same sparsity pattern for all versions).
+    let mut ap: Vec<i64> = j_pattern.j_col_ptrs.iter().map(|&x| x as i64).collect();
+    let mut ai: Vec<i64> = j_pattern.j_row_indices.iter().map(|&x| x as i64).collect();
+    unsafe {
+        solver.0.solve_sym(ap.as_mut_ptr(), ai.as_mut_ptr(), n_state as i64);
+        solver.0.factor(ap.as_mut_ptr(), ai.as_mut_ptr(), j_values.as_mut_ptr());
+    }
+    let t_analyze = timeit_quiet(repeats, || unsafe {
+        solver.0.solve_sym(ap.as_mut_ptr(), ai.as_mut_ptr(), n_state as i64);
+    });
+    let t_factor = timeit_quiet(repeats, || unsafe {
+        solver.0.factor(ap.as_mut_ptr(), ai.as_mut_ptr(), j_values.as_mut_ptr());
+    });
+    let t_refactor = timeit_quiet(repeats, || unsafe {
+        solver.0.refactor(ap.as_mut_ptr(), ai.as_mut_ptr(), j_values.as_mut_ptr(), n_state as i64);
+    });
+    let mut rhs = vec![0.0_f64; n_state];
+    let t_backsolve = timeit_quiet(repeats, || unsafe {
+        rhs.iter_mut().for_each(|x| *x = 0.0);
+        solver.0.solve(rhs.as_mut_ptr(), n_state as i64, 1);
+    });
+
+    let us = |d: Duration| d.as_secs_f64() * 1e6;
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .expect("CSV open failed");
+    for (ver, asm, sym) in [
+        ("V0", us(t_v0), 0.0_f64),
+        ("V1", us(t_v1), 0.0_f64),
+        ("V2", us(t_v2), us(t_sym)),
+    ] {
+        writeln!(
+            f,
+            "{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
+            name, n_iter, ver,
+            asm, sym,
+            us(t_analyze), us(t_factor), us(t_refactor), us(t_backsolve),
+        ).expect("CSV write");
+    }
+    println!("    [solve_breakdown.csv: {} rows written for {}]", 3, name);
+}
+
 #[test]
 fn bench_jacobian_fill() {
     println!(
@@ -426,9 +603,9 @@ fn bench_jacobian_fill() {
     let net: Network =
         serde_json::from_str(crate::testcases::case_ieee39::IEEE_39).unwrap();
     let mat = extract_mat(net);
-    compare("IEEE 39", &mat, 300);
     compare_assembly("IEEE 39", &mat, 300);
     compare_klu_breakdown("IEEE 39", &mat, 300);
+    klu_one_time_costs("IEEE 39", &mat, 300);
 
     // Larger systems, loaded from the bundled case archives when present.
     if let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR") {
@@ -440,14 +617,39 @@ fn bench_jacobian_fill() {
             match crate::io::pandapower::load_csv_zip(&path) {
                 Ok(net) => {
                     let mat = extract_mat(net);
-                    compare(name, &mat, repeats);
                     compare_assembly(name, &mat, repeats);
                     compare_klu_breakdown(name, &mat, repeats);
+                    klu_one_time_costs(name, &mat, repeats);
                 }
                 Err(_) => {
                     println!("--- {}  (skipped: {} not found) ---\n", name, rel)
                 }
             }
         }
+
+        // ── CSV export for per-solve breakdown figure ──────────────────────
+        let csv = format!("{}/paper/solve_breakdown.csv", dir);
+        {
+            use std::io::Write as _;
+            let mut f = std::fs::File::create(&csv).expect("cannot create solve_breakdown.csv");
+            writeln!(f, "system,n_iter,version,asm_us,sym_us,analyze_us,factor_us,refactor_us,backsolve_us")
+                .expect("CSV header");
+        }
+        let net39: Network =
+            serde_json::from_str(crate::testcases::case_ieee39::IEEE_39).unwrap();
+        let mat39 = extract_mat(net39);
+        export_solve_breakdown_csv(&csv, "IEEE 39", &mat39, 300);
+
+        for (name, rel, repeats) in [
+            ("IEEE 118",    "cases/IEEE118/data.zip",    300usize),
+            ("PEGASE 9241", "cases/pegase9241/data.zip",  30usize),
+        ] {
+            let path = format!("{}/{}", dir, rel);
+            if let Ok(net) = crate::io::pandapower::load_csv_zip(&path) {
+                let mat = extract_mat(net);
+                export_solve_breakdown_csv(&csv, name, &mat, repeats);
+            }
+        }
+        println!("\n    CSV saved to {}", csv);
     }
 }
