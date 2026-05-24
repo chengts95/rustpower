@@ -8,8 +8,8 @@
 //!   cache-friendly O(NNZ) numeric pass plus block slicing with cached buffers
 //!   ("semi-optimised" path — aggressively tuned, but P still applied per
 //!   iteration).
-//! * **V2** — `newton_pf`: `JacobianPattern` + `fill_jacobian_ultimate`, i.e. the
-//!   one-off symbolic pattern plus the in-place, branch-free numeric fill.
+//! * **V2** — `newton_pf`: `JacobianPattern2` + `fill_jacobian_v2`, i.e. the
+//!   one-off symbolic pattern plus the branch-free numeric fill under `[PQ | PV | slack]`.
 //!
 //! Because all three paths hand the same sparse system to the same KLU solver,
 //! the measured gap isolates the cost of Jacobian *assembly*: V0→V1 is the gain
@@ -23,18 +23,13 @@
 use std::time::{Duration, Instant};
 
 use nalgebra::*;
-use nalgebra_sparse::CscMatrix;
-use num_complex::Complex64;
-
 use crate::basic::dsbus_dv::{dSbus_dV, dSbus_dV_old};
 use crate::basic::ecs::elements::PPNetwork;
 use crate::basic::ecs::network::{DataOps, PowerFlow, PowerGrid};
 use crate::basic::ecs::powerflow::systems::PowerFlowMat;
-use crate::basic::new_dsdvbus::{JacobianPattern, fill_jacobian_ultimate};
 use crate::basic::new_dsdvbus2::{JacobianPattern2, fill_jacobian_v2};
 use crate::basic::newtonpf::{
     JacobianCache, build_jacobian, build_jacobian_cached, newton_pf, newton_pf_old, newton_pf_v0,
-    newton_pf_v2,
 };
 use crate::basic::solver::KLUSolver;
 use crate::io::pandapower::Network;
@@ -51,78 +46,6 @@ fn extract_mat(net: Network) -> PowerFlowMat {
         .clone()
 }
 
-/// Re-permute a `PowerFlowMat` from the `[PV | PQ | slack]` order produced by
-/// `init_pf_net` into the `[PQ | PV | slack]` order that `newton_pf_v2`
-/// expects. Returns the new matrices together with `perm`, where
-/// `perm[old_idx] = new_idx`. Done once outside the timing loop.
-fn repermute_to_pq_first(mat: &PowerFlowMat) -> (PowerFlowMat, Vec<usize>) {
-    let npv = mat.npv;
-    let npq = mat.npq;
-    let n = mat.y_bus.ncols();
-
-    let perm: Vec<usize> = (0..n)
-        .map(|i| {
-            if i < npv {
-                npq + i
-            } else if i < npv + npq {
-                i - npv
-            } else {
-                i
-            }
-        })
-        .collect();
-
-    // Re-permute Ybus by sorting (new_col, new_row, value) triples.
-    let mut entries: Vec<(usize, usize, Complex64)> = Vec::with_capacity(mat.y_bus.nnz());
-    let cols = mat.y_bus.col_offsets();
-    let rows = mat.y_bus.row_indices();
-    let vals = mat.y_bus.values();
-    for j in 0..n {
-        for k in cols[j]..cols[j + 1] {
-            entries.push((perm[j], perm[rows[k]], vals[k]));
-        }
-    }
-    entries.sort_by_key(|&(c, r, _)| (c, r));
-
-    let mut col_offsets = vec![0usize; n + 1];
-    let mut row_indices = Vec::with_capacity(entries.len());
-    let mut values = Vec::with_capacity(entries.len());
-    let mut current_col = 0usize;
-    for (idx, (c, r, val)) in entries.iter().enumerate() {
-        while current_col < *c {
-            col_offsets[current_col + 1] = idx;
-            current_col += 1;
-        }
-        row_indices.push(*r);
-        values.push(*val);
-    }
-    while current_col < n {
-        col_offsets[current_col + 1] = row_indices.len();
-        current_col += 1;
-    }
-    let y_bus_new = CscMatrix::try_from_csc_data(n, n, col_offsets, row_indices, values)
-        .expect("repermute_to_pq_first: invalid CSC");
-
-    // Re-permute the dense bus vectors.
-    let mut s_bus_new = mat.s_bus.clone();
-    let mut v_bus_init_new = mat.v_bus_init.clone();
-    for old in 0..n {
-        s_bus_new[perm[old]] = mat.s_bus[old];
-        v_bus_init_new[perm[old]] = mat.v_bus_init[old];
-    }
-
-    let mat_new = PowerFlowMat {
-        reorder: mat.reorder.clone(),
-        y_bus: y_bus_new,
-        s_bus: s_bus_new,
-        v_bus_init: v_bus_init_new,
-        npv,
-        npq,
-        to_perm: mat.to_perm.clone(),
-        from_perm: mat.from_perm.clone(),
-    };
-    (mat_new, perm)
-}
 
 /// Silent variant of `timeit`: same logic, no stdout output.
 fn timeit_quiet(repeats: usize, mut f: impl FnMut()) -> Duration {
@@ -153,9 +76,9 @@ fn timeit(label: &str, repeats: usize, mut f: impl FnMut()) -> Duration {
     avg
 }
 
-/// Run the V0/V1/V2/V2' comparison on a single system.
-///   V0-V2 use the original `[PV | PQ | slack]` ordering;
-///   V2' uses the new `[PQ | PV | slack]` ordering and the branch-free fill.
+/// Run the V0/V1/V2 comparison on a single system.
+/// All three use the `[PQ | PV | slack]` ordering produced by ECS.
+#[allow(dead_code)]
 fn compare(name: &str, mat: &PowerFlowMat, repeats: usize) {
     println!(
         "--- {}  (n = {}, npv = {}, npq = {}) ---",
@@ -164,9 +87,6 @@ fn compare(name: &str, mat: &PowerFlowMat, repeats: usize) {
         mat.npv,
         mat.npq
     );
-
-    // One-time re-permutation for V2' (outside the timing loop).
-    let (mat_pq, perm) = repermute_to_pq_first(mat);
 
     // Correctness.
     let (v_v0, it_v0) = newton_pf_v0(
@@ -181,29 +101,15 @@ fn compare(name: &str, mat: &PowerFlowMat, repeats: usize) {
         &mat.y_bus, &mat.s_bus, &mat.v_bus_init, mat.npv, mat.npq,
         None, None, &mut KLUSolver::default(),
     ).expect("V2 (newton_pf) did not converge");
-    let (v_v2p_pq, it_v2p) = newton_pf_v2(
-        &mat_pq.y_bus, &mat_pq.s_bus, &mat_pq.v_bus_init, mat_pq.npv, mat_pq.npq,
-        None, None, &mut KLUSolver::default(),
-    ).expect("V2' (newton_pf_v2) did not converge");
-
-    // Un-permute V2''s result back to PV-first to compare with v_v2.
-    let n = mat.y_bus.ncols();
-    let mut v_v2p = mat.v_bus_init.clone();
-    for old in 0..n {
-        v_v2p[old] = v_v2p_pq[perm[old]];
-    }
 
     let d02 = (&v_v0 - &v_v2).norm();
     let d12 = (&v_v1 - &v_v2).norm();
-    let d22p = (&v_v2 - &v_v2p).norm();
     println!(
-        "    iters: V0={} V1={} V2={} V2'={};   \
-         d(V0,V2)={:.2e}  d(V1,V2)={:.2e}  d(V2,V2')={:.2e}",
-        it_v0, it_v1, it_v2, it_v2p, d02, d12, d22p
+        "    iters: V0={} V1={} V2={};   d(V0,V2)={:.2e}  d(V1,V2)={:.2e}",
+        it_v0, it_v1, it_v2, d02, d12
     );
     assert!(d02 < 1e-6, "{}: V0 and V2 disagree ({:.2e})", name, d02);
     assert!(d12 < 1e-6, "{}: V1 and V2 disagree ({:.2e})", name, d12);
-    assert!(d22p < 1e-6, "{}: V2 and V2' disagree ({:.2e})", name, d22p);
 
     // Timing.
     let mut s0 = KLUSolver::default();
@@ -221,26 +127,17 @@ fn compare(name: &str, mat: &PowerFlowMat, repeats: usize) {
         );
     });
     let mut s2 = KLUSolver::default();
-    let t_v2 = timeit("V2  fill_jacobian_ultimate", repeats, || {
+    let t_v2 = timeit("V2  fill_jacobian_v2 [PQ-1st]", repeats, || {
         let _ = newton_pf(
             &mat.y_bus, &mat.s_bus, &mat.v_bus_init, mat.npv, mat.npq,
             None, None, &mut s2,
         );
     });
-    let mut s2p = KLUSolver::default();
-    let t_v2p = timeit("V2' fill_jacobian_v2 [PQ-1st]", repeats, || {
-        let _ = newton_pf_v2(
-            &mat_pq.y_bus, &mat_pq.s_bus, &mat_pq.v_bus_init, mat_pq.npv, mat_pq.npq,
-            None, None, &mut s2p,
-        );
-    });
     println!(
-        "    speedup:  V0/V2={:.2}x  V0/V1={:.2}x  V1/V2={:.2}x  V2/V2'={:.2}x  V0/V2'={:.2}x\n",
+        "    speedup:  V0/V2={:.2}x  V0/V1={:.2}x  V1/V2={:.2}x\n",
         t_v0.as_secs_f64() / t_v2.as_secs_f64(),
         t_v0.as_secs_f64() / t_v1.as_secs_f64(),
         t_v1.as_secs_f64() / t_v2.as_secs_f64(),
-        t_v2.as_secs_f64() / t_v2p.as_secs_f64(),
-        t_v0.as_secs_f64() / t_v2p.as_secs_f64(),
     );
 }
 
@@ -271,25 +168,25 @@ fn compare_assembly(name: &str, mat: &PowerFlowMat, repeats: usize) {
         let _ = build_jacobian_cached(&dsm, &dsa, &mut cache, npv, n_ext);
     });
 
-    // V2: symbolic pattern once (PV-first), then the in-place fill with in-loop branches.
+    // V2: symbolic pattern (PQ-first) + branch-free fill.
     let t_sym = timeit("V2  build_from_permuted (symbolic)", repeats, || {
-        let _ = JacobianPattern::build_from_permuted(
+        let _ = JacobianPattern2::build_from_permuted(
             mat.y_bus.col_offsets(),
             mat.y_bus.row_indices(),
             npv,
             npq,
         );
     });
-    let j_pattern = JacobianPattern::build_from_permuted(
+    let j_pattern = JacobianPattern2::build_from_permuted(
         mat.y_bus.col_offsets(),
         mat.y_bus.row_indices(),
         npv,
         npq,
     );
     let mut j_values = vec![0.0; j_pattern.nnz_j];
-    let t_v2 = timeit("V2  Ybus*v + fill_jacobian_ultimate", repeats, || {
+    let t_v2 = timeit("V2  Ybus*v + fill_jacobian_v2 [PQ-1st]", repeats, || {
         let ibus = &mat.y_bus * &v;
-        fill_jacobian_ultimate(
+        fill_jacobian_v2(
             &mat.y_bus,
             v.as_slice(),
             v_norm.as_slice(),
@@ -301,38 +198,11 @@ fn compare_assembly(name: &str, mat: &PowerFlowMat, repeats: usize) {
         );
     });
 
-    // V2': symbolic pattern (PQ-first) + branch-free fill.
-    let (mat_pq, _perm) = repermute_to_pq_first(mat);
-    let v_pq = mat_pq.v_bus_init.clone();
-    let v_norm_pq = v_pq.map(|e| e.simd_signum());
-    let j_pattern_v2 = JacobianPattern2::build_from_permuted(
-        mat_pq.y_bus.col_offsets(),
-        mat_pq.y_bus.row_indices(),
-        npv,
-        npq,
-    );
-    let mut j_values_v2 = vec![0.0; j_pattern_v2.nnz_j];
-    let t_v2p = timeit("V2' Ybus*v + fill_jacobian_v2 [PQ-1st]", repeats, || {
-        let ibus = &mat_pq.y_bus * &v_pq;
-        fill_jacobian_v2(
-            &mat_pq.y_bus,
-            v_pq.as_slice(),
-            v_norm_pq.as_slice(),
-            ibus.as_slice(),
-            &j_pattern_v2,
-            npv,
-            npq,
-            &mut j_values_v2,
-        );
-    });
-
     println!(
-        "    assembly speedup:  V0/V2={:.2}x  V0/V1={:.2}x  V1/V2={:.2}x  V2/V2'={:.2}x  V0/V2'={:.2}x",
+        "    assembly speedup:  V0/V2={:.2}x  V0/V1={:.2}x  V1/V2={:.2}x",
         t_v0.as_secs_f64() / t_v2.as_secs_f64(),
         t_v0.as_secs_f64() / t_v1.as_secs_f64(),
         t_v1.as_secs_f64() / t_v2.as_secs_f64(),
-        t_v2.as_secs_f64() / t_v2p.as_secs_f64(),
-        t_v0.as_secs_f64() / t_v2p.as_secs_f64(),
     );
     println!(
         "    symbolic build:    {:.2} μs  ({:.1}x V2 per-iter assembly)\n",
@@ -362,8 +232,8 @@ fn compare_klu_breakdown(name: &str, mat: &PowerFlowMat, repeats: usize) {
     let v_norm = v_conv.map(|e| e.simd_signum());
     println!("    warm-up: {} NR iterations", n_iters);
 
-    // Build the same JacobianPattern that newton_pf builds internally.
-    let j_pattern = JacobianPattern::build_from_permuted(
+    // Build the same JacobianPattern2 that newton_pf builds internally.
+    let j_pattern = JacobianPattern2::build_from_permuted(
         mat.y_bus.col_offsets(),
         mat.y_bus.row_indices(),
         npv,
@@ -373,7 +243,7 @@ fn compare_klu_breakdown(name: &str, mat: &PowerFlowMat, repeats: usize) {
 
     // Fill J at the converged voltage (fixed for all timing calls).
     let ibus0 = &mat.y_bus * &v_conv;
-    fill_jacobian_ultimate(
+    fill_jacobian_v2(
         &mat.y_bus,
         v_conv.as_slice(),
         v_norm.as_slice(),
@@ -395,10 +265,10 @@ fn compare_klu_breakdown(name: &str, mat: &PowerFlowMat, repeats: usize) {
         solver.0.factor(ap.as_mut_ptr(), ai.as_mut_ptr(), j_values.as_mut_ptr());
     }
 
-    // ── 1. Assembly: SpMV (Ybus * v) + fill_jacobian_ultimate ──
+    // ── 1. Assembly: SpMV (Ybus * v) + fill_jacobian_v2 ──
     let t_asm = timeit("Assembly  (SpMV + fill)", repeats, || {
         let ibus = &mat.y_bus * &v_conv;
-        fill_jacobian_ultimate(
+        fill_jacobian_v2(
             &mat.y_bus,
             v_conv.as_slice(),
             v_norm.as_slice(),
@@ -457,12 +327,12 @@ fn klu_one_time_costs(name: &str, mat: &PowerFlowMat, repeats: usize) {
         None, None, &mut solver,
     ).expect("warm-up solve failed");
     let v_norm = v_conv.map(|e| e.simd_signum());
-    let j_pattern = JacobianPattern::build_from_permuted(
+    let j_pattern = JacobianPattern2::build_from_permuted(
         mat.y_bus.col_offsets(), mat.y_bus.row_indices(), npv, npq,
     );
     let mut j_values = vec![0.0_f64; j_pattern.nnz_j];
     let ibus = &mat.y_bus * &v_conv;
-    fill_jacobian_ultimate(
+    fill_jacobian_v2(
         &mat.y_bus, v_conv.as_slice(), v_norm.as_slice(), ibus.as_slice(),
         &j_pattern, npv, npq, &mut j_values,
     );
@@ -528,22 +398,22 @@ fn export_solve_breakdown_csv(path: &str, name: &str, mat: &PowerFlowMat, repeat
         let _ = build_jacobian_cached(&dsm, &dsa, &mut cache, npv, n_ext);
     });
     let t_sym = timeit_quiet(repeats, || {
-        let _ = JacobianPattern::build_from_permuted(
+        let _ = JacobianPattern2::build_from_permuted(
             mat.y_bus.col_offsets(), mat.y_bus.row_indices(), npv, npq,
         );
     });
-    let j_pattern = JacobianPattern::build_from_permuted(
+    let j_pattern = JacobianPattern2::build_from_permuted(
         mat.y_bus.col_offsets(), mat.y_bus.row_indices(), npv, npq,
     );
     let mut j_values = vec![0.0_f64; j_pattern.nnz_j];
     let ibus_conv = &mat.y_bus * &v_conv;
-    fill_jacobian_ultimate(
+    fill_jacobian_v2(
         &mat.y_bus, v_conv.as_slice(), v_norm_conv.as_slice(),
         ibus_conv.as_slice(), &j_pattern, npv, npq, &mut j_values,
     );
     let t_v2 = timeit_quiet(repeats, || {
         let ibus = &mat.y_bus * &v_conv;
-        fill_jacobian_ultimate(
+        fill_jacobian_v2(
             &mat.y_bus, v_conv.as_slice(), v_norm_conv.as_slice(),
             ibus.as_slice(), &j_pattern, npv, npq, &mut j_values,
         );
