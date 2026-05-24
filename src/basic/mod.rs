@@ -1,6 +1,8 @@
 pub(crate) mod dsbus_dv;
-//pub(crate) mod new_dsdvbus;
+#[cfg(test)]
+pub(crate) mod new_dsdvbus; // kept only for test_jacobian_pattern
 pub(crate) mod new_dsdvbus2;
+pub(crate) mod pf_old_impl;
 pub mod newtonpf;
 
 pub mod ecs;
