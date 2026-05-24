@@ -159,11 +159,6 @@ fig.legend(handles=[h_asm, h_lu], loc='lower center', ncol=2, fontsize=6.8,
            frameon=False, bbox_to_anchor=(0.5, 0.04),
            columnspacing=1.2, handlelength=2.4, handletextpad=0.6)
 
-fig.text(0.015, -0.04,
-         'Per-iteration time = assembly + KLU (refactor + back-sub).  '
-         'KLU cost directly instrumented (version-invariant); assembly from compare_assembly().',
-         fontsize=5.8, color='0.45')
-
 # ─── Save ──────────────────────────────────────────────────────────────────────
 out = Path('paper/time_breakdown')
 fig.savefig(str(out) + '.pdf', bbox_inches='tight', dpi=300)

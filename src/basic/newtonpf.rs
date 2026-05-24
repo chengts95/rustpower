@@ -2,7 +2,7 @@ use std::f64::consts::PI;
 
 use super::dsbus_dv::{dSbus_dV, dSbus_dV_old};
 use super::sparse::slice::*;
-use super::{new_dsdvbus::JacobianPattern, new_dsdvbus::fill_jacobian_ultimate, solver::Solve};
+use super::solver::Solve;
 use super::new_dsdvbus2::{JacobianPattern2, fill_jacobian_v2};
 use crate::basic::sparse::{
     conj::RealImage,
@@ -165,133 +165,13 @@ pub fn newton_pf_v0<Solver: Solve>(
     Err((String::from("Did not converge!"), v))
 }
 
-/// New Newton-Raphson power flow that uses `fill_jacobian_ultimate`.
-/// Performs a Newton-Raphson power flow calculation.
-///
-/// # Parameters
-///
-/// * `Ybus` - The bus admittance matrix.
-/// * `Sbus` - The bus power injections.
-/// * `v_init` - The initial voltage vector.
-/// * `npv` - The number of PV buses.
-/// * `npq` - The number of PQ buses.
-/// * `tolerance` - The tolerance for convergence (optional).
-/// * `max_iter` - The maximum number of iterations (optional).
-/// * `solver` - The solver for the linear system.
-///
-/// # Returns
-///
-/// A result containing the converged voltage vector and the number of iterations.
-/// Returns an error if the algorithm did not converge.
-#[allow(non_snake_case)]
-pub fn newton_pf<Solver: Solve>(
-    Ybus: &CscMatrix<Complex64>,
-    Sbus: &DVector<Complex64>,
-    v_init: &DVector<Complex64>,
-    npv: usize,
-    npq: usize,
-    tolerance: Option<f64>,
-    max_iter: Option<usize>,
-    solver: &mut Solver,
-) -> Result<(DVector<Complex64>, usize), (String, DVector<Complex64>)> {
-    let mut v = v_init.clone();
-    let max_iter = max_iter.unwrap_or(100);
-    let tol = tolerance.unwrap_or(1e-6);
-
-    // ── symbolic: build Jacobian pattern once ──
-    let j_pattern =
-        JacobianPattern::build_from_permuted(Ybus.col_offsets(), Ybus.row_indices(), npv, npq);
-    let n_state = npv + 2 * npq; // num_state rows ≡ J.nrows()
-    let mut j_values = vec![0.0; j_pattern.nnz_j];
-
-    // ── initial state ──
-    let n_bus = npv + npq;
-    let mut mis = &v.component_mul(&(Ybus * &v).conjugate()) - Sbus;
-    let mut F = DVector::zeros(n_state);
-    assemble_f(&mut F, n_bus, &mis, n_state, npv);
-    if F.norm() < tol {
-        return Ok((v, 0));
-    }
-
-    let mut v_m = v.map(|e| e.simd_modulus());
-    let mut v_a = v.map(|e| e.simd_argument());
-    let mut v_norm = v.map(|e| e.simd_signum());
-
-    // Use unsafe to pass Ap and Ai as mutable slices without cloning, 
-    // since we know the solver does not modify the sparsity pattern.
-    let Ap = unsafe {
-        std::slice::from_raw_parts_mut(
-            j_pattern.j_col_ptrs.as_ptr() as *mut usize,
-            j_pattern.j_col_ptrs.len(),
-        )
-    };
-    let Ai = unsafe {
-        std::slice::from_raw_parts_mut(
-            j_pattern.j_row_indices.as_ptr() as *mut usize,
-            j_pattern.j_row_indices.len(),
-        )
-    };
-
-    for it in 0..max_iter {
-        // ibus = Ybus * v  (sparse × dense)
-        let ibus = Ybus * &v;
-
-        // Fill j_values directly from Ybus + v + Vnorm + ibus
-        fill_jacobian_ultimate(
-            Ybus,
-            v.as_slice(),
-            v_norm.as_slice(),
-            ibus.as_slice(),
-            &j_pattern,
-            npv,
-            npq,
-            &mut j_values,
-        );
-
-        let _ = solver.solve(
-            Ap,
-            Ai,
-            j_values.as_mut_slice(),
-            F.data.as_mut_slice(),
-            n_state,
-        );
-
-        // dx = F (in-place solution from Solve trait)
-        let dx = &F;
-
-        // Update voltage state
-        v_a.rows_range_mut(0..n_bus)
-            .zip_apply(&dx.rows_range(0..n_bus), |a, b| {
-                *a -= b;
-                *a = a.rem_euclid(2.0 * PI);
-            });
-        let mut vm_pq = v_m.rows_range_mut(npv..n_bus);
-        vm_pq.zip_apply(&dx.rows_range(n_bus..n_state), |a, b| *a -= b);
-
-        v_norm.zip_apply(&v_a, |a, va| *a = Complex64::from_polar(1.0, va));
-        v.zip_zip_apply(&v_norm, &v_m, |a, e, vm| *a = vm * e);
-
-        // New mismatch
-        v.component_mul(&(Ybus * &v).conjugate())
-            .sub_to(Sbus, &mut mis);
-        assemble_f(&mut F, n_bus, &mis, n_state, npv);
-
-        if F.norm() < tol {
-            return Ok((v, it));
-        }
-    }
-
-    Err((String::from("Did not converge!"), v))
-}
-
-/// V2 Newton--Raphson power flow under the `[PQ | PV | slack]` bus ordering,
-/// using the second-generation symbolic+fill of `new_dsdvbus2`. Branch-free in
-/// the assembly hot path.
+/// Newton--Raphson power flow under the `[PQ | PV | slack]` bus ordering.
+/// Branch-free Jacobian assembly via `JacobianPattern2` + `fill_jacobian_v2`.
 ///
 /// Requires `Ybus`, `Sbus`, `v_init` already permuted into `[PQ | PV | slack]`:
 /// PQ buses at indices `0..npq`, PV at `npq..npq+npv`, slack at `npq+npv..`.
 #[allow(non_snake_case)]
-pub fn newton_pf_v2<Solver: Solve>(
+pub fn newton_pf<Solver: Solve>(
     Ybus: &CscMatrix<Complex64>,
     Sbus: &DVector<Complex64>,
     v_init: &DVector<Complex64>,
