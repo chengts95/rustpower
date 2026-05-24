@@ -74,8 +74,8 @@ impl PowerFlowMat {
 ///
 
 pub(crate) fn create_permutation_matrix(
-    pv: &[i64],
     pq: &[i64],
+    pv: &[i64],
     ext: &[i64],
     nodes: usize,
 ) -> CooMatrix<i64> {
@@ -83,12 +83,12 @@ pub(crate) fn create_permutation_matrix(
     let mut col_indices: Vec<usize> = (0..nodes).collect();
     let values = vec![1; nodes];
 
-    let n_bus = pv.len() + pq.len();
-    for i in 0..pv.len() {
-        col_indices[i] = pv[i] as usize;
+    let n_bus = pq.len() + pv.len();
+    for i in 0..pq.len() {
+        col_indices[i] = pq[i] as usize;
     }
-    for i in pv.len()..n_bus {
-        col_indices[i] = pq[i - pv.len()] as usize;
+    for i in pq.len()..n_bus {
+        col_indices[i] = pv[i - pq.len()] as usize;
     }
     for i in n_bus..nodes {
         col_indices[i] = ext[i - n_bus] as usize;
@@ -275,8 +275,8 @@ pub(crate) fn init_bus_status(
 
     // Create permutation matrix for bus reordering
     let reorder_coo = create_permutation_matrix(
-        pv_only.as_slice(),
         pq_only.as_slice(),
+        pv_only.as_slice(),
         exts.as_slice(),
         nodes,
     );
