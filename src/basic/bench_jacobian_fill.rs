@@ -158,14 +158,14 @@ fn compare_assembly(name: &str, mat: &PowerFlowMat, repeats: usize) {
     // V0: dSbus_dV_old (diagonal-matrix SpGEMM) + uncached build_jacobian.
     let t_v0 = timeit("V0  dSbus_dV_old + build_jacobian", repeats, || {
         let (dsm, dsa) = dSbus_dV_old(&mat.y_bus, &v, &v_norm);
-        let _ = build_jacobian(&dsm, &dsa, npv, n_ext);
+        let _ = build_jacobian(&dsm, &dsa, npq, n_ext);
     });
 
     // V1: single-pass dSbus_dV + build_jacobian_cached (block buffers cached).
     let mut cache: Option<JacobianCache> = None;
     let t_v1 = timeit("V1  dSbus_dV + build_jacobian_cached", repeats, || {
         let (dsm, dsa) = dSbus_dV(&mat.y_bus, &v, &v_norm);
-        let _ = build_jacobian_cached(&dsm, &dsa, &mut cache, npv, n_ext);
+        let _ = build_jacobian_cached(&dsm, &dsa, &mut cache, npq, n_ext);
     });
 
     // V2: symbolic pattern (PQ-first) + branch-free fill.
@@ -390,12 +390,12 @@ fn export_solve_breakdown_csv(path: &str, name: &str, mat: &PowerFlowMat, repeat
     // Assembly timings (per iteration, fixed voltage).
     let t_v0 = timeit_quiet(repeats, || {
         let (dsm, dsa) = dSbus_dV_old(&mat.y_bus, &v, &v_norm);
-        let _ = build_jacobian(&dsm, &dsa, npv, n_ext);
+        let _ = build_jacobian(&dsm, &dsa, npq, n_ext);
     });
     let mut cache: Option<JacobianCache> = None;
     let t_v1 = timeit_quiet(repeats, || {
         let (dsm, dsa) = dSbus_dV(&mat.y_bus, &v, &v_norm);
-        let _ = build_jacobian_cached(&dsm, &dsa, &mut cache, npv, n_ext);
+        let _ = build_jacobian_cached(&dsm, &dsa, &mut cache, npq, n_ext);
     });
     let t_sym = timeit_quiet(repeats, || {
         let _ = JacobianPattern2::build_from_permuted(
