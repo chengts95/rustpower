@@ -1,4 +1,7 @@
 pub(crate) mod dsbus_dv;
+pub(crate) mod dsbr_dv;
+pub(crate) mod d2sbus_dv2;
+pub(crate) mod d2sbr_dv2;
 pub(crate) mod new_dsdvbus;
 pub(crate) mod new_dsdvbus2;
 pub mod newtonpf;

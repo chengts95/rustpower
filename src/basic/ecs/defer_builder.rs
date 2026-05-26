@@ -90,6 +90,16 @@ impl DeferBundleSpawner {
         Self { bump: Bump::new() }
     }
 
+    /// Spawns a single [`DeferBundle`] into the world, returning its [`Entity`] ID.
+    pub fn spawn<T: DeferBundle>(&mut self, world: &mut World, data: T) -> Entity {
+        let mut entity = world.spawn_empty();
+        let id = entity.id();
+        let mut builder = DeferredBundleBuilder::new(&mut entity, &self.bump);
+        data.insert_to(&mut builder);
+        builder.commit();
+        id
+    }
+
     /// Spawns a batch of [`DeferBundle`] instances into the world.
     ///
     /// Each item in the iterator is used to construct a new entity via deferred allocation.
@@ -105,5 +115,15 @@ impl DeferBundleSpawner {
             builder.commit();
         }
         self.bump.reset();
+    }
+
+    /// Spawns a batch of [`DeferBundle`] instances and returns their [`Entity`] IDs.
+    pub fn spawn_batch_with_ids<T: DeferBundle, U>(&mut self, world: &mut World, data: U) -> Vec<Entity>
+    where
+        U: IntoIterator<Item = T>,
+    {
+        let ids: Vec<Entity> = data.into_iter().map(|d| self.spawn(world, d)).collect();
+        self.bump.reset();
+        ids
     }
 }
