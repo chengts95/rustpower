@@ -1,6 +1,7 @@
 #![doc = include_str!("../doc/manifest.md")]
 mod basic;
 pub mod opf;
+pub mod new_opf;
 pub use basic::ecs::network;
 pub mod io;
 pub mod testcases;

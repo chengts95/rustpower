@@ -77,7 +77,9 @@ pub struct Gen {
 #[derive(Default, Debug, Serialize, Deserialize, Clone)]
 pub struct Load {
     pub bus: i64,
+    #[serde(default)]
     pub const_i_percent: f64,
+    #[serde(default)]
     pub const_z_percent: f64,
     pub controllable: Option<bool>,
     pub in_service: bool,
