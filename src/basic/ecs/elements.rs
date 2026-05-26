@@ -7,7 +7,7 @@ mod load;
 mod sgen;
 mod shunt;
 mod switch;
-mod trans;
+pub mod trans;
 mod units;
 use crate::io::pandapower;
 

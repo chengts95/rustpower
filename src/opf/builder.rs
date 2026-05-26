@@ -223,7 +223,7 @@ pub fn opf_data_from_network(net: &Network) -> OPFData {
 
 
 /// Compute (Yf[l,f], Yf[l,t], Yt[l,f], Yt[l,t], smax_pu) for a line (π-model).
-fn line_admittances(
+pub fn line_admittances(
     line: &Line,
     vbase_kv: f64,
     base_mva: f64,
@@ -254,7 +254,7 @@ fn line_admittances(
 }
 
 /// Compute (Yf[l,f], Yf[l,t], Yt[l,f], Yt[l,t], smax_pu) for a transformer.
-fn trafo_admittances(
+pub fn trafo_admittances(
     trafo: &Transformer,
     base_mva: f64,
 ) -> (Complex64, Complex64, Complex64, Complex64, f64) {
