@@ -129,7 +129,26 @@ pub fn opf_data_from_network(net: &Network) -> OPFData {
     // Build Ybus = Cf^T * Yf + Ct^T * Yt
     // Ybus[f[l], j] += Yf[l, j]   for each branch l
     // Ybus[t[l], j] += Yt[l, j]
-    let ybus = build_ybus(nb, &f_buses, &t_buses, &yf, &yt);
+    let mut ybus = build_ybus(nb, &f_buses, &t_buses, &yf, &yt);
+
+    // ── Shunt processing ───────────────────────────────────────────────────────
+    // Shunts are added directly to the Ybus diagonal.
+    // In pandapower, q_mvar > 0 means capacitive (injects Q), which is a positive susceptance (B > 0).
+    // Y_shunt = G + jB. 
+    // G = p_mw / base_mva
+    // B = q_mvar / base_mva
+    for sh in net.shunt.as_deref().unwrap_or(&[]) {
+        if !sh.in_service { continue; }
+        if let Some(&idx) = bus_id_to_idx.get(&sh.bus) {
+            let step = sh.step as f64;
+            let g_pu = sh.p_mw * step / base_mva;
+            let b_pu = sh.q_mvar * step / base_mva;
+            let y_sh = Complex64::new(g_pu, b_pu);
+            
+            // Add to Ybus diagonal
+            add_to_csc_diagonal(&mut ybus, idx, y_sh);
+        }
+    }
 
     // Cf (nb × nl): Cf[f[l], l] = 1,  Ct (nb × nl): Ct[t[l], l] = 1
     let (cf, ct) = build_incidence_cx(nb, nl, &f_buses, &t_buses);
@@ -417,4 +436,25 @@ fn build_incidence_cx(
         nalgebra_sparse::CscMatrix::from(&cf_coo),
         nalgebra_sparse::CscMatrix::from(&ct_coo),
     )
+}
+
+fn add_to_csc_diagonal(mat: &mut nalgebra_sparse::CscMatrix<Complex64>, idx: usize, val: Complex64) {
+    let start = mat.col_offsets()[idx];
+    let end = mat.col_offsets()[idx + 1];
+    let mut found = false;
+    for i in start..end {
+        if mat.row_indices()[i] == idx {
+            mat.values_mut()[i] += val;
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        // This is inefficient but Ybus should have structural diagonals anyway
+        // If not, we have to rebuild the CSC. For power systems, diagonals almost always exist.
+        // Let's panic if it doesn't exist for now to catch it, or just use Coo and convert later.
+        // For standard networks Ybus ALWAYS has diagonals due to line admittances.
+        // An isolated bus with ONLY a shunt would trigger this.
+        panic!("Ybus missing diagonal for bus {}, cannot add shunt directly.", idx);
+    }
 }
