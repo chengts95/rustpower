@@ -88,7 +88,9 @@ pub mod shunt_systems {
     /// 💡 This system allows shunt devices to be modeled as embedded admittance
     /// branches in the power flow solution.
     fn shunt_internal(item: &ShuntDevice, bus: &TargetBus) -> AdmittanceBranch {
-        let s = Complex::new(-item.p_mw, -item.q_mvar) * Complex::new(item.step as f64, 0.0);
+        // Pandapower: p_mw is consumption (>0), q_mvar is inductive (>0) or capacitive (<0).
+        // Physical Y = (P + jQ) / V^2.
+        let s = Complex::new(item.p_mw, item.q_mvar) * Complex::new(item.step as f64, 0.0);
         let y = s / (item.vn_kv * item.vn_kv);
         AdmittanceBranch {
             y: Admittance(y),

@@ -14,6 +14,7 @@ use num_complex::Complex64;
 /// Inequality constraints h(x) ≤ 0:
 ///   Branch apparent-power limits: |Sf|² - Smax_f² ≤ 0, |St|² - Smax_t² ≤ 0
 ///   (variable bounds Pg/Qg/Vm enforced via xmin/xmax in PIPS)
+#[derive(Clone)]
 pub struct OPFData {
     // ── network ──────────────────────────────────────────────────────────────
     pub nb: usize, // number of buses

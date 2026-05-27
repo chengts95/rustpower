@@ -19,39 +19,35 @@ pub fn verify_hessian(
     let v = data.v_from_x(x);
     let v_s = v.as_slice();
     let ybus = &data.ybus;
+    let y_vals = ybus.values();
+    let y_ri = ybus.row_indices();
+    let y_cp = ybus.col_offsets();
 
-    // 1. Rectangular Hessian (H_rect) for Power Balance
-    // Lagrangian: L_eq = sum lamP*P + sum lamQ*Q
     let lp = &lam_eq[..nb];
     let lq = &lam_eq[nb..2*nb];
-    
-    // M = diag(Lambda*) * Y_conj
-    let mut m_re_coo = CooMatrix::<f64>::new(nb, nb);
-    let mut m_im_coo = CooMatrix::<f64>::new(nb, nb);
-    for j in 0..nb {
-        for idx in ybus.col_offsets()[j]..ybus.col_offsets()[j+1] {
-            let i = ybus.row_indices()[idx];
-            let mij = Complex64::new(lp[i], -lq[i]) * ybus.values()[idx].conj();
-            m_re_coo.push(i, j, mij.re);
-            m_im_coo.push(i, j, mij.im);
-        }
-    }
-    let m_re = CscMatrix::from(&m_re_coo);
-    let m_im = CscMatrix::from(&m_im_coo);
-    
-    // H_eq in rectangular: [ H_ee  H_ef ]
-    //                     [ H_fe  H_ff ]
-    let h_ee = &m_re + &m_re.transpose();
-    let h_ff = h_ee.clone();
-    let h_ef = &m_im - &m_im.transpose();
-    let h_fe = h_ef.transpose();
 
-    // 2. Rectangular Hessian for Branch Limits (mu * |S|^2)
-    // We'll use the traditional path to compute the polar Hessian for branches,
-    // then "pull it back" to rectangular space if needed for verification,
-    // OR just add it to the final polar Hessian. 
-    // To prove the theory, let's keep branches in polar for now but 
-    // ENSURE the Delta_polar correction includes their gradient.
+    // 1. Rectangular Hessian (H_rect) for Power Balance
+    // Define M = diag(Lambda*) * Y_conj
+    let mut m_vals = Vec::with_capacity(ybus.nnz());
+    for idx in 0..ybus.nnz() {
+        let i = y_ri[idx];
+        m_vals.push(Complex64::new(lp[i], -lq[i]) * y_vals[idx].conj());
+    }
+    let m_mat = CscMatrix::try_from_csc_data(nb, nb, y_cp.to_vec(), y_ri.to_vec(), m_vals).unwrap();
+    let m_t = m_mat.transpose();
+
+    // H_ee = H_ff = Re( M + M^T )
+    // H_ef = -H_fe = Im( M - M^T )
+    let h_sum = &m_mat + &m_t;
+    let h_diff = &m_mat - &m_t;
+    
+    let mut h_ee_vals = Vec::with_capacity(h_sum.nnz());
+    for v in h_sum.values() { h_ee_vals.push(v.re); }
+    let h_ee = CscMatrix::try_from_csc_data(nb, nb, h_sum.col_offsets().to_vec(), h_sum.row_indices().to_vec(), h_ee_vals).unwrap();
+
+    let mut h_ef_vals = Vec::with_capacity(h_diff.nnz());
+    for v in h_diff.values() { h_ef_vals.push(v.im); }
+    let h_ef = CscMatrix::try_from_csc_data(nb, nb, h_diff.col_offsets().to_vec(), h_diff.row_indices().to_vec(), h_ef_vals).unwrap();
 
     // 3. Transformation Matrix J_trans (Full nx x nx)
     let mut j_trans_coo = CooMatrix::<f64>::new(nx, nx);
@@ -67,17 +63,12 @@ pub fn verify_hessian(
         j_trans_coo.push(nb + i, i, v_s[i].re); // d_vim / d_th
         j_trans_coo.push(nb + i, nb + i, sin); // d_vim / d_Vm
     }
-    // Pg, Qg are identity mappings
     for g in 0..2 * ng {
         j_trans_coo.push(2 * nb + g, 2 * nb + g, 1.0);
     }
     let j_trans = CscMatrix::from(&j_trans_coo);
 
-    // 4. Delta_polar Correction (Curvature of all constraints)
-    // Needs Total Gradient in Rectangular coordinates.
-    
-    // A. Polar Gradient (Jacobian rows * multipliers)
-    // Power Balance part: Already derived as Z = Lambda* \circ I* + term2
+    // 4. Delta_polar Correction (Curvature of Node Power Balance ONLY)
     let ibus = ybus * &v;
     let mut lam_v_conj = DVector::from_element(nb, Complex64::new(0.0, 0.0));
     for i in 0..nb { lam_v_conj[i] = (Complex64::new(lp[i], -lq[i]) * v[i]).conj(); }
@@ -85,37 +76,10 @@ pub fn verify_hessian(
     let mut g_rect_eq = vec![Complex64::new(0.0, 0.0); nb];
     for i in 0..nb { g_rect_eq[i] = Complex64::new(lp[i], -lq[i]) * ibus[i].conj() + term2[i]; }
 
-    // B. Branch Limit Gradient (Polar -> Rectangular)
-    let (_, _, _, dh) = crate::opf::constraints::opf_consfcn(data, x);
-    let mut g_polar_ineq = vec![0.0f64; 2 * nb];
-    for l in 0..2 * nl {
-        if mu_ineq[l] == 0.0 { continue; }
-        for idx in dh.col_offsets()[l]..dh.col_offsets()[l+1] {
-            let var = dh.row_indices()[idx];
-            if var < 2 * nb { g_polar_ineq[var] += mu_ineq[l] * dh.values()[idx]; }
-        }
-    }
-    
-    // Map polar ineq gradient back to rectangular
-    let mut g_rect_total_re = vec![0.0f64; nb];
-    let mut g_rect_total_im = vec![0.0f64; nb];
-    for i in 0..nb {
-        let m = vmag[i];
-        let sin = v_s[i].im / m;
-        let cos = v_s[i].re / m;
-        
-        let gre_br = (cos * m * g_polar_ineq[nb + i] - sin * g_polar_ineq[i]) / m;
-        let gim_br = (sin * m * g_polar_ineq[nb + i] + cos * g_polar_ineq[i]) / m;
-        
-        g_rect_total_re[i] = g_rect_eq[i].re + gre_br;
-        g_rect_total_im[i] = -g_rect_eq[i].im + gim_br; // Z = gre - j*gim
-    }
-
-    // 5. Build Final Hessian
     let mut h_full_coo = CooMatrix::new(nx, nx);
 
     // A. Add H_eq transformed
-    let mut h_rect_full_coo = CooMatrix::new(nx, nx);
+    let mut h_rect_full_coo = CooMatrix::new(2 * nb, 2 * nb);
     let add_blk = |coo: &mut CooMatrix<f64>, blk: &CscMatrix<f64>, r_off: usize, c_off: usize| {
         for col in 0..blk.ncols() {
             for idx in blk.col_offsets()[col]..blk.col_offsets()[col+1] {
@@ -124,25 +88,39 @@ pub fn verify_hessian(
         }
     };
     add_blk(&mut h_rect_full_coo, &h_ee, 0, 0);
-    add_blk(&mut h_rect_full_coo, &h_ff, nb, nb);
+    add_blk(&mut h_rect_full_coo, &h_ee, nb, nb);
     add_blk(&mut h_rect_full_coo, &h_ef, 0, nb);
-    add_blk(&mut h_rect_full_coo, &h_fe, nb, 0);
+    let h_fe = h_ef.transpose();
+    for j in 0..nb {
+        for idx in h_fe.col_offsets()[j]..h_fe.col_offsets()[j+1] {
+            h_rect_full_coo.push(nb + h_fe.row_indices()[idx], j, -h_fe.values()[idx]);
+        }
+    }
     let h_rect_full = CscMatrix::from(&h_rect_full_coo);
-    let h_polar_eq = &j_trans.transpose() * &(&h_rect_full * &j_trans);
     
-    for col in 0..nx {
+    // Manual transformation for verification without view()
+    let mut j_trans_eq_coo = CooMatrix::new(2 * nb, 2 * nb);
+    for j in 0..2 * nb {
+        for idx in j_trans.col_offsets()[j]..j_trans.col_offsets()[j + 1] {
+            j_trans_eq_coo.push(j_trans.row_indices()[idx], j, j_trans.values()[idx]);
+        }
+    }
+    let j_trans_eq = CscMatrix::from(&j_trans_eq_coo);
+    let h_polar_eq = &j_trans_eq.transpose() * &(&h_rect_full * &j_trans_eq);
+    
+    for col in 0..2*nb {
         for idx in h_polar_eq.col_offsets()[col]..h_polar_eq.col_offsets()[col+1] {
             h_full_coo.push(h_polar_eq.row_indices()[idx], col, h_polar_eq.values()[idx]);
         }
     }
 
-    // B. Add Delta_polar
+    // B. Add Delta_polar for EQ only
     for i in 0..nb {
         let m = vmag[i];
         let vre = v_s[i].re;
         let vim = v_s[i].im;
-        let gre = g_rect_total_re[i];
-        let gim = g_rect_total_im[i];
+        let gre = g_rect_eq[i].re;
+        let gim = -g_rect_eq[i].im;
         
         let d_aa = -(gre * vre + gim * vim);
         let d_av = (gim * vre - gre * vim) / m;
@@ -164,8 +142,8 @@ pub fn verify_hessian(
         let (haa, hav, hva, hvv) = blocks;
         let blks = [haa, hav, hva, hvv];
         for (b_idx, block) in blks.iter().enumerate() {
-            let r_off = (b_idx % 2) * nb;
-            let c_off = (b_idx / 2) * nb;
+            let r_off = (b_idx / 2) * nb;
+            let c_off = (b_idx % 2) * nb;
             for j in 0..nb {
                 for idx in block.col_offsets()[j]..block.col_offsets()[j+1] {
                     coo.push(r_off + block.row_indices()[idx], c_off + j, block.values()[idx]);

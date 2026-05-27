@@ -63,17 +63,6 @@ pub fn opf_data_from_network(net: &Network) -> OPFData {
             );
         }
     }
-    // Shunts as constant admittance load approximation at V=1 pu
-    for sh in net.shunt.as_deref().unwrap_or(&[]) {
-        if !sh.in_service { continue; }
-        if let Some(&idx) = bus_id_to_idx.get(&sh.bus) {
-            let step = sh.step as f64;
-            s_load[idx] += Complex64::new(
-                sh.p_mw * step / base_mva,
-                sh.q_mvar * step / base_mva,  // q_mvar is positive for capacitive (inductive load)
-            );
-        }
-    }
 
     // ── Branch processing ──────────────────────────────────────────────────────
     // Per-branch: (f_bus, t_bus, Yf[l, f], Yf[l, t], Yt[l, f], Yt[l, t], rate_a)
@@ -133,16 +122,19 @@ pub fn opf_data_from_network(net: &Network) -> OPFData {
 
     // ── Shunt processing ───────────────────────────────────────────────────────
     // Shunts are added directly to the Ybus diagonal.
-    // In pandapower, q_mvar > 0 means capacitive (injects Q), which is a positive susceptance (B > 0).
-    // Y_shunt = G + jB. 
-    // G = p_mw / base_mva
-    // B = q_mvar / base_mva
+    // In pandapower, p_mw is active power consumed (G > 0).
+    // q_mvar is reactive power consumed (if > 0, inductive, B < 0; if < 0, capacitive, B > 0).
+    // Physical Y = (P - jQ_inj) / V^2 = (P + jQ_cons) / V^2 but wait, S_cons = |V|^2 Y*.
+    // So Y* = (P + jQ) / |V|^2 -> Y = (P - jQ) / |V|^2.
+    // G = P / |V|^2, B = -Q / |V|^2.
     for sh in net.shunt.as_deref().unwrap_or(&[]) {
         if !sh.in_service { continue; }
         if let Some(&idx) = bus_id_to_idx.get(&sh.bus) {
             let step = sh.step as f64;
-            let g_pu = sh.p_mw * step / base_mva;
-            let b_pu = sh.q_mvar * step / base_mva;
+            let v_ratio = vbase[idx] / sh.vn_kv;
+            let scale = v_ratio * v_ratio;
+            let g_pu = sh.p_mw * step / base_mva * scale;
+            let b_pu = -sh.q_mvar * step / base_mva * scale;
             let y_sh = Complex64::new(g_pu, b_pu);
             
             // Add to Ybus diagonal
