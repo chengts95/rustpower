@@ -11,6 +11,8 @@ pub struct V3SymbolicCache {
     pub br_to_y_indices: Vec<[usize; 4]>,
     pub y_transpose_idx: Vec<usize>,
     pub lxx_diag_ptrs: Vec<usize>,
+    pub lxx_va_diag_ptrs: Vec<usize>,
+    pub lxx_av_diag_ptrs: Vec<usize>,
     pub lxx_cp: Vec<usize>,
     pub lxx_ri: Vec<usize>,
 }
@@ -85,11 +87,15 @@ impl V3SymbolicCache {
             br_to_y_indices[l] = [ find_y(f, f), find_y(f, t), find_y(t, f), find_y(t, t) ];
         }
 
-        let lxx_diag_ptrs = (0..nx).map(|j| {
-            let range = l_cp[j]..l_cp[j+1];
-            l_ri[range.clone()].binary_search(&j).map(|pos| range.start + pos).expect("Lxx missing diagonal!")
-        }).collect();
+        let find_l = |r: usize, c: usize| -> usize {
+            let range = l_cp[c]..l_cp[c+1];
+            l_ri[range.clone()].binary_search(&r).map(|pos| range.start + pos).expect("Lxx missing structural element!")
+        };
 
-        Self { nb, nx, y_to_lxx, br_to_y_indices, y_transpose_idx, lxx_diag_ptrs, lxx_cp: l_cp, lxx_ri: l_ri }
+        let lxx_diag_ptrs = (0..nx).map(|j| find_l(j, j)).collect();
+        let lxx_va_diag_ptrs = (0..nb).map(|i| find_l(nb + i, i)).collect();
+        let lxx_av_diag_ptrs = (0..nb).map(|i| find_l(i, nb + i)).collect();
+
+        Self { nb, nx, y_to_lxx, br_to_y_indices, y_transpose_idx, lxx_diag_ptrs, lxx_va_diag_ptrs, lxx_av_diag_ptrs, lxx_cp: l_cp, lxx_ri: l_ri }
     }
 }

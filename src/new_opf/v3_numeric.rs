@@ -4,6 +4,9 @@ use num_complex::Complex64;
 use super::v3_symbolic::V3SymbolicCache;
 use crate::opf::problem::OPFData;
 
+use crate::basic::d2sbr_dv2::d2ASbr_dV2;
+use crate::basic::dsbr_dv::dSbr_dV;
+
 /// V3 Numeric Fill: Fuses node and branch Hessian contributions.
 /// Completely eliminates the need for Yf and Yt matrices.
 pub fn v3_numeric_fill(
@@ -64,19 +67,16 @@ pub fn v3_numeric_fill(
         for idx in y_cp[j]..y_cp[j+1] {
             let i = y_ri[idx];
             let y_conj = y_vals[idx].conj();
-            
-            // Rectangular: M_ij = Lambda_i* * Y_ij*
-            let mij = lam_vec[i] * y_conj;
             let ji_idx = cache.y_transpose_idx[idx];
-            let m_ji = lam_vec[j] * y_vals[ji_idx].conj();
+            
+            let mij = lam_vec[i] * y_conj;
+            let mji = lam_vec[j] * y_vals[ji_idx].conj();
 
-            // H_rect blocks
-            let hrr = mij.re + m_ji.re;
+            let hrr = mij.re + mji.re;
             let hii = hrr;
-            let h_ef = mij.im - m_ji.im;
+            let h_ef = mij.im - mji.im;
             let h_fe = -h_ef;
 
-            // Transform to polar: H_p = Ji^T * H_r * Jj
             let m_i = jt(i);
             let m_j = jt(j);
             let haa = m_i[0]*(hrr*m_j[0] + h_ef*m_j[2]) + m_i[2]*(h_fe*m_j[0] + hii*m_j[2]);
@@ -85,35 +85,57 @@ pub fn v3_numeric_fill(
             let hvv = m_i[1]*(hrr*m_j[1] + h_ef*m_j[3]) + m_i[3]*(h_fe*m_j[1] + hii*m_j[3]);
 
             let ptrs = cache.y_to_lxx[idx];
-            lxx_vals[ptrs[0]] += haa;
-            lxx_vals[ptrs[1]] += hav;
-            lxx_vals[ptrs[2]] += hva;
-            lxx_vals[ptrs[3]] += hvv;
+            lxx_vals[ptrs[0]] = haa;
+            lxx_vals[ptrs[1]] = hav;
+            lxx_vals[ptrs[2]] = hva;
+            lxx_vals[ptrs[3]] = hvv;
         }
     }
 
-    // 3. Pass 2: Branch Flow Limits Hessian (Fused Element-wise)
-    // For $|I|^2$ limits, H_rect is constant.
+    // 3. Pass 2: Branch Flow Limits Hessian
     let mu_f = &mu_ineq[..nl];
     let mu_t = &mu_ineq[nl..];
+    let v_norm: DVector<Complex64> = v.map(|vi| vi / vi.norm());
+    let (dSf_dVa, dSf_dVm, dSt_dVa, dSt_dVm, Sf, St) =
+        dSbr_dV(&data.yf, &data.yt, &data.f_buses, &data.t_buses, &v, &v_norm);
 
-    // TODO: Implement the direct addition of branch contributions to Lxx using cache.br_to_y_indices
-    // For now, let's keep the focus on the free meal and accuracy.
-    // ...
+    let hf = d2ASbr_dV2(&dSf_dVa, &dSf_dVm, &Sf, &data.cf, &data.yf, &v, &DVector::from_column_slice(mu_f));
+    let ht = d2ASbr_dV2(&dSt_dVa, &dSt_dVm, &St, &data.ct, &data.yt, &v, &DVector::from_column_slice(mu_t));
+
+    let mut add_br_h = |lxx: &mut [f64], h_blocks: (CscMatrix<f64>, CscMatrix<f64>, CscMatrix<f64>, CscMatrix<f64>)| {
+        let (haa, hav, hva, hvv) = h_blocks;
+        let blks = [haa, hav, hva, hvv];
+        for (b_idx, block) in blks.iter().enumerate() {
+            let cp = block.col_offsets();
+            let ri = block.row_indices();
+            let vals = block.values();
+            for col in 0..nb {
+                for idx in cp[col]..cp[col+1] {
+                    let row = ri[idx];
+                    let val = vals[idx];
+                    let r_off = (b_idx % 2) * nb;
+                    let c_off = (b_idx / 2) * nb;
+                    let range = cache.lxx_cp[c_off + col]..cache.lxx_cp[c_off + col + 1];
+                    if let Ok(pos) = cache.lxx_ri[range.clone()].binary_search(&(r_off + row)) {
+                        lxx[range.start + pos] += val;
+                    }
+                }
+            }
+        }
+    };
+    add_br_h(&mut lxx_vals, hf);
+    add_br_h(&mut lxx_vals, ht);
 
     // 4. Delta_polar correction (diagonal O(n))
     for i in 0..nb {
         let zi = lam_vec[i] * ibus[i].conj() + term2[i];
-        let gre = zi.re;
-        let gim = -zi.im;
-        let d_aa = -(gre * vre[i] + gim * vim[i]);
-        let d_av = (gim * vre[i] - gre * vim[i]) / vmag[i];
+        let zv = zi * v[i];
+        let d_aa = -zv.re;
+        let d_av = -zv.im / vmag[i];
         
-        let ptrs = cache.y_to_lxx[y_cp[i]]; // Find diag... wait, need lxx_diag_ptrs
-        // We'll use the specific diagonal pointers cached in V3
         lxx_vals[cache.lxx_diag_ptrs[i]] += d_aa;
-        lxx_vals[cache.lxx_diag_ptrs[i]] += 0.0; // Correction logic...
-        // (Wait, the 2x2 Delta block needs to be added correctly)
+        lxx_vals[cache.lxx_va_diag_ptrs[i]] += d_av;
+        lxx_vals[cache.lxx_av_diag_ptrs[i]] += d_av;
     }
 
     // 5. Cost Hessian
@@ -125,4 +147,3 @@ pub fn v3_numeric_fill(
 
     CscMatrix::try_from_csc_data(nx, nx, cache.lxx_cp.clone(), cache.lxx_ri.clone(), lxx_vals).unwrap()
 }
-
