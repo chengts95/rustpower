@@ -7,6 +7,8 @@ use crate::opf::constraints;
 use crate::new_opf::v3_symbolic::V3SymbolicCache;
 use crate::new_opf::v3_numeric::v3_numeric_fill;
 
+use crate::new_opf::v3_numeric_scalar::v3_scalar_numeric_fill;
+
 /// Optimized PIPS solver using V3 Revolutionary Symbolic-Cached Assembly.
 pub fn pips(
     data: &NewOPFData,
@@ -24,7 +26,7 @@ pub fn pips(
             (h, g, dh, dg)
         },
         |x, lam_eq, mu_ineq, cost_mult| {
-            v3_numeric_fill(data, &v3_cache, x, lam_eq, mu_ineq, cost_mult)
+            v3_scalar_numeric_fill(data, &v3_cache, x, lam_eq, mu_ineq, cost_mult)
         },
         x0, xmin, xmax, opt
     )

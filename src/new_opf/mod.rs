@@ -2,6 +2,8 @@ pub mod symbolic;
 pub mod numeric;
 pub mod v3_symbolic;
 pub mod v3_numeric;
+pub mod v3_numeric_fused;
+pub mod v3_numeric_scalar;
 pub mod math_verify;
 pub mod pips;
 pub mod problem;
