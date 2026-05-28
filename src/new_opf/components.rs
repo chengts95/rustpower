@@ -1,27 +1,44 @@
-use bevy_ecs::prelude::Component;
-use num_complex::Complex64;
+use bevy_ecs::prelude::*;
+use nalgebra_sparse::CscMatrix;
+use crate::basic::solver::KLUSolver;
 
 /// Lagrange multiplier for bus power balance (P and Q).
-/// Typically associated with Bus entities.
 #[derive(Component, Debug, Clone, Default)]
 pub struct LambdaBus {
     pub p: f64,
     pub q: f64,
 }
 
-/// Lagrange multiplier for branch flow limits (from and to side).
-/// Associated with Line or Transformer entities.
+/// Lagrange multiplier for branch flow limits.
 #[derive(Component, Debug, Clone, Default)]
 pub struct MuFlow {
     pub from: f64,
     pub to: f64,
 }
 
-/// Lagrange multipliers for variable limits (upper and lower).
-#[derive(Component, Debug, Clone, Default)]
-pub struct MuLimit {
-    pub lower: f64,
-    pub upper: f64,
+/// Persistent workspace for OPF calculations to avoid repeated allocations.
+#[derive(Resource)]
+pub struct OPFWorkspace {
+    pub solver: KLUSolver,
+    /// Pre-allocated KKT matrix skeleton [M dg; dg^T 0]
+    pub kkt_skeleton: Option<CscMatrix<f64>>,
+    /// Cached mapping for fast numeric assembly
+    pub mapping: Option<KKTMapping>,
+}
+
+impl Default for OPFWorkspace {
+    fn default() -> Self {
+        Self {
+            solver: KLUSolver::default(),
+            kkt_skeleton: None,
+            mapping: None,
+        }
+    }
+}
+
+pub struct KKTMapping {
+    pub lxx_ptrs: Vec<usize>,
+    pub dg_ptrs: Vec<usize>,
 }
 
 /// Solved active power dispatch for a generator (p.u.).
