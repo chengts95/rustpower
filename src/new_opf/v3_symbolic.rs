@@ -100,7 +100,6 @@ impl V3SymbolicCache {
     }
 }
 
-/// Zero-allocation KKT Assembly Cache
 pub struct KKTSymbolicCache {
     pub dim: usize,
     pub kkt_skeleton: CscMatrix<f64>,
@@ -117,55 +116,48 @@ impl KKTSymbolicCache {
         let neq = 2 * nb;
         let dim = nx + neq;
 
-        let mut k_coo = CooMatrix::<f64>::new(dim, dim);
-        
-        // 1. Map Lxx
-        for j in 0..nx {
-            for &r in &lxx_cache.lxx_ri[lxx_cache.lxx_cp[j]..lxx_cache.lxx_cp[j+1]] {
-                k_coo.push(r, j, 0.0);
-            }
-        }
-        
-        // 2. Map dg and dg^T (Equality constraints)
+        // 1. Build dg (nx x 2nb) to get its sparsity
+        let mut dg_coo = CooMatrix::<f64>::new(nx, neq);
         for i in 0..nb {
             for idx in data.ybus.col_offsets()[i]..data.ybus.col_offsets()[i+1] {
                 let j = data.ybus.row_indices()[idx];
-                for &v_col in &[j, nb + j] {
-                    k_coo.push(nx + i,      v_col, 0.0); // dg
-                    k_coo.push(nx + nb + i, v_col, 0.0); // dg
-                    k_coo.push(v_col, nx + i,      0.0); // dg^T
-                    k_coo.push(v_col, nx + nb + i, 0.0); // dg^T
-                }
+                dg_coo.push(j,      i,      1.0); // dP_i / dVa_j
+                dg_coo.push(nb + j, i,      1.0); // dP_i / dVm_j
+                dg_coo.push(j,      nb + i, 1.0); // dQ_i / dVa_j
+                dg_coo.push(nb + j, nb + i, 1.0); // dQ_i / dVm_j
             }
         }
         for g in 0..ng {
             let bus_i = data.gen_bus[g];
-            k_coo.push(nx + bus_i,      2 * nb + g,      0.0); // dP/dPg
-            k_coo.push(nx + nb + bus_i, 2 * nb + ng + g, 0.0); // dQ/dQg
-            k_coo.push(2 * nb + g,      nx + bus_i,      0.0); // transpose
-            k_coo.push(2 * nb + ng + g, nx + nb + bus_i, 0.0); // transpose
+            dg_coo.push(2 * nb + g,      bus_i,      1.0); 
+            dg_coo.push(2 * nb + ng + g, nb + bus_i, 1.0); 
         }
-
-        let kkt = CscMatrix::from(&k_coo);
+        let dg_sparsity = CscMatrix::from(&dg_coo);
+        
+        let lxx_dummy = CscMatrix::try_from_csc_data(nx, nx, lxx_cache.lxx_cp.clone(), lxx_cache.lxx_ri.clone(), vec![0.0; lxx_cache.lxx_ri.len()]).unwrap();
+        let kkt = crate::opf::pips::build_saddle_point_export(&lxx_dummy, &Some(dg_sparsity.clone()), nx, neq);
+        
         let find_k = |r: usize, c: usize| -> usize {
             let s = kkt.col_offsets()[c]; let e = kkt.col_offsets()[c+1];
-            kkt.row_indices()[s..e].binary_search(&r).map(|p| s + p).expect("KKT element missing")
+            kkt.row_indices()[s..e].binary_search(&r).map(|p| s + p).expect(&format!("KKT missing {},{}", r, c))
         };
 
+        // 2. Build Mappings
         let lxx_to_kkt = (0..nx).flat_map(|j| {
             (lxx_cache.lxx_cp[j]..lxx_cache.lxx_cp[j+1]).map(move |off| find_k(lxx_cache.lxx_ri[off], j))
         }).collect();
 
-        // dg_to_kkt: we need to follow the same order as in constraints.rs
-        // This part is crucial for zero-allocation. 
-        // For the shadow check, we'll implement it incrementally.
+        let mut dg_to_kkt = vec![0usize; dg_sparsity.nnz()];
+        let mut dgt_to_kkt = vec![0usize; dg_sparsity.nnz()];
 
-        Self {
-            dim,
-            kkt_skeleton: kkt,
-            lxx_to_kkt,
-            dg_to_kkt: vec![],
-            dgt_to_kkt: vec![],
+        for col in 0..neq {
+            for idx in dg_sparsity.col_offsets()[col]..dg_sparsity.col_offsets()[col+1] {
+                let row = dg_sparsity.row_indices()[idx];
+                dg_to_kkt[idx] = find_k(row, nx + col);
+                dgt_to_kkt[idx] = find_k(nx + col, row);
+            }
         }
+
+        Self { dim, kkt_skeleton: kkt, lxx_to_kkt, dg_to_kkt, dgt_to_kkt }
     }
 }
