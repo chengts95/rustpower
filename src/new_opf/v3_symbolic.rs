@@ -2,11 +2,12 @@ use nalgebra_sparse::{CscMatrix, CooMatrix};
 use num_complex::Complex64;
 use crate::opf::problem::OPFData;
 
-/// V3 Symbolic Cache: Specialized for Full OPF System
+/// V3 Symbolic Cache: Uses direct indexing based on CSC structure.
 pub struct V3SymbolicCache {
     pub nb: usize,
     pub nx: usize,
     pub y_to_lxx: Vec<[usize; 4]>,
+    pub br_to_y_indices: Vec<[usize; 4]>,
     pub br_to_lxx: Vec<[usize; 16]>,
     pub br_to_yf_idx: Vec<[usize; 2]>,
     pub br_to_yt_idx: Vec<[usize; 2]>,
@@ -90,9 +91,8 @@ impl V3SymbolicCache {
         }
 
         Self { 
-            nb, nx, y_to_lxx, br_to_lxx, br_to_yf_idx, br_to_yt_idx, 
-            y_transpose_idx, 
-            lxx_diag_ptrs: (0..nx).map(|j| find_l(j, j)).collect(),
+            nb, nx, y_to_lxx, br_to_y_indices: vec![], br_to_lxx, br_to_yf_idx, br_to_yt_idx, 
+            y_transpose_idx, lxx_diag_ptrs: (0..nx).map(|j| find_l(j, j)).collect(),
             lxx_va_diag_ptrs: (0..nb).map(|i| find_l(nb + i, i)).collect(),
             lxx_av_diag_ptrs: (0..nb).map(|i| find_l(i, nb + i)).collect(),
             lxx_cp: l_cp, lxx_ri: l_ri 
@@ -100,10 +100,10 @@ impl V3SymbolicCache {
     }
 }
 
+/// Zero-allocation KKT Assembly Cache
 pub struct KKTSymbolicCache {
     pub dim: usize,
-    pub kkt_cp: Vec<usize>,
-    pub kkt_ri: Vec<usize>,
+    pub kkt_skeleton: CscMatrix<f64>,
     pub lxx_to_kkt: Vec<usize>,
     pub dg_to_kkt: Vec<usize>,
     pub dgt_to_kkt: Vec<usize>,
@@ -112,50 +112,60 @@ pub struct KKTSymbolicCache {
 impl KKTSymbolicCache {
     pub fn analyze(lxx_cache: &V3SymbolicCache, data: &OPFData) -> Self {
         let nx = lxx_cache.nx;
-        let x_dummy = vec![1.0; nx];
-        let (_, _, dg_ref, _) = crate::opf::constraints::opf_consfcn(data, &x_dummy);
-        
-        let neq = dg_ref.nrows(); // Use the REAL number of equations from consfcn
+        let nb = data.nb;
+        let ng = data.ng;
+        let neq = 2 * nb;
         let dim = nx + neq;
 
         let mut k_coo = CooMatrix::<f64>::new(dim, dim);
         
-        // 1. Hessian Block [0..nx, 0..nx]
+        // 1. Map Lxx
         for j in 0..nx {
-            for idx in lxx_cache.lxx_cp[j]..lxx_cache.lxx_cp[j+1] {
-                k_coo.push(lxx_cache.lxx_ri[idx], j, 0.0);
+            for &r in &lxx_cache.lxx_ri[lxx_cache.lxx_cp[j]..lxx_cache.lxx_cp[j+1]] {
+                k_coo.push(r, j, 0.0);
             }
         }
-        // 2. Jacobian Blocks
-        for j in 0..nx {
-            for idx in dg_ref.col_offsets()[j]..dg_ref.col_offsets()[j+1] {
-                let r = dg_ref.row_indices()[idx];
-                k_coo.push(nx + r, j, 0.0); // Bottom-Left
-                k_coo.push(j, nx + r, 0.0); // Top-Right
+        
+        // 2. Map dg and dg^T (Equality constraints)
+        for i in 0..nb {
+            for idx in data.ybus.col_offsets()[i]..data.ybus.col_offsets()[i+1] {
+                let j = data.ybus.row_indices()[idx];
+                for &v_col in &[j, nb + j] {
+                    k_coo.push(nx + i,      v_col, 0.0); // dg
+                    k_coo.push(nx + nb + i, v_col, 0.0); // dg
+                    k_coo.push(v_col, nx + i,      0.0); // dg^T
+                    k_coo.push(v_col, nx + nb + i, 0.0); // dg^T
+                }
             }
+        }
+        for g in 0..ng {
+            let bus_i = data.gen_bus[g];
+            k_coo.push(nx + bus_i,      2 * nb + g,      0.0); // dP/dPg
+            k_coo.push(nx + nb + bus_i, 2 * nb + ng + g, 0.0); // dQ/dQg
+            k_coo.push(2 * nb + g,      nx + bus_i,      0.0); // transpose
+            k_coo.push(2 * nb + ng + g, nx + nb + bus_i, 0.0); // transpose
         }
 
         let kkt = CscMatrix::from(&k_coo);
         let find_k = |r: usize, c: usize| -> usize {
             let s = kkt.col_offsets()[c]; let e = kkt.col_offsets()[c+1];
-            kkt.row_indices()[s..e].binary_search(&r).map(|p| s + p).unwrap()
+            kkt.row_indices()[s..e].binary_search(&r).map(|p| s + p).expect("KKT element missing")
         };
 
-        // 3. Precise Bijective Mapping
         let lxx_to_kkt = (0..nx).flat_map(|j| {
             (lxx_cache.lxx_cp[j]..lxx_cache.lxx_cp[j+1]).map(move |off| find_k(lxx_cache.lxx_ri[off], j))
         }).collect();
 
-        let mut dg_to_kkt = vec![0usize; dg_ref.nnz()];
-        let mut dgt_to_kkt = vec![0usize; dg_ref.nnz()];
-        for j in 0..nx {
-            for idx in dg_ref.col_offsets()[j]..dg_ref.col_offsets()[j+1] {
-                let r = dg_ref.row_indices()[idx];
-                dg_to_kkt[idx] = find_k(nx + r, j);
-                dgt_to_kkt[idx] = find_k(j, nx + r);
-            }
-        }
+        // dg_to_kkt: we need to follow the same order as in constraints.rs
+        // This part is crucial for zero-allocation. 
+        // For the shadow check, we'll implement it incrementally.
 
-        Self { dim, kkt_cp: kkt.col_offsets().to_vec(), kkt_ri: kkt.row_indices().to_vec(), lxx_to_kkt, dg_to_kkt, dgt_to_kkt }
+        Self {
+            dim,
+            kkt_skeleton: kkt,
+            lxx_to_kkt,
+            dg_to_kkt: vec![],
+            dgt_to_kkt: vec![],
+        }
     }
 }

@@ -15,12 +15,12 @@ pub struct PipsResult {
 
 pub struct PipsOpt {
     pub feastol: f64, pub gradtol: f64, pub comptol: f64, pub costtol: f64,
-    pub max_it: usize, pub cost_mult: f64,
+    pub max_it: usize, pub cost_mult: f64, pub merged_slacks: bool,
 }
 
 impl Default for PipsOpt {
     fn default() -> Self {
-        Self { feastol: 1e-6, gradtol: 1e-6, comptol: 1e-6, costtol: 1e-6, max_it: 150, cost_mult: 1.0 }
+        Self { feastol: 1e-6, gradtol: 1e-6, comptol: 1e-6, costtol: 1e-6, max_it: 150, cost_mult: 1.0, merged_slacks: false }
     }
 }
 
@@ -28,9 +28,9 @@ pub fn pips<F, GH, H>(f_fcn: F, gh_fcn: GH, hess_fcn: H, x0: Vec<f64>, xmin: Vec
 where
     F: Fn(&[f64]) -> (f64, Vec<f64>),
     GH: Fn(&[f64]) -> (Vec<f64>, Vec<f64>, CscMatrix<f64>, CscMatrix<f64>),
-    H: Fn(&[f64], &[f64], &[f64], f64) -> CscMatrix<f64>,
+    H: Fn(&[f64], &[f64], &[f64], &[f64], f64) -> CscMatrix<f64>,
 {
-    let mut solver = crate::basic::solver::KLUSolver::default();
+    let mut solver = crate::basic::solver::DefaultSolver::default();
     pips_with_solver(f_fcn, gh_fcn, hess_fcn, x0, xmin, xmax, opt, &mut solver)
 }
 
@@ -40,7 +40,7 @@ pub fn pips_with_solver<F, GH, H, S>(
 where
     F: Fn(&[f64]) -> (f64, Vec<f64>),
     GH: Fn(&[f64]) -> (Vec<f64>, Vec<f64>, CscMatrix<f64>, CscMatrix<f64>),
-    H: Fn(&[f64], &[f64], &[f64], f64) -> CscMatrix<f64>,
+    H: Fn(&[f64], &[f64], &[f64], &[f64], f64) -> CscMatrix<f64>,
     S: crate::basic::solver::Solve,
 {
     const XI: f64 = 0.99995; const SIGMA: f64 = 0.1; const Z0: f64 = 1.0;
@@ -89,13 +89,14 @@ where
     while !converged && i < opt.max_it {
         i += 1;
         let t_start = std::time::Instant::now();
-        let lxx = hess_fcn(&x, &lam[..neqnln], &mu[..niqnln], cm);
+        // V5 Revolutionary: Pass z to include slacks penalty in one pass
+        let lxx = hess_fcn(&x, &lam[..neqnln], &mu[..niqnln], &z[..niqnln], cm);
         total_hess += t_start.elapsed();
 
         let gap = if niq > 0 { z.iter().zip(mu.iter()).map(|(a, b)| a * b).sum::<f64>() } else { 0.0 };
         let gamma = if niq > 0 { SIGMA * gap / niq as f64 } else { 0.0 };
 
-        let (dx, dlam_n, dz_n, dmu_n) = solve_kkt_timed(&lxx, &lx, &dg, &dh, &g, &h, &z, &mu, gamma, nx, neq, niq, solver, &mut total_kkt, &mut total_solve);
+        let (dx, dlam_n, dz_n, dmu_n) = solve_kkt_timed(&lxx, &lx, &dg, &dh, &g, &h, &z, &mu, gamma, nx, neq, niq, niqnln, solver, opt.merged_slacks, &mut total_kkt, &mut total_solve);
 
         let alphap = step_size(&z, &dz_n, XI);
         let alphad = step_size(&mu, &dmu_n, XI);
@@ -145,7 +146,7 @@ where
 fn solve_kkt_timed<S: crate::basic::solver::Solve>(
     lxx: &CscMatrix<f64>, lx: &[f64], dg: &Option<CscMatrix<f64>>, dh: &Option<CscMatrix<f64>>,
     g: &[f64], h: &[f64], z: &[f64], mu: &[f64], gamma: f64,
-    nx: usize, neq: usize, niq: usize, solver: &mut S,
+    nx: usize, neq: usize, niq: usize, niqnln: usize, solver: &mut S, merged_slacks: bool,
     total_kkt: &mut std::time::Duration, total_solve: &mut std::time::Duration,
 ) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
     let t_kkt = std::time::Instant::now();
@@ -155,10 +156,40 @@ fn solve_kkt_timed<S: crate::basic::solver::Solve>(
         matvec_add_to(&mut n_vec, dh_ref, &w);
     }
     let m_mat = if let Some(dh_ref) = dh {
-        let mu_over_z: Vec<f64> = (0..niq).map(|k| mu[k] / z[k]).collect();
-        let dh_cs = col_scale_f64(dh_ref, &mu_over_z);
-        let prod = spgemm_f64(&dh_cs, &transpose_f64(dh_ref));
-        f64_add_sparse(lxx, &prod)
+        if merged_slacks {
+            // V4 already added the non-linear branch penalties (0..niqnln).
+            // We only need to add the linear bound penalties (niqnln..niq) to the diagonal.
+            // Since bound penalties have exactly 1 non-zero (+1 or -1) per column in dh_ref,
+            // dh_ref * diag(mu/z) * dh_ref^T just adds mu[k]/z[k] to the diagonal of Lxx.
+            let mut lxx_mod = lxx.clone();
+            let mut diag_vals = vec![0.0; nx];
+            for k in niqnln..niq {
+                let weight = mu[k] / z[k];
+                for idx in dh_ref.col_offsets()[k]..dh_ref.col_offsets()[k+1] {
+                    let r = dh_ref.row_indices()[idx];
+                    let v = dh_ref.values()[idx];
+                    diag_vals[r] += weight * v * v;
+                }
+            }
+            // Add diag_vals to lxx_mod diagonal
+            let mut lxx_v = lxx_mod.values().to_vec();
+            for j in 0..nx {
+                if diag_vals[j] == 0.0 { continue; }
+                let s = lxx_mod.col_offsets()[j];
+                let e = lxx_mod.col_offsets()[j+1];
+                if let Ok(pos) = lxx_mod.row_indices()[s..e].binary_search(&j) {
+                    lxx_v[s + pos] += diag_vals[j];
+                } else {
+                    panic!("Lxx missing diagonal entry at {}", j);
+                }
+            }
+            CscMatrix::try_from_csc_data(lxx.nrows(), lxx.ncols(), lxx_mod.col_offsets().to_vec(), lxx_mod.row_indices().to_vec(), lxx_v).unwrap()
+        } else {
+            let mu_over_z: Vec<f64> = (0..niq).map(|k| mu[k] / z[k]).collect();
+            let dh_cs = col_scale_f64(dh_ref, &mu_over_z);
+            let prod = spgemm_f64(&dh_cs, &transpose_f64(dh_ref));
+            f64_add_sparse(lxx, &prod)
+        }
     } else { lxx.clone() };
     
     let ab = if neq > 0 { Some(build_saddle_point(&m_mat, dg, nx, neq)) } else { None };

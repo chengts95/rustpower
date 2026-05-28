@@ -18,7 +18,10 @@ pub fn pips(
     opt: PipsOpt,
 ) -> PipsResult {
     let v3_cache = V3SymbolicCache::analyze(data);
-    let mut persistent_solver = crate::basic::solver::KLUSolver::default();
+    
+    // Preliminary KKT Symbolic Analysis for V5 Shadow Check
+    let kkt_cache = crate::new_opf::v3_symbolic::KKTSymbolicCache::analyze(&v3_cache, data);
+    let mut persistent_solver = crate::basic::solver::DefaultSolver::default();
 
     crate::opf::pips::pips_with_solver(
         |x| cost::opf_costfcn(data, x),
@@ -26,9 +29,18 @@ pub fn pips(
             let (g, h, dg, dh) = constraints::opf_consfcn(data, x);
             (h, g, dh, dg)
         },
-        |x, lam_eq, mu_ineq, cost_mult| {
-            // V4 (Rectangular Rotate) is our current best
-            crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(data, &v3_cache, x, lam_eq, mu_ineq, cost_mult)
+        |x, lam_eq, mu_ineq, z_ineq, cost_mult| {
+            let lxx = crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
+                data, &v3_cache, x, lam_eq, mu_ineq, Some(z_ineq), cost_mult
+            );
+            
+            // --- V5 SHADOW CHECK ---
+            let mut test_kkt_vals = vec![0.0f64; kkt_cache.kkt_skeleton.nnz()];
+            for (idx, &val) in lxx.values().iter().enumerate() {
+                test_kkt_vals[kkt_cache.lxx_to_kkt[idx]] = val;
+            }
+            
+            lxx
         },
         x0, xmin, xmax, opt, &mut persistent_solver
     )

@@ -3,18 +3,15 @@ use num_complex::Complex64;
 use super::v3_symbolic::V3SymbolicCache;
 use crate::opf::problem::OPFData;
 
-/// V4 Revolutionary Assembly.
-/// 
-/// Strategy:
-/// 1. Iterate by COLUMN (bus j) to match CSC memory layout for sequential writes.
-/// 2. Use raw pointers and slices to achieve 0-allocation, 0-search filling of Lxx.
-/// 3. The projection to polar is handled algebraically.
+/// V4/V5 Revolutionary Assembly.
+/// Now includes the Slacks Penalty Term (mu/z * dh * dh^T) merged into the branch loop.
 pub fn v4_rect_numeric_fill(
     data: &OPFData,
     cache: &V3SymbolicCache,
     x: &[f64],
     lam_eq: &[f64],
     mu_ineq: &[f64],
+    z_ineq: Option<&[f64]>, // New: slacks for V5 merged fill
     cost_mult: f64,
 ) -> CscMatrix<f64> {
     let nb = data.nb;
@@ -58,11 +55,9 @@ pub fn v4_rect_numeric_fill(
 
     let j_unit = Complex64::i();
 
-    // --- 2. Node Power Balance (Continuous CSC Column-major Fill) ---
+    // --- 2. Node Power Balance ---
     for j in 0..nb {
         let nnz_j = y_cp[j+1] - y_cp[j];
-        
-        // Use raw pointers for ultra-fast sequential filling of the 4 polar blocks
         let out_aa = unsafe { std::slice::from_raw_parts_mut(lxx_ptr.add(cache.lxx_cp[j]), nnz_j) };
         let out_va = unsafe { std::slice::from_raw_parts_mut(lxx_ptr.add(cache.lxx_cp[j] + nnz_j), nnz_j) };
         let out_av = unsafe { std::slice::from_raw_parts_mut(lxx_ptr.add(cache.lxx_cp[nb + j]), nnz_j) };
@@ -102,22 +97,29 @@ pub fn v4_rect_numeric_fill(
         }
     }
 
-    // --- 3. Branch Flow Limits ---
+    // --- 3. Branch Flow Limits (Now with Slacks Merge!) ---
     let mu_f = &mu_ineq[..nl];
     let mu_t = &mu_ineq[nl..];
     let yf_vals = data.yf.values();
     let yt_vals = data.yt.values();
 
     for l in 0..nl {
+        let f = data.f_buses[l];
+        let t = data.t_buses[l];
+
+        // Slacks penalty weights
+        let wf = if let Some(z) = z_ineq { mu_f[l] / z[l] } else { 0.0 };
+        let wt = if let Some(z) = z_ineq { mu_t[l] / z[nl + l] } else { 0.0 };
+
         let hf = branch_end_hess_v4(
             yf_vals[cache.br_to_yf_idx[l][0]].conj(),
             yf_vals[cache.br_to_yf_idx[l][1]].conj(),
-            v_s[data.f_buses[l]], v_s[data.t_buses[l]], mu_f[l],
+            v_s[f], v_s[t], mu_f[l], wf,
         );
         let ht = branch_end_hess_v4(
             yt_vals[cache.br_to_yt_idx[l][1]].conj(),
             yt_vals[cache.br_to_yt_idx[l][0]].conj(),
-            v_s[data.t_buses[l]], v_s[data.f_buses[l]], mu_t[l],
+            v_s[t], v_s[f], mu_t[l], wt,
         );
 
         let mut hq = [[0.0f64; 4]; 4];
@@ -151,14 +153,21 @@ pub fn v4_rect_numeric_fill(
 }
 
 #[inline]
-fn branch_end_hess_v4(a: Complex64, b: Complex64, v_self: Complex64, v_other: Complex64, mu: f64) -> [[f64; 4]; 4] {
+fn branch_end_hess_v4(a: Complex64, b: Complex64, v_self: Complex64, v_other: Complex64, mu: f64, w: f64) -> [[f64; 4]; 4] {
     let j = Complex64::i();
     let vms = v_self.norm();
     let vmo = v_other.norm();
     let t = b * v_self * v_other.conj();
     let s = a * (vms * vms) + t;
 
+    // First derivative dS/du
     let d = [j * t, -j * t, 2.0 * a * vms + t / vms, t / vmo];
+
+    // Slack gradient dh/du = 2 * Re(conj(S) * dS/du)
+    let mut dh = [0.0f64; 4];
+    for i in 0..4 {
+        dh[i] = 2.0 * (s.conj() * d[i]).re;
+    }
 
     let mut ss = [[Complex64::new(0.0, 0.0); 4]; 4];
     ss[0][0] = -t;
@@ -174,9 +183,9 @@ fn branch_end_hess_v4(a: Complex64, b: Complex64, v_self: Complex64, v_other: Co
     let mut h = [[0.0f64; 4]; 4];
     for i in 0..4 {
         for k in 0..4 {
-            h[i][k] = 2.0 * mu * (d[i].conj() * d[k] + s.conj() * ss[i][k]).re;
+            // H_lagrangian + Penalty Term (w * dh_i * dh_k)
+            h[i][k] = 2.0 * mu * (d[i].conj() * d[k] + s.conj() * ss[i][k]).re + w * dh[i] * dh[k];
         }
     }
     h
 }
-

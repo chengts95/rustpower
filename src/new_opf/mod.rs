@@ -131,7 +131,7 @@ mod tests {
                 let (g, h, dg, dh) = crate::opf::constraints::opf_consfcn(&base_data, x);
                 (h, g, dh, dg)
             },
-            |x, l, m, c| crate::opf::hessian::opf_hessfcn(&base_data, x, l, m, c),
+            |x, l, m, _z, c| crate::opf::hessian::opf_hessfcn(&base_data, x, l, m, c),
             x0, xmin, xmax,
             PipsOpt { max_it: 150, cost_mult: 1e-4, ..Default::default() },
         );
@@ -156,7 +156,7 @@ mod tests {
 
         let h_v1 = crate::opf::hessian::opf_hessfcn(&base_data, x.as_slice(), &lam_eq, &mu_ineq, cost_mult);
         let h_v3 = v3_numeric_scalar::v3_scalar_numeric_fill(&base_data, &v3_cache, x.as_slice(), &lam_eq, &mu_ineq, cost_mult);
-        let h_v4 = v4_numeric_rect::v4_rect_numeric_fill(&base_data, &v3_cache, x.as_slice(), &lam_eq, &mu_ineq, cost_mult);
+        let h_v4 = v4_numeric_rect::v4_rect_numeric_fill(&base_data, &v3_cache, x.as_slice(), &lam_eq, &mu_ineq, None, cost_mult);
 
         println!("Comparing V1 vs V4 Hessian ({} x {})", nx, nx);
         
@@ -226,7 +226,7 @@ mod tests {
         let cost_mult = 1e-4;
 
         let h_v1 = crate::opf::hessian::opf_hessfcn(&base_data, x.as_slice(), &lam_eq, &mu_ineq, cost_mult);
-        let h_v4 = v4_numeric_rect::v4_rect_numeric_fill(&base_data, &v3_cache, x.as_slice(), &lam_eq, &mu_ineq, cost_mult);
+        let h_v4 = v4_numeric_rect::v4_rect_numeric_fill(&base_data, &v3_cache, x.as_slice(), &lam_eq, &mu_ineq, None, cost_mult);
 
         use std::collections::HashMap;
         let to_map = |m: &CscMatrix<f64>| {
@@ -353,9 +353,9 @@ mod tests {
                     let (g, h, dg, dh) = crate::opf::constraints::opf_consfcn(&base_data, x);
                     (h, g, dh, dg)
                 },
-                |x, l, m, c| crate::opf::hessian::opf_hessfcn(&base_data, x, l, m, c),
+                |x, l, m, _z, c| crate::opf::hessian::opf_hessfcn(&base_data, x, l, m, c),
                 x0.clone(), xmin.clone(), xmax.clone(),
-                PipsOpt { max_it: 150, cost_mult: 1e-4, ..Default::default() },
+                PipsOpt { max_it: 150, cost_mult: 1e-4, merged_slacks: false, ..Default::default() },
             );
             let dur_v1 = start_v1.elapsed();
 
@@ -363,7 +363,7 @@ mod tests {
             let res_v3 = pips(
                 &data_v3,
                 x0.clone(), xmin.clone(), xmax.clone(),
-                PipsOpt { max_it: 150, cost_mult: 1e-4, ..Default::default() },
+                PipsOpt { max_it: 150, cost_mult: 1e-4, merged_slacks: false, ..Default::default() },
             );
             let dur_v3 = start_v3.elapsed();
 
@@ -376,11 +376,11 @@ mod tests {
                     let (g, h, dg, dh) = crate::opf::constraints::opf_consfcn(&data_v3, x);
                     (h, g, dh, dg)
                 },
-                |x, lam_eq, mu_ineq, cost_mult| {
-                    v4_numeric_rect::v4_rect_numeric_fill(&data_v3, &v3_cache, x, lam_eq, mu_ineq, cost_mult)
+                |x, lam_eq, mu_ineq, z_ineq, cost_mult| {
+                    v4_numeric_rect::v4_rect_numeric_fill(&data_v3, &v3_cache, x, lam_eq, mu_ineq, Some(z_ineq), cost_mult)
                 },
                 x0, xmin, xmax,
-                PipsOpt { max_it: 150, cost_mult: 1e-4, ..Default::default() },
+                PipsOpt { max_it: 150, cost_mult: 1e-4, merged_slacks: true, ..Default::default() },
             );
             let dur_v4 = start_v4.elapsed();
 

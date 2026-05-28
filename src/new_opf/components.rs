@@ -1,6 +1,6 @@
 use bevy_ecs::prelude::*;
 use nalgebra_sparse::CscMatrix;
-use crate::basic::solver::KLUSolver;
+use crate::basic::solver::DefaultSolver;
 
 /// Lagrange multiplier for bus power balance (P and Q).
 #[derive(Component, Debug, Clone, Default)]
@@ -19,7 +19,7 @@ pub struct MuFlow {
 /// Persistent workspace for OPF calculations to avoid repeated allocations.
 #[derive(Resource)]
 pub struct OPFWorkspace {
-    pub solver: KLUSolver,
+    pub solver: DefaultSolver,
     /// Pre-allocated KKT matrix skeleton [M dg; dg^T 0]
     pub kkt_skeleton: Option<CscMatrix<f64>>,
     /// Cached mapping for fast numeric assembly
@@ -29,7 +29,7 @@ pub struct OPFWorkspace {
 impl Default for OPFWorkspace {
     fn default() -> Self {
         Self {
-            solver: KLUSolver::default(),
+            solver: DefaultSolver::default(),
             kkt_skeleton: None,
             mapping: None,
         }

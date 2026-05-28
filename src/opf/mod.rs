@@ -65,7 +65,7 @@ mod tests {
                 let (g, h, dg, dh) = constraints::opf_consfcn(&data, x);
                 (h, g, dh, dg)
             },
-            |x, lam_eq, mu_ineq, cm| hessian::opf_hessfcn(&data, x, lam_eq, mu_ineq, cm),
+            |x, lam_eq, mu_ineq, _z, cm| hessian::opf_hessfcn(&data, x, lam_eq, mu_ineq, cm),
             x0, xmin, xmax,
             PipsOpt { max_it: 100, cost_mult: 1e-4, ..Default::default() },
         );
@@ -105,7 +105,7 @@ mod tests {
                 let (g, h, dg, dh) = constraints::opf_consfcn(&data, x);
                 (h, g, dh, dg)
             },
-            |x, lam_eq, mu_ineq, cm| hessian::opf_hessfcn(&data, x, lam_eq, mu_ineq, cm),
+            |x, lam_eq, mu_ineq, _z, cm| hessian::opf_hessfcn(&data, x, lam_eq, mu_ineq, cm),
             x0, xmin, xmax,
             PipsOpt { max_it: 150, cost_mult: 1e-4, ..Default::default() },
         );
