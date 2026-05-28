@@ -89,9 +89,13 @@ pub fn v3_scalar_numeric_fill(
             let c_ji = lam_v[j] * (y_vals[ji_idx] * v_s[i]).conj();
             let gvv = (inv_vmag[i] * (c_ij + c_ji) * inv_vmag[j]).re;
             
-            // Gav[i,j] component: Gva is symmetric to Gav, so Gav[i,j] = Gva[j,i]
-            // We calculate Gav[i,j] using the transposed formula components.
-            let gav = (j_unit * inv_vmag[j] * ( (v_s[j].conj() * y_vals[idx].conj() * lam_v[i]) - c_ji )).re;
+            // Gav[i,j] = Gva[j,i]. For i==j the transpose is itself, so reuse gva
+            // (the off-diagonal formula below omits the diagonal d_lam/Ibus terms).
+            let gav = if i == j {
+                gva
+            } else {
+                (j_unit * inv_vmag[j] * ( (v_s[j].conj() * y_vals[idx].conj() * lam_v[i]) - c_ji )).re
+            };
             
             let ptrs = cache.y_to_lxx[idx];
             // Assign values to Lxx slots (one-to-one mapping)
@@ -102,71 +106,108 @@ pub fn v3_scalar_numeric_fill(
         }
     }
 
-    // --- 3. Pass 2: Branch Flow Limits ---
+    // --- 3. Pass 2: Branch Flow Limits (direct per-branch closed form) ---
+    // For each branch, the from/to apparent-power-squared Hessian is a local 4x4
+    // block in [theta_f, theta_t, vm_f, vm_t]. Derived from first principles:
+    //   S_self = a*vm_self^2 + b*V_self*conj(V_other),  a=conj(Y_self), b=conj(Y_other)
+    // No intermediate matrices: each entry is scattered straight into br_to_lxx slots.
     let mu_f = &mu_ineq[..nl];
     let mu_t = &mu_ineq[nl..];
-    let v_norm_vec: DVector<Complex64> = v.map(|vi| vi / vi.norm());
-    let (d_sf_d_va, d_sf_d_vm, d_st_d_va, d_st_d_vm, sf, st) =
-        crate::basic::dsbr_dv::dSbr_dV(&data.yf, &data.yt, &data.f_buses, &data.t_buses, &v, &v_norm_vec);
+    let yf_vals = data.yf.values();
+    let yt_vals = data.yt.values();
 
-    let hf = crate::basic::d2sbr_dv2::d2ASbr_dV2(&d_sf_d_va, &d_sf_d_vm, &sf, &data.cf, &data.yf, &v, &DVector::from_column_slice(mu_f));
-    let ht = crate::basic::d2sbr_dv2::d2ASbr_dV2(&d_st_d_va, &d_st_d_vm, &st, &data.ct, &data.yt, &v, &DVector::from_column_slice(mu_t));
+    for l in 0..nl {
+        let f = data.f_buses[l];
+        let t = data.t_buses[l];
+        let vf = v_s[f];
+        let vt = v_s[t];
 
-    let mut add_br_h = |lxx: &mut [f64], h_blocks: (CscMatrix<f64>, CscMatrix<f64>, CscMatrix<f64>, CscMatrix<f64>)| {
-        let (haa, hav, hva, hvv) = h_blocks;
-        let blks = [haa, hav, hva, hvv];
-        for (b_idx, block) in blks.iter().enumerate() {
-            let cp = block.col_offsets();
-            let ri = block.row_indices();
-            let vals = block.values();
-            let r_off = (b_idx % 2) * nb;
-            let c_off = (b_idx / 2) * nb;
-            for col in 0..nb {
-                for idx in cp[col]..cp[col+1] {
-                    let row = ri[idx];
-                    let val = vals[idx];
-                    let range = cache.lxx_cp[c_off + col]..cache.lxx_cp[c_off + col + 1];
-                    if let Ok(pos) = cache.lxx_ri[range.clone()].binary_search(&(r_off + row)) {
-                        lxx[range.start + pos] += val;
-                    }
-                }
+        // from-end: self=f, other=t → natural order [theta_f, theta_t, vm_f, vm_t]
+        let hf = branch_end_hess(
+            yf_vals[cache.br_to_yf_idx[l][0]].conj(), // a = conj(Yff)
+            yf_vals[cache.br_to_yf_idx[l][1]].conj(), // b = conj(Yft)
+            vf, vt, mu_f[l],
+        );
+        // to-end: self=t, other=f → order [theta_t, theta_f, vm_t, vm_f]
+        let ht = branch_end_hess(
+            yt_vals[cache.br_to_yt_idx[l][1]].conj(), // a = conj(Ytt)
+            yt_vals[cache.br_to_yt_idx[l][0]].conj(), // b = conj(Ytf)
+            vt, vf, mu_t[l],
+        );
+
+        // Accumulate into the quad ordered [theta_f, theta_t, vm_f, vm_t].
+        let mut hq = [[0.0f64; 4]; 4];
+        const P: [usize; 4] = [1, 0, 3, 2]; // to-end variable permutation → quad order
+        for i in 0..4 {
+            for k in 0..4 {
+                hq[i][k] += hf[i][k];
+                hq[P[i]][P[k]] += ht[i][k];
             }
         }
-    };
-    add_br_h(&mut lxx_vals, hf);
-    add_br_h(&mut lxx_vals, ht);
 
-    // --- 4. Total Polar Gradient and Curvature Correction ---
-    let mut g_polar = vec![0.0f64; nx];
-    let (_, _, dg, dh) = crate::opf::constraints::opf_consfcn(data, x);
-    
-    for j in 0..2 * nb {
-        let lam = lam_eq[j];
-        for idx in dg.col_offsets()[j]..dg.col_offsets()[j+1] {
-            g_polar[dg.row_indices()[idx]] += lam * dg.values()[idx];
-        }
-    }
-    for j in 0..2 * nl {
-        let mu = mu_ineq[j];
-        for idx in dh.col_offsets()[j]..dh.col_offsets()[j+1] {
-            g_polar[dh.row_indices()[idx]] += mu * dh.values()[idx];
+        // Scatter: node 0=f, 1=t; quad theta idx = node, vm idx = 2+node.
+        let ptrs = &cache.br_to_lxx[l];
+        for ni in 0..2 {
+            for nj in 0..2 {
+                let base = (ni * 2 + nj) * 4;
+                lxx_vals[ptrs[base + 0]] += hq[ni][nj];           // aa
+                lxx_vals[ptrs[base + 1]] += hq[ni][2 + nj];       // av
+                lxx_vals[ptrs[base + 2]] += hq[2 + ni][nj];       // va
+                lxx_vals[ptrs[base + 3]] += hq[2 + ni][2 + nj];   // vv
+            }
         }
     }
 
-    for i in 0..nb {
-        let g_th = g_polar[i];
-        let g_vm = g_polar[nb + i];
-        let m = vmag[i];
-        lxx_vals[cache.lxx_diag_ptrs[i]] += -m * g_vm;
-        lxx_vals[cache.lxx_va_diag_ptrs[i]] += g_th / m;
-        lxx_vals[cache.lxx_av_diag_ptrs[i]] += g_th / m;
-    }
-
-    // --- 5. Cost Hessian ---
+    // --- 4. Cost Hessian ---
     let base = data.base_mva;
     for g in 0..ng {
         lxx_vals[cache.lxx_diag_ptrs[2 * nb + g]] = cost_mult * 2.0 * data.cost_coeffs[g][0] * base * base;
     }
 
     CscMatrix::try_from_csc_data(nx, nx, cache.lxx_cp.clone(), cache.lxx_ri.clone(), lxx_vals).unwrap()
+}
+
+/// Per-branch-end Hessian of mu*|S_self|^2, a 4x4 real block in variable order
+/// [theta_self, theta_other, vm_self, vm_other].
+///
+/// S_self = a*vm_self^2 + T,  T = b * V_self * conj(V_other),
+/// with a = conj(Y_self-self), b = conj(Y_self-other).
+/// H_xy = 2*mu*Re( conj(S_x)*S_y + conj(S)*S_xy ).
+#[inline]
+fn branch_end_hess(a: Complex64, b: Complex64, v_self: Complex64, v_other: Complex64, mu: f64) -> [[f64; 4]; 4] {
+    let j = Complex64::i();
+    let vms = v_self.norm();
+    let vmo = v_other.norm();
+    let t = b * v_self * v_other.conj();
+    let s = a * (vms * vms) + t;
+
+    // First derivatives of S_self w.r.t. [theta_self, theta_other, vm_self, vm_other].
+    let d = [
+        j * t,
+        -j * t,
+        2.0 * a * vms + t / vms,
+        t / vmo,
+    ];
+
+    // Second derivatives S_xy (symmetric 4x4).
+    let z = Complex64::new(0.0, 0.0);
+    let mut ss = [[z; 4]; 4];
+    ss[0][0] = -t;
+    ss[0][1] = t;          ss[1][0] = t;
+    ss[1][1] = -t;
+    ss[0][2] = j * t / vms; ss[2][0] = ss[0][2];
+    ss[0][3] = j * t / vmo; ss[3][0] = ss[0][3];
+    ss[1][2] = -j * t / vms; ss[2][1] = ss[1][2];
+    ss[1][3] = -j * t / vmo; ss[3][1] = ss[1][3];
+    ss[2][2] = 2.0 * a;
+    ss[2][3] = t / (vms * vmo); ss[3][2] = ss[2][3];
+    // ss[3][3] = 0
+
+    let mut h = [[0.0f64; 4]; 4];
+    for i in 0..4 {
+        for k in 0..4 {
+            h[i][k] = 2.0 * mu * (d[i].conj() * d[k] + s.conj() * ss[i][k]).re;
+        }
+    }
+    h
 }
