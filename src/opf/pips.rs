@@ -1,15 +1,8 @@
-use nalgebra_sparse::CscMatrix;
+use nalgebra_sparse::{CscMatrix, CooMatrix};
 
-/// Solution returned by PIPS.
 pub struct PipsResult {
-    pub x: Vec<f64>,
-    pub f: f64,
-    pub converged: bool,
-    pub iterations: usize,
-    pub lam_eq: Vec<f64>,   // equality multipliers
-    pub mu_ineq: Vec<f64>,  // inequality multipliers
-    pub mu_lower: Vec<f64>, // lower-bound multipliers
-    pub mu_upper: Vec<f64>, // upper-bound multipliers
+    pub x: Vec<f64>, pub f: f64, pub converged: bool, pub iterations: usize,
+    pub lam_eq: Vec<f64>, pub mu_ineq: Vec<f64>, pub mu_lower: Vec<f64>, pub mu_upper: Vec<f64>,
     pub message: String,
 }
 
@@ -24,27 +17,27 @@ impl Default for PipsOpt {
     }
 }
 
-pub fn pips<F, GH, H>(f_fcn: F, gh_fcn: GH, hess_fcn: H, x0: Vec<f64>, xmin: Vec<f64>, xmax: Vec<f64>, opt: PipsOpt) -> PipsResult
+pub fn pips<F, GH, H>(f_fcn: F, gh_fcn: GH, mut hess_fcn: H, x0: Vec<f64>, xmin: Vec<f64>, xmax: Vec<f64>, opt: PipsOpt) -> PipsResult
 where
     F: Fn(&[f64]) -> (f64, Vec<f64>),
     GH: Fn(&[f64]) -> (Vec<f64>, Vec<f64>, CscMatrix<f64>, CscMatrix<f64>),
-    H: Fn(&[f64], &[f64], &[f64], &[f64], f64) -> CscMatrix<f64>,
+    H: FnMut(&[f64], &[f64], &[f64], &[f64], f64) -> CscMatrix<f64>,
 {
     let mut solver = crate::basic::solver::DefaultSolver::default();
-    pips_with_solver(f_fcn, gh_fcn, hess_fcn, x0, xmin, xmax, opt, &mut solver)
+    pips_with_solver(f_fcn, gh_fcn, &mut hess_fcn, x0, xmin, xmax, opt, &mut solver)
 }
 
 pub fn pips_with_solver<F, GH, H, S>(
-    f_fcn: F, gh_fcn: GH, hess_fcn: H, x0: Vec<f64>, xmin: Vec<f64>, xmax: Vec<f64>, opt: PipsOpt, solver: &mut S,
+    f_fcn: F, gh_fcn: GH, mut hess_fcn: H, x0: Vec<f64>, xmin: Vec<f64>, xmax: Vec<f64>, opt: PipsOpt, solver: &mut S,
 ) -> PipsResult
 where
     F: Fn(&[f64]) -> (f64, Vec<f64>),
     GH: Fn(&[f64]) -> (Vec<f64>, Vec<f64>, CscMatrix<f64>, CscMatrix<f64>),
-    H: Fn(&[f64], &[f64], &[f64], &[f64], f64) -> CscMatrix<f64>,
+    H: FnMut(&[f64], &[f64], &[f64], &[f64], f64) -> CscMatrix<f64>,
     S: crate::basic::solver::Solve,
 {
     const XI: f64 = 0.99995; const SIGMA: f64 = 0.1; const Z0: f64 = 1.0;
-    const ALPHA_MIN: f64 = 1e-8; const MU_THRESHOLD: f64 = 1e-5;
+    const ALPHA_MIN: f64 = 1e-8;
 
     let nx = x0.len(); let cm = opt.cost_mult;
     let eps = f64::EPSILON;
@@ -89,7 +82,6 @@ where
     while !converged && i < opt.max_it {
         i += 1;
         let t_start = std::time::Instant::now();
-        // V5 Revolutionary: Pass z to include slacks penalty in one pass
         let lxx = hess_fcn(&x, &lam[..neqnln], &mu[..niqnln], &z[..niqnln], cm);
         total_hess += t_start.elapsed();
 
@@ -98,8 +90,8 @@ where
 
         let (dx, dlam_n, dz_n, dmu_n) = solve_kkt_timed(&lxx, &lx, &dg, &dh, &g, &h, &z, &mu, gamma, nx, neq, niq, niqnln, solver, opt.merged_slacks, &mut total_kkt, &mut total_solve);
 
-        let alphap = step_size(&z, &dz_n, XI);
-        let alphad = step_size(&mu, &dmu_n, XI);
+        let alphap = step_size(&z, &dz_n, 0.99995);
+        let alphad = step_size(&mu, &dmu_n, 0.99995);
 
         for j in 0..nx { x[j] += alphap * dx[j]; }
         for j in 0..niq { z[j] += alphap * dz_n[j]; }
@@ -125,7 +117,7 @@ where
 
         if feascond < opt.feastol && gradcond < opt.gradtol && compcond < opt.comptol && costcond < opt.costtol {
             converged = true;
-        } else if x.iter().any(|v| v.is_nan()) || alphap < ALPHA_MIN || alphad < ALPHA_MIN {
+        } else if x.iter().any(|v| v.is_nan()) || alphap < 1e-8 || alphad < 1e-8 {
             break;
         }
         f0 = f;
@@ -157,10 +149,6 @@ fn solve_kkt_timed<S: crate::basic::solver::Solve>(
     }
     let m_mat = if let Some(dh_ref) = dh {
         if merged_slacks {
-            // V4 already added the non-linear branch penalties (0..niqnln).
-            // We only need to add the linear bound penalties (niqnln..niq) to the diagonal.
-            // Since bound penalties have exactly 1 non-zero (+1 or -1) per column in dh_ref,
-            // dh_ref * diag(mu/z) * dh_ref^T just adds mu[k]/z[k] to the diagonal of Lxx.
             let mut lxx_mod = lxx.clone();
             let mut diag_vals = vec![0.0; nx];
             for k in niqnln..niq {
@@ -171,17 +159,11 @@ fn solve_kkt_timed<S: crate::basic::solver::Solve>(
                     diag_vals[r] += weight * v * v;
                 }
             }
-            // Add diag_vals to lxx_mod diagonal
             let mut lxx_v = lxx_mod.values().to_vec();
             for j in 0..nx {
                 if diag_vals[j] == 0.0 { continue; }
-                let s = lxx_mod.col_offsets()[j];
-                let e = lxx_mod.col_offsets()[j+1];
-                if let Ok(pos) = lxx_mod.row_indices()[s..e].binary_search(&j) {
-                    lxx_v[s + pos] += diag_vals[j];
-                } else {
-                    panic!("Lxx missing diagonal entry at {}", j);
-                }
+                let s = lxx_mod.col_offsets()[j]; let e = lxx_mod.col_offsets()[j+1];
+                if let Ok(pos) = lxx_mod.row_indices()[s..e].binary_search(&j) { lxx_v[s + pos] += diag_vals[j]; }
             }
             CscMatrix::try_from_csc_data(lxx.nrows(), lxx.ncols(), lxx_mod.col_offsets().to_vec(), lxx_mod.row_indices().to_vec(), lxx_v).unwrap()
         } else {
@@ -285,38 +267,30 @@ fn f64_add_sparse(a: &CscMatrix<f64>, b: &CscMatrix<f64>) -> CscMatrix<f64> {
     CscMatrix::try_from_csc_data(a.nrows(), nb, c_cp, c_ri, c_v).unwrap()
 }
 
-fn build_saddle_point(m: &CscMatrix<f64>, dg: &Option<CscMatrix<f64>>, nx: usize, neq: usize) -> CscMatrix<f64> {
+pub fn build_saddle_point(m: &CscMatrix<f64>, dg: &Option<CscMatrix<f64>>, nx: usize, neq: usize) -> CscMatrix<f64> {
+    assert_eq!(m.nrows(), nx, "Hessian nrows mismatch");
+    assert_eq!(m.ncols(), nx, "Hessian ncols mismatch");
     let dim = nx + neq;
-    let mut c_cp = vec![0usize; dim + 1]; let mut c_ri = Vec::new(); let mut c_v = Vec::new();
+    let mut k_coo = CooMatrix::<f64>::new(dim, dim);
     for j in 0..nx {
-        for idx in m.col_offsets()[j]..m.col_offsets()[j+1] { c_ri.push(m.row_indices()[idx]); c_v.push(m.values()[idx]); }
-        if let Some(dg_ref) = dg {
-            let dgt = transpose_f64(dg_ref);
-            for idx in dgt.col_offsets()[j]..dgt.col_offsets()[j+1] { c_ri.push(nx + dgt.row_indices()[idx]); c_v.push(dgt.values()[idx]); }
+        for idx in m.col_offsets()[j]..m.col_offsets()[j+1] {
+            k_coo.push(m.row_indices()[idx], j, m.values()[idx]);
         }
-        c_cp[j + 1] = c_ri.len();
     }
     if let Some(dg_ref) = dg {
-        for eq in 0..neq {
-            for idx in dg_ref.col_offsets()[eq]..dg_ref.col_offsets()[eq+1] { c_ri.push(dg_ref.row_indices()[idx]); c_v.push(dg_ref.values()[idx]); }
-            c_cp[nx + eq + 1] = c_ri.len();
+        assert_eq!(dg_ref.nrows(), nx, "Jacobian nrows mismatch");
+        assert_eq!(dg_ref.ncols(), neq, "Jacobian ncols mismatch");
+        let dg_cp = dg_ref.col_offsets(); let dg_ri = dg_ref.row_indices(); let dg_v = dg_ref.values();
+        for j in 0..neq {
+            for idx in dg_cp[j]..dg_cp[j+1] {
+                let var_i = dg_ri[idx];
+                let val = dg_v[idx];
+                k_coo.push(var_i, nx + j, val);
+                k_coo.push(nx + j, var_i, val);
+            }
         }
     }
-    CscMatrix::try_from_csc_data(dim, dim, c_cp, c_ri, c_v).unwrap()
-}
-
-fn equilibrate(a: &CscMatrix<f64>) -> (Vec<f64>, Vec<f64>) {
-    let (nr, nc) = (a.nrows(), a.ncols());
-    let (mut r, mut c) = (vec![1.0; nr], vec![1.0; nc]);
-    for _ in 0..10 {
-        let mut r_max = vec![0.0; nr];
-        for j in 0..nc { for idx in a.col_offsets()[j]..a.col_offsets()[j+1] { let v = (a.values()[idx] * r[a.row_indices()[idx]] * c[j]).abs(); if v > r_max[a.row_indices()[idx]] { r_max[a.row_indices()[idx]] = v; } } }
-        for i in 0..nr { if r_max[i] > 1e-300 { r[i] /= r_max[i].sqrt(); } }
-        let mut c_max = vec![0.0; nc];
-        for j in 0..nc { for idx in a.col_offsets()[j]..a.col_offsets()[j+1] { let v = (a.values()[idx] * r[a.row_indices()[idx]] * c[j]).abs(); if v > c_max[j] { c_max[j] = v; } } }
-        for j in 0..nc { if c_max[j] > 1e-300 { c[j] /= c_max[j].sqrt(); } }
-    }
-    (r, c)
+    CscMatrix::from(&k_coo)
 }
 
 fn convergence_measures(g: &[f64], h: &[f64], lx: &[f64], lam: &[f64], mu: &[f64], z: &[f64], x: &[f64], f: f64, f0: f64) -> (f64, f64, f64, f64) {

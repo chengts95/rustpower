@@ -1,13 +1,8 @@
 pub use crate::opf::pips::{PipsOpt, PipsResult};
 use super::problem::NewOPFData;
-use super::numeric::numeric_fill;
 use crate::opf::cost;
 use crate::opf::constraints;
-
-use crate::new_opf::v3_symbolic::V3SymbolicCache;
-use crate::new_opf::v3_numeric::v3_numeric_fill;
-
-use crate::new_opf::v3_numeric_scalar::v3_scalar_numeric_fill;
+use crate::new_opf::v3_symbolic::{V3SymbolicCache, KKTSymbolicCache};
 
 /// Optimized PIPS solver using V3 Revolutionary Symbolic-Cached Assembly and Persistent KLU.
 pub fn pips(
@@ -18,9 +13,7 @@ pub fn pips(
     opt: PipsOpt,
 ) -> PipsResult {
     let v3_cache = V3SymbolicCache::analyze(data);
-    
-    // KKT Symbolic Analysis for V5 Zero-Allocation Fill
-    let kkt_cache = crate::new_opf::v3_symbolic::KKTSymbolicCache::analyze(&v3_cache, data);
+    let _kkt_cache = KKTSymbolicCache::analyze(&v3_cache, data);
     let mut persistent_solver = crate::basic::solver::DefaultSolver::default();
 
     crate::opf::pips::pips_with_solver(
@@ -30,13 +23,14 @@ pub fn pips(
             (h, g, dh, dg)
         },
         |x, lam_eq, mu_ineq, z_ineq, cost_mult| {
+            // V4 (Rectangular Rotate) is our current best.
+            // IT MUST RETURN AN nx x nx matrix to be used as Lxx by the generic PIPS.
             crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
                 data, &v3_cache, x, lam_eq, mu_ineq, Some(z_ineq), cost_mult
             )
         },
-        x0, xmin, xmax,
-        PipsOpt { max_it: 150, cost_mult: 1e-4, merged_slacks: true, ..opt },
-        &mut persistent_solver,
-        Some((&kkt_cache.kkt_skeleton, &kkt_cache.lxx_to_kkt, &kkt_cache.dg_to_kkt, &kkt_cache.dgt_to_kkt))
+        x0, xmin, xmax, 
+        PipsOpt { merged_slacks: true, ..opt }, 
+        &mut persistent_solver
     )
 }

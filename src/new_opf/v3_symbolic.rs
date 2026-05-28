@@ -111,53 +111,61 @@ pub struct KKTSymbolicCache {
 impl KKTSymbolicCache {
     pub fn analyze(lxx_cache: &V3SymbolicCache, data: &OPFData) -> Self {
         let nx = lxx_cache.nx;
-        let nb = data.nb;
-        let ng = data.ng;
-        let neq = 2 * nb;
-        let dim = nx + neq;
+        let x0 = vec![1.0; nx];
+        let (_, gn, _, dgn) = crate::opf::constraints::opf_consfcn(data, &x0);
+        let (xmin, xmax) = data.bounds();
+        let mut ieq = Vec::new();
+        for i in 0..nx { if (xmax[i] - xmin[i]).abs() <= f64::EPSILON { ieq.push(i); } }
+        let neqlin = ieq.len();
+        let neqnln = gn.len();
+        let neq = neqnln + neqlin;
 
-        // 1. Build dg (nx x 2nb) to get its sparsity
-        let mut dg_coo = CooMatrix::<f64>::new(nx, neq);
-        for i in 0..nb {
-            for idx in data.ybus.col_offsets()[i]..data.ybus.col_offsets()[i+1] {
-                let j = data.ybus.row_indices()[idx];
-                dg_coo.push(j,      i,      1.0); // dP_i / dVa_j
-                dg_coo.push(nb + j, i,      1.0); // dP_i / dVm_j
-                dg_coo.push(j,      nb + i, 1.0); // dQ_i / dVa_j
-                dg_coo.push(nb + j, nb + i, 1.0); // dQ_i / dVm_j
+        let ae = if neqlin > 0 {
+            let mut s = ieq.iter().enumerate().map(|(r, &i)| (r, i, 1.0)).collect::<Vec<_>>();
+            s.sort_unstable_by_key(|&(_, c, _)| c);
+            let mut cp = vec![0usize; nx + 1];
+            for &(_, c, _) in &s { cp[c+1] += 1; }
+            for j in 0..nx { cp[j+1] += cp[j]; }
+            let mut ri = Vec::new(); let mut v = Vec::new();
+            for &(r, _, val) in &s { ri.push(r); v.push(val); }
+            Some(CscMatrix::try_from_csc_data(neqlin, nx, cp, ri, v).unwrap())
+        } else { None };
+
+        let dg_final = match ae {
+            Some(r) => {
+                let rt = r.transpose();
+                let mut cp = vec![0usize; dgn.ncols() + rt.ncols() + 1];
+                cp[..dgn.ncols()+1].copy_from_slice(dgn.col_offsets());
+                let nnza = dgn.nnz();
+                for j in 0..rt.ncols() { cp[dgn.ncols()+j+1] = nnza + rt.col_offsets()[j+1]; }
+                let ri = [dgn.row_indices(), rt.row_indices()].concat();
+                let v = [dgn.values(), rt.values()].concat();
+                CscMatrix::try_from_csc_data(nx, dgn.ncols() + rt.ncols(), cp, ri, v).unwrap()
             }
-        }
-        for g in 0..ng {
-            let bus_i = data.gen_bus[g];
-            dg_coo.push(2 * nb + g,      bus_i,      1.0); 
-            dg_coo.push(2 * nb + ng + g, nb + bus_i, 1.0); 
-        }
-        let dg_sparsity = CscMatrix::from(&dg_coo);
-        
-        let lxx_dummy = CscMatrix::try_from_csc_data(nx, nx, lxx_cache.lxx_cp.clone(), lxx_cache.lxx_ri.clone(), vec![0.0; lxx_cache.lxx_ri.len()]).unwrap();
-        let kkt = crate::opf::pips::build_saddle_point_export(&lxx_dummy, &Some(dg_sparsity.clone()), nx, neq);
-        
-        let find_k = |r: usize, c: usize| -> usize {
-            let s = kkt.col_offsets()[c]; let e = kkt.col_offsets()[c+1];
-            kkt.row_indices()[s..e].binary_search(&r).map(|p| s + p).expect(&format!("KKT missing {},{}", r, c))
+            None => dgn.clone(),
         };
 
-        // 2. Build Mappings
-        let lxx_to_kkt = (0..nx).flat_map(|j| {
-            (lxx_cache.lxx_cp[j]..lxx_cache.lxx_cp[j+1]).map(move |off| find_k(lxx_cache.lxx_ri[off], j))
-        }).collect();
+        let dummy_lxx = CscMatrix::try_from_csc_data(nx, nx, lxx_cache.lxx_cp.clone(), lxx_cache.lxx_ri.clone(), vec![1.0; lxx_cache.lxx_ri.len()]).unwrap();
+        let kkt = crate::opf::pips::build_saddle_point(&dummy_lxx, &Some(dg_final.clone()), nx, neq);
+        let kkt_cp = kkt.col_offsets();
+        let kkt_ri = kkt.row_indices();
+        let find_k = |r: usize, c: usize| -> usize {
+            let s = kkt_cp[c]; let e = kkt_cp[c+1];
+            kkt_ri[s..e].binary_search(&r).map(|p| s + p).expect("KKT element missing")
+        };
 
-        let mut dg_to_kkt = vec![0usize; dg_sparsity.nnz()];
-        let mut dgt_to_kkt = vec![0usize; dg_sparsity.nnz()];
-
-        for col in 0..neq {
-            for idx in dg_sparsity.col_offsets()[col]..dg_sparsity.col_offsets()[col+1] {
-                let row = dg_sparsity.row_indices()[idx];
-                dg_to_kkt[idx] = find_k(row, nx + col);
-                dgt_to_kkt[idx] = find_k(nx + col, row);
+        let lxx_to_kkt = (0..nx).flat_map(|j| (lxx_cache.lxx_cp[j]..lxx_cache.lxx_cp[j+1]).map(move |off| find_k(lxx_cache.lxx_ri[off], j))).collect();
+        let mut dg_to_kkt = Vec::with_capacity(dgn.nnz());
+        let mut dgt_to_kkt = Vec::with_capacity(dgn.nnz());
+        let dgn_cp = dgn.col_offsets();
+        let dgn_ri = dgn.row_indices();
+        for j in 0..dgn.ncols() {
+            for idx in dgn_cp[j]..dgn_cp[j+1] {
+                let var_i = dgn_ri[idx];
+                dg_to_kkt.push(find_k(nx + j, var_i));
+                dgt_to_kkt.push(find_k(var_i, nx + j));
             }
         }
-
-        Self { dim, kkt_skeleton: kkt, lxx_to_kkt, dg_to_kkt, dgt_to_kkt }
+        Self { dim: kkt.nrows(), kkt_skeleton: kkt, lxx_to_kkt, dg_to_kkt, dgt_to_kkt }
     }
 }
