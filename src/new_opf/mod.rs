@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn bench_full_opf_all_cases() {
-        let cases = ["IEEE39", "IEEE118"];
+        let cases = ["IEEE39", "IEEE118", "pegase9241"];
         let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
 
         println!("\n| Case | Method | f [EUR] | Iter | Total Time | Speedup |");

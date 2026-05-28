@@ -147,38 +147,50 @@ fn solve_kkt_timed<S: crate::basic::solver::Solve>(
         let w: Vec<f64> = (0..niq).map(|k| (mu[k] * h[k] + gamma) / z[k]).collect();
         matvec_add_to(&mut n_vec, dh_ref, &w);
     }
-    let m_mat = if let Some(dh_ref) = dh {
-        if merged_slacks {
-            let mut lxx_mod = lxx.clone();
-            let mut diag_vals = vec![0.0; nx];
-            for k in niqnln..niq {
-                let weight = mu[k] / z[k];
-                for idx in dh_ref.col_offsets()[k]..dh_ref.col_offsets()[k+1] {
-                    let r = dh_ref.row_indices()[idx];
-                    let v = dh_ref.values()[idx];
-                    diag_vals[r] += weight * v * v;
-                }
-            }
-            let mut lxx_v = lxx_mod.values().to_vec();
-            for j in 0..nx {
-                if diag_vals[j] == 0.0 { continue; }
-                let s = lxx_mod.col_offsets()[j]; let e = lxx_mod.col_offsets()[j+1];
-                if let Ok(pos) = lxx_mod.row_indices()[s..e].binary_search(&j) { lxx_v[s + pos] += diag_vals[j]; }
-            }
-            CscMatrix::try_from_csc_data(lxx.nrows(), lxx.ncols(), lxx_mod.col_offsets().to_vec(), lxx_mod.row_indices().to_vec(), lxx_v).unwrap()
+
+    let ab = if neq > 0 {
+        if lxx.nrows() == nx + neq {
+            Some(lxx.clone())
         } else {
-            let mu_over_z: Vec<f64> = (0..niq).map(|k| mu[k] / z[k]).collect();
-            let dh_cs = col_scale_f64(dh_ref, &mu_over_z);
-            let prod = spgemm_f64(&dh_cs, &transpose_f64(dh_ref));
-            f64_add_sparse(lxx, &prod)
+            let m_mat = if let Some(dh_ref) = dh {
+                if merged_slacks {
+                    let mut lxx_mod = lxx.clone();
+                    let mut diag_vals = vec![0.0; nx];
+                    for k in niqnln..niq {
+                        let weight = mu[k] / z[k];
+                        for idx in dh_ref.col_offsets()[k]..dh_ref.col_offsets()[k+1] {
+                            let r = dh_ref.row_indices()[idx];
+                            let v = dh_ref.values()[idx];
+                            diag_vals[r] += weight * v * v;
+                        }
+                    }
+                    let mut lxx_v = lxx_mod.values().to_vec();
+                    for j in 0..nx {
+                        if diag_vals[j] == 0.0 { continue; }
+                        let s = lxx_mod.col_offsets()[j]; let e = lxx_mod.col_offsets()[j+1];
+                        if let Ok(pos) = lxx_mod.row_indices()[s..e].binary_search(&j) { lxx_v[s + pos] += diag_vals[j]; }
+                    }
+                    CscMatrix::try_from_csc_data(lxx.nrows(), lxx.ncols(), lxx_mod.col_offsets().to_vec(), lxx_mod.row_indices().to_vec(), lxx_v).unwrap()
+                } else {
+                    let mu_over_z: Vec<f64> = (0..niq).map(|k| mu[k] / z[k]).collect();
+                    let dh_cs = col_scale_f64(dh_ref, &mu_over_z);
+                    let prod = spgemm_f64(&dh_cs, &transpose_f64(dh_ref));
+                    f64_add_sparse(lxx, &prod)
+                }
+            } else { lxx.clone() };
+            Some(build_saddle_point(&m_mat, dg, nx, neq))
         }
-    } else { lxx.clone() };
-    
-    let ab = if neq > 0 { Some(build_saddle_point(&m_mat, dg, nx, neq)) } else { None };
+    } else { None };
     *total_kkt += t_kkt.elapsed();
 
     let t_solve = std::time::Instant::now();
     let res = if neq == 0 {
+        let m_mat = if let Some(dh_ref) = dh {
+            let mu_over_z: Vec<f64> = (0..niq).map(|k| mu[k] / z[k]).collect();
+            let dh_cs = col_scale_f64(dh_ref, &mu_over_z);
+            let prod = spgemm_f64(&dh_cs, &transpose_f64(dh_ref));
+            f64_add_sparse(lxx, &prod)
+        } else { lxx.clone() };
         let mut rhs = n_vec.iter().map(|&v| -v).collect::<Vec<_>>();
         let (mut ap, mut ai, mut ax) = (m_mat.col_offsets().to_vec(), m_mat.row_indices().to_vec(), m_mat.values().to_vec());
         solver.solve(&mut ap, &mut ai, &mut ax, &mut rhs, nx).unwrap();
@@ -268,20 +280,14 @@ fn f64_add_sparse(a: &CscMatrix<f64>, b: &CscMatrix<f64>) -> CscMatrix<f64> {
 }
 
 pub fn build_saddle_point(m: &CscMatrix<f64>, dg: &Option<CscMatrix<f64>>, nx: usize, neq: usize) -> CscMatrix<f64> {
-    assert_eq!(m.nrows(), nx, "Hessian nrows mismatch");
-    assert_eq!(m.ncols(), nx, "Hessian ncols mismatch");
     let dim = nx + neq;
     let mut k_coo = CooMatrix::<f64>::new(dim, dim);
-    for j in 0..nx {
-        for idx in m.col_offsets()[j]..m.col_offsets()[j+1] {
-            k_coo.push(m.row_indices()[idx], j, m.values()[idx]);
-        }
+    for j in 0..m.ncols() {
+        for idx in m.col_offsets()[j]..m.col_offsets()[j+1] { k_coo.push(m.row_indices()[idx], j, m.values()[idx]); }
     }
     if let Some(dg_ref) = dg {
-        assert_eq!(dg_ref.nrows(), nx, "Jacobian nrows mismatch");
-        assert_eq!(dg_ref.ncols(), neq, "Jacobian ncols mismatch");
         let dg_cp = dg_ref.col_offsets(); let dg_ri = dg_ref.row_indices(); let dg_v = dg_ref.values();
-        for j in 0..neq {
+        for j in 0..dg_ref.ncols() {
             for idx in dg_cp[j]..dg_cp[j+1] {
                 let var_i = dg_ri[idx];
                 let val = dg_v[idx];
@@ -291,33 +297,6 @@ pub fn build_saddle_point(m: &CscMatrix<f64>, dg: &Option<CscMatrix<f64>>, nx: u
         }
     }
     CscMatrix::from(&k_coo)
-}
-
-fn convergence_measures(g: &[f64], h: &[f64], lx: &[f64], lam: &[f64], mu: &[f64], z: &[f64], x: &[f64], f: f64, f0: f64) -> (f64, f64, f64, f64) {
-    let gnorm = g.iter().fold(0.0f64, |a, &b| a.max(b.abs()));
-    let maxh = h.iter().fold(0.0f64, |a, &b| a.max(b.max(0.0)));
-    let xnorm = x.iter().fold(0.0f64, |a, &b| a.max(b.abs()));
-    let znorm = z.iter().fold(0.0f64, |a, &b| a.max(b.abs()));
-    let lnorm = lam.iter().fold(0.0f64, |a, &b| a.max(b.abs()));
-    let mnorm = mu.iter().fold(0.0f64, |a, &b| a.max(b.abs()));
-    let feas = gnorm.max(maxh) / (1.0 + xnorm.max(znorm));
-    let grad = lx.iter().fold(0.0f64, |a, &b| a.max(b.abs())) / (1.0 + lnorm.max(mnorm));
-    let comp = if z.is_empty() { 0.0 } else { z.iter().zip(mu).map(|(a, b)| a * b).sum::<f64>() / (1.0 + xnorm) };
-    let cost = (f - f0).abs() / (1.0 + f0.abs());
-    (feas, grad, comp, cost)
-}
-
-fn step_size(z: &[f64], dz: &[f64], xi: f64) -> f64 {
-    let mut a = 1.0f64;
-    for k in 0..z.len() { if dz[k] < 0.0 { a = a.min(xi * z[k] / (-dz[k])); } }
-    a
-}
-
-fn matvec_add_to(out: &mut [f64], dg: &CscMatrix<f64>, v: &[f64]) {
-    for j in 0..dg.ncols() {
-        let vj = v[j]; if vj == 0.0 { continue; }
-        for idx in dg.col_offsets()[j]..dg.col_offsets()[j+1] { out[dg.row_indices()[idx]] += dg.values()[idx] * vj; }
-    }
 }
 
 fn build_linear_constraints(nx: usize, ieq: &[usize], ilt: &[usize], igt: &[usize], ibx: &[usize], xmin: &[f64], xmax: &[f64]) -> (Option<CscMatrix<f64>>, Vec<f64>, Option<CscMatrix<f64>>, Vec<f64>) {
@@ -381,4 +360,31 @@ fn spmv_f64(a: &CscMatrix<f64>, x: &[f64]) -> Vec<f64> {
         for idx in a.col_offsets()[j]..a.col_offsets()[j+1] { y[a.row_indices()[idx]] += a.values()[idx] * xj; }
     }
     y
+}
+
+fn convergence_measures(g: &[f64], h: &[f64], lx: &[f64], lam: &[f64], mu: &[f64], z: &[f64], x: &[f64], f: f64, f0: f64) -> (f64, f64, f64, f64) {
+    let gnorm = g.iter().fold(0.0f64, |a, &b| a.max(b.abs()));
+    let maxh = h.iter().fold(0.0f64, |a, &b| a.max(b.max(0.0)));
+    let xnorm = x.iter().fold(0.0f64, |a, &b| a.max(b.abs()));
+    let znorm = z.iter().fold(0.0f64, |a, &b| a.max(b.abs()));
+    let lnorm = lam.iter().fold(0.0f64, |a, &b| a.max(b.abs()));
+    let mnorm = mu.iter().fold(0.0f64, |a, &b| a.max(b.abs()));
+    let feas = gnorm.max(maxh) / (1.0 + xnorm.max(znorm));
+    let grad = lx.iter().fold(0.0f64, |a, &b| a.max(b.abs())) / (1.0 + lnorm.max(mnorm));
+    let comp = if z.is_empty() { 0.0 } else { z.iter().zip(mu).map(|(a, b)| a * b).sum::<f64>() / (1.0 + xnorm) };
+    let cost = (f - f0).abs() / (1.0 + f0.abs());
+    (feas, grad, comp, cost)
+}
+
+fn step_size(z: &[f64], dz: &[f64], xi: f64) -> f64 {
+    let mut a = 1.0f64;
+    for k in 0..z.len() { if dz[k] < 0.0 { a = a.min(xi * z[k] / (-dz[k])); } }
+    a
+}
+
+fn matvec_add_to(out: &mut [f64], dg: &CscMatrix<f64>, v: &[f64]) {
+    for j in 0..dg.ncols() {
+        let vj = v[j]; if vj == 0.0 { continue; }
+        for idx in dg.col_offsets()[j]..dg.col_offsets()[j+1] { out[dg.row_indices()[idx]] += dg.values()[idx] * vj; }
+    }
 }

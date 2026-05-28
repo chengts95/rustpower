@@ -109,6 +109,23 @@ pub struct KKTSymbolicCache {
 }
 
 impl KKTSymbolicCache {
+    pub fn fill_kkt(&self, kkt_vals: &mut [f64], lxx: &CscMatrix<f64>, dgn: &CscMatrix<f64>) {
+        kkt_vals.fill(0.0);
+        
+        // 1. Fill Lxx
+        let lxx_v = lxx.values();
+        for (idx, &v) in lxx_v.iter().enumerate() {
+            kkt_vals[self.lxx_to_kkt[idx]] = v;
+        }
+        
+        // 2. Fill dg and dgt
+        let dg_v = dgn.values();
+        for (idx, &v) in dg_v.iter().enumerate() {
+            kkt_vals[self.dg_to_kkt[idx]] = v;
+            kkt_vals[self.dgt_to_kkt[idx]] = v;
+        }
+    }
+
     pub fn analyze(lxx_cache: &V3SymbolicCache, data: &OPFData) -> Self {
         let nx = lxx_cache.nx;
         let x0 = vec![1.0; nx];
