@@ -119,6 +119,114 @@ pub fn dp_dvm(col: &ColCtx, nbr: &NbrCtx) -> f64 { ds_dvm(col, nbr).re }
 #[inline(always)]
 pub fn dq_dvm(col: &ColCtx, nbr: &NbrCtx) -> f64 { ds_dvm(col, nbr).im }
 
+// ── constraint-column block operators (CSR row access via y_trans) ──
+// For constraint bus i, swept over its variable neighbors k. Uses Y_ik = Ybus[i,k],
+// fetched from Ybus column i via the transpose index (no materialized Ybusᵀ).
+
+/// Constraint-column context (the constraint's bus i).
+#[derive(Clone, Copy)]
+pub struct ConColCtx {
+    pub vi: Complex64,
+    pub vnorm_i: Complex64,
+    pub ibus_i: Complex64,
+}
+/// Constraint-column neighbor context (the variable's bus k).
+#[derive(Clone, Copy)]
+pub struct ConNbrCtx {
+    pub vk: Complex64,
+    pub vnorm_k: Complex64,
+    pub y_ik: Complex64, // Ybus[i,k]
+    pub is_diag: bool,
+}
+
+#[inline(always)]
+fn con_ds_dva(c: &ConColCtx, n: &ConNbrCtx) -> Complex64 {
+    let j = Complex64::i();
+    if n.is_diag {
+        j * c.vi * (c.ibus_i - n.y_ik * c.vi).conj()
+    } else {
+        j * c.vi * (-n.y_ik * n.vk).conj()
+    }
+}
+#[inline(always)]
+fn con_ds_dvm(c: &ConColCtx, n: &ConNbrCtx) -> Complex64 {
+    if n.is_diag {
+        c.vi * (n.y_ik * c.vnorm_i).conj() + c.ibus_i.conj() * c.vnorm_i
+    } else {
+        c.vi * (n.y_ik * n.vnorm_k).conj()
+    }
+}
+/// ∂P_i/∂θ_k, ∂P_i/∂Vm_k, ∂Q_i/∂θ_k, ∂Q_i/∂Vm_k — uniform (&ConColCtx,&ConNbrCtx)->f64.
+#[inline(always)] pub fn cp_dth(c: &ConColCtx, n: &ConNbrCtx) -> f64 { con_ds_dva(c, n).re }
+#[inline(always)] pub fn cp_dvm(c: &ConColCtx, n: &ConNbrCtx) -> f64 { con_ds_dvm(c, n).re }
+#[inline(always)] pub fn cq_dth(c: &ConColCtx, n: &ConNbrCtx) -> f64 { con_ds_dva(c, n).im }
+#[inline(always)] pub fn cq_dvm(c: &ConColCtx, n: &ConNbrCtx) -> f64 { con_ds_dvm(c, n).im }
+
+/// Fill the KKT **constraint columns** (P_eq, Q_eq) of `kkt_vals` in place, streaming.
+/// Row access into Ybus is done through `y_trans` (transpose index): the offset-th
+/// neighbor of constraint bus i is `k = y_ri[y_cp[i]+offset]` and `Y_ik` is
+/// `y_vals[y_trans[y_cp[i]+offset]]` — CSR-via-index, no materialized transpose.
+/// `gens_at_bus[i]` lists generators on bus i (ascending) for the gen coupling run.
+pub fn fill_constraint_columns(
+    v5: &KKTSymbolicV5,
+    data: &OPFData,
+    y_trans: &[usize],
+    gens_at_bus: &[Vec<usize>],
+    x: &[f64],
+    kkt_vals: &mut [f64],
+) {
+    let nb = data.nb;
+    let ng = data.ng;
+    let nx = v5.nx;
+    let ybus = &data.ybus;
+    let y_cp = ybus.col_offsets();
+    let y_ri = ybus.row_indices();
+    let y_v = ybus.values();
+
+    let v = data.v_from_x(x);
+    let vs = v.as_slice();
+    let mut vnorm = vec![Complex64::new(0.0, 0.0); nb];
+    for i in 0..nb {
+        vnorm[i] = vs[i] / vs[i].norm().max(1e-9);
+    }
+    let ibus = ybus * &v;
+    let ibus_s = ibus.as_slice();
+    let cp = &v5.col_ptrs;
+
+    for i in 0..nb {
+        let deg = y_cp[i + 1] - y_cp[i];
+        let con = ConColCtx { vi: vs[i], vnorm_i: vnorm[i], ibus_i: ibus_s[i] };
+
+        let p0 = cp[nx + i];        // P_eq_i column: [∂P/∂θ_k | ∂P/∂Vm_k | gen]
+        let q0 = cp[nx + nb + i];   // Q_eq_i column: [∂Q/∂θ_k | ∂Q/∂Vm_k | gen]
+        for off in 0..deg {
+            let pos = y_cp[i] + off;
+            let k = y_ri[pos];
+            let nbr = ConNbrCtx {
+                vk: vs[k], vnorm_k: vnorm[k],
+                y_ik: y_v[y_trans[pos]], // Ybus[i,k] via transpose index
+                is_diag: k == i,
+            };
+            kkt_vals[p0 + off]         = cp_dth(&con, &nbr);
+            kkt_vals[p0 + deg + off]   = cp_dvm(&con, &nbr);
+            kkt_vals[q0 + off]         = cq_dth(&con, &nbr);
+            kkt_vals[q0 + deg + off]   = cq_dvm(&con, &nbr);
+        }
+        // generator coupling run: −1 per gen on bus i
+        let pg_run = p0 + 2 * deg;
+        let qg_run = q0 + 2 * deg;
+        for (gi, _g) in gens_at_bus[i].iter().enumerate() {
+            kkt_vals[pg_run + gi] = -1.0;
+            kkt_vals[qg_run + gi] = -1.0;
+        }
+    }
+    // linear-equality columns (nx + 2nb + r): single unit entry (the ae row)
+    for r in 0..v5.ieq.len() {
+        kkt_vals[cp[nx + 2 * nb + r]] = 1.0;
+    }
+    let _ = ng;
+}
+
 /// Fill the KKT **variable columns** (θ, Vm, Pg, Qg) of `kkt_vals` in place, streaming.
 /// `y_trans[idx]` maps Ybus nnz `idx`=(i,k) to its transpose nnz (k,i).
 /// Node power-balance only (no branch / merged-slack here).
@@ -255,22 +363,27 @@ mod tests {
             &mut ref_vals,
         );
 
-        // V5.2 block-operator fill of variable columns
+        // V5.2 block-operator fill: variable columns + constraint columns (full KKT)
+        let mut gens_at_bus: Vec<Vec<usize>> = vec![Vec::new(); nb];
+        for g in 0..data.ng { gens_at_bus[data.gen_bus[g]].push(g); }
+
         let mut v52_vals = vec![0.0f64; v5.row_idx.len()];
         fill_variable_columns(&v5, &data, &v3c.y_transpose_idx, x.as_slice(), &lam, cm, &mut v52_vals);
+        fill_constraint_columns(&v5, &data, &v3c.y_transpose_idx, &gens_at_bus, x.as_slice(), &mut v52_vals);
 
-        // Compare only the variable-column region [0, col_ptrs[nx])
-        let end = v5.col_ptrs[nx];
+        // Compare the FULL KKT (all columns) vs V5.0
         let mut max_diff = 0.0f64;
         let mut worst = 0usize;
-        for p in 0..end {
+        for p in 0..v5.row_idx.len() {
             let d = (v52_vals[p] - ref_vals[p]).abs();
             if d > max_diff { max_diff = d; worst = p; }
         }
+        let nvar = v5.col_ptrs[nx];
         println!(
-            "V5.2 variable-column fill vs V5.0: compared {} vals, max_diff={:.3e} at pos {}",
-            end, max_diff, worst
+            "V5.2 FULL KKT fill vs V5.0: compared {} vals, max_diff={:.3e} at pos {} ({})",
+            v5.row_idx.len(), max_diff, worst,
+            if worst < nvar { "variable col" } else { "constraint col" }
         );
-        assert!(max_diff < 1e-12, "V5.2 variable columns differ (max_diff={:.3e})", max_diff);
+        assert!(max_diff < 1e-12, "V5.2 full KKT differs (max_diff={:.3e})", max_diff);
     }
 }
