@@ -9,6 +9,7 @@ pub mod math_verify;
 pub mod pips;
 pub mod problem;
 pub mod components;
+pub mod translate;
 
 pub use problem::NewOPFData;
 pub use symbolic::SymbolicCache;
