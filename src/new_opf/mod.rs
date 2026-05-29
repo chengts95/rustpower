@@ -5,6 +5,7 @@ pub mod v3_numeric;
 pub mod v3_numeric_fused;
 pub mod v3_numeric_scalar;
 pub mod v4_numeric_rect;
+pub mod v5_kkt;
 pub mod math_verify;
 pub mod pips;
 pub mod problem;
