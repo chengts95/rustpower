@@ -27,8 +27,41 @@ pub fn pips(
                 data, &v3_cache, x, lam_eq, mu_ineq, Some(z_ineq), cost_mult
             )
         },
-        x0, xmin, xmax, 
-        PipsOpt { merged_slacks: true, ..opt }, 
-        &mut persistent_solver
+        x0, xmin, xmax,
+        PipsOpt { merged_slacks: true, ..opt },
+        &mut persistent_solver,
+        None,
+    )
+}
+
+/// V5.0 path: identical numerics to V4, but the KKT is assembled by the V5 symbolic
+/// streaming fill (single advancing pointer) instead of per-iteration build_saddle_point.
+/// Step node kept alongside `pips` (V4) for direct A/B comparison.
+pub fn pips_v5(
+    data: &NewOPFData,
+    x0: Vec<f64>,
+    xmin: Vec<f64>,
+    xmax: Vec<f64>,
+    opt: PipsOpt,
+) -> PipsResult {
+    let v3_cache = V3SymbolicCache::analyze(data);
+    let v5_cache = crate::new_opf::v5_kkt::KKTSymbolicV5::build(data);
+    let mut persistent_solver = crate::basic::solver::DefaultSolver::default();
+
+    crate::opf::pips::pips_with_solver(
+        |x| cost::opf_costfcn(data, x),
+        |x| {
+            let (g, h, dg, dh) = constraints::opf_consfcn(data, x);
+            (h, g, dh, dg)
+        },
+        |x, lam_eq, mu_ineq, z_ineq, cost_mult| {
+            crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
+                data, &v3_cache, x, lam_eq, mu_ineq, Some(z_ineq), cost_mult
+            )
+        },
+        x0, xmin, xmax,
+        PipsOpt { merged_slacks: true, ..opt },
+        &mut persistent_solver,
+        Some(&v5_cache),
     )
 }

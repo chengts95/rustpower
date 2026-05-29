@@ -6,6 +6,7 @@ pub mod v3_numeric_fused;
 pub mod v3_numeric_scalar;
 pub mod v4_numeric_rect;
 pub mod v5_kkt;
+pub mod v5_2_kernel;
 pub mod math_verify;
 pub mod pips;
 pub mod problem;
@@ -306,6 +307,75 @@ mod tests {
         }
         println!("  FD gold standard for V4: worst ratio={:.2e} abs={:.4e} at ({},{})", worst_v4.3, worst_v4.2, worst_v4.0, worst_v4.1);
         assert!(worst_v4.3 < 1.0, "v4 Hessian disagrees with finite differences");
+    }
+
+    #[test]
+    #[ignore] // cargo test --release bench_v4_vs_v5_endtoend -- --ignored --nocapture
+    fn bench_v4_vs_v5_endtoend() {
+        let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        println!("\n| Case | Path | f [EUR] | Iter | Total time |");
+        println!("|---|---|---|---|---|");
+        for case in ["IEEE39", "IEEE118", "pegase9241"] {
+            let path = format!("{}/cases/{}/data.zip", dir, case);
+            if !std::path::Path::new(&path).exists() { continue; }
+            let net = crate::io::pandapower::load_csv_zip(&path).unwrap();
+            let mut base_data = opf_data_from_network(&net);
+            if let Some(cfg) = crate::io::pandapower::load_opf_cfg_zip(&path) {
+                let ng_cfg = if case == "IEEE39" { 10 } else { 54 };
+                if case != "IEEE39" {
+                    if let Some(r) = cfg.get("ext_grid", 0) { base_data.cost_coeffs[0] = [r.cp2_eur_per_mw2, r.cp1_eur_per_mw, r.cp0_eur]; }
+                    for g in 0..ng_cfg { if let Some(r) = cfg.get("gen", g) { base_data.cost_coeffs[(1 + g) as usize] = [r.cp2_eur_per_mw2, r.cp1_eur_per_mw, r.cp0_eur]; } }
+                } else {
+                    for g in 0..ng_cfg { if let Some(r) = cfg.get("gen", g) { base_data.cost_coeffs[g as usize] = [r.cp2_eur_per_mw2, r.cp1_eur_per_mw, r.cp0_eur]; } }
+                }
+            }
+            let data = NewOPFData::new(base_data);
+            let x0 = data.warm_x0();
+            let (xmin, xmax) = data.bounds();
+            let mi = if case == "pegase9241" { 30 } else { 150 };
+
+            let t4 = std::time::Instant::now();
+            let r4 = pips(&data, x0.clone(), xmin.clone(), xmax.clone(), PipsOpt { max_it: mi, cost_mult: 1e-4, ..Default::default() });
+            let d4 = t4.elapsed();
+            let t5 = std::time::Instant::now();
+            let r5 = pips::pips_v5(&data, x0.clone(), xmin.clone(), xmax.clone(), PipsOpt { max_it: mi, cost_mult: 1e-4, ..Default::default() });
+            let d5 = t5.elapsed();
+            println!("| {} | V4.0 | {:.2} | {} | {:?} |", case, r4.f, r4.iterations, d4);
+            println!("| {} | V5.0 | {:.2} | {} | {:?} |", case, r5.f, r5.iterations, d5);
+        }
+    }
+
+    #[test]
+    fn test_v5_pips_matches_v4_ieee118() {
+        let net = crate::io::pandapower::load_csv_zip(&format!("{}/cases/IEEE118/data.zip", std::env::var("CARGO_MANIFEST_DIR").unwrap())).unwrap();
+        let mut base_data = opf_data_from_network(&net);
+        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let path = format!("{}/cases/IEEE118/data.zip", dir);
+        if let Some(opf_cfg) = crate::io::pandapower::load_opf_cfg_zip(&path) {
+            if let Some(row) = opf_cfg.get("ext_grid", 0) {
+                base_data.cost_coeffs[0] = [row.cp2_eur_per_mw2, row.cp1_eur_per_mw, row.cp0_eur];
+            }
+            for g in 0..54i64 {
+                if let Some(row) = opf_cfg.get("gen", g) {
+                    base_data.cost_coeffs[(1 + g) as usize] = [row.cp2_eur_per_mw2, row.cp1_eur_per_mw, row.cp0_eur];
+                }
+            }
+        }
+        let data = NewOPFData::new(base_data);
+        let x0 = data.warm_x0();
+        let (xmin, xmax) = data.bounds();
+        let r4 = pips(&data, x0.clone(), xmin.clone(), xmax.clone(), PipsOpt { max_it: 150, cost_mult: 1e-4, ..Default::default() });
+        let r5 = pips::pips_v5(&data, x0, xmin, xmax, PipsOpt { max_it: 150, cost_mult: 1e-4, ..Default::default() });
+
+        println!("V4: converged={} iter={} f={:.6}", r4.converged, r4.iterations, r4.f);
+        println!("V5: converged={} iter={} f={:.6}", r5.converged, r5.iterations, r5.f);
+        assert!(r5.converged, "V5 must converge");
+        assert_eq!(r4.iterations, r5.iterations, "V5 must take same iterations as V4");
+        assert!((r4.f - r5.f).abs() < 1e-6, "V5 objective must match V4 (diff={:.3e})", (r4.f - r5.f).abs());
+        let mut max_dx = 0.0f64;
+        for (a, b) in r4.x.iter().zip(r5.x.iter()) { max_dx = max_dx.max((a - b).abs()); }
+        println!("V5 vs V4 max |Δx| = {:.3e}", max_dx);
+        assert!(max_dx < 1e-9, "V5 solution must match V4 (max|Δx|={:.3e})", max_dx);
     }
 
     #[test]

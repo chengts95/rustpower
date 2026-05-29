@@ -226,6 +226,32 @@ impl KKTSymbolicV5 {
 
         debug_assert_eq!(ptr, self.row_idx.len(), "V5 fill wrote wrong nnz count");
     }
+
+    /// Streaming fill for the PIPS merged-slack path. Here `dg`/`dg_t` are the **merged**
+    /// equality Jacobian (nx × neq, columns = [P | Q | linear-eq]) and its transpose
+    /// (neq × nx). Because the linear-equality columns/rows are already present in the
+    /// merged matrices (unit `ae` entries), no separate lineq handling is needed: each
+    /// variable column is `lxx col ++ dgᵀ col`, each constraint column is `dg col`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fill_from_merged(
+        &self,
+        lxx_cp: &[usize], lxx_v: &[f64],
+        dg_cp: &[usize], dg_v: &[f64],
+        dgt_cp: &[usize], dgt_v: &[f64],
+        kkt_vals: &mut [f64],
+    ) {
+        let nx = self.nx;
+        let neq = self.neq;
+        let mut ptr = 0usize;
+        for c in 0..nx {
+            for idx in lxx_cp[c]..lxx_cp[c + 1] { kkt_vals[ptr] = lxx_v[idx]; ptr += 1; }
+            for idx in dgt_cp[c]..dgt_cp[c + 1] { kkt_vals[ptr] = dgt_v[idx]; ptr += 1; }
+        }
+        for j in 0..neq {
+            for idx in dg_cp[j]..dg_cp[j + 1] { kkt_vals[ptr] = dg_v[idx]; ptr += 1; }
+        }
+        debug_assert_eq!(ptr, self.row_idx.len(), "V5 fill_from_merged wrote wrong nnz count");
+    }
 }
 
 /// [PQ | PV | ext] bus ordering for OPF (reuses the same classification as

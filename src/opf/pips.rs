@@ -24,11 +24,12 @@ where
     H: FnMut(&[f64], &[f64], &[f64], &[f64], f64) -> CscMatrix<f64>,
 {
     let mut solver = crate::basic::solver::DefaultSolver::default();
-    pips_with_solver(f_fcn, gh_fcn, &mut hess_fcn, x0, xmin, xmax, opt, &mut solver)
+    pips_with_solver(f_fcn, gh_fcn, &mut hess_fcn, x0, xmin, xmax, opt, &mut solver, None)
 }
 
 pub fn pips_with_solver<F, GH, H, S>(
     f_fcn: F, gh_fcn: GH, mut hess_fcn: H, x0: Vec<f64>, xmin: Vec<f64>, xmax: Vec<f64>, opt: PipsOpt, solver: &mut S,
+    v5: Option<&crate::new_opf::v5_kkt::KKTSymbolicV5>,
 ) -> PipsResult
 where
     F: Fn(&[f64]) -> (f64, Vec<f64>),
@@ -88,7 +89,7 @@ where
         let gap = if niq > 0 { z.iter().zip(mu.iter()).map(|(a, b)| a * b).sum::<f64>() } else { 0.0 };
         let gamma = if niq > 0 { SIGMA * gap / niq as f64 } else { 0.0 };
 
-        let (dx, dlam_n, dz_n, dmu_n) = solve_kkt_timed(&lxx, &lx, &dg, &dh, &g, &h, &z, &mu, gamma, nx, neq, niq, niqnln, solver, opt.merged_slacks, &mut total_kkt, &mut total_solve);
+        let (dx, dlam_n, dz_n, dmu_n) = solve_kkt_timed(&lxx, &lx, &dg, &dh, &g, &h, &z, &mu, gamma, nx, neq, niq, niqnln, solver, opt.merged_slacks, v5, &mut total_kkt, &mut total_solve);
 
         let alphap = step_size(&z, &dz_n, 0.99995);
         let alphad = step_size(&mu, &dmu_n, 0.99995);
@@ -139,6 +140,7 @@ fn solve_kkt_timed<S: crate::basic::solver::Solve>(
     lxx: &CscMatrix<f64>, lx: &[f64], dg: &Option<CscMatrix<f64>>, dh: &Option<CscMatrix<f64>>,
     g: &[f64], h: &[f64], z: &[f64], mu: &[f64], gamma: f64,
     nx: usize, neq: usize, niq: usize, niqnln: usize, solver: &mut S, merged_slacks: bool,
+    v5: Option<&crate::new_opf::v5_kkt::KKTSymbolicV5>,
     total_kkt: &mut std::time::Duration, total_solve: &mut std::time::Duration,
 ) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
     let t_kkt = std::time::Instant::now();
@@ -178,7 +180,22 @@ fn solve_kkt_timed<S: crate::basic::solver::Solve>(
                     f64_add_sparse(lxx, &prod)
                 }
             } else { lxx.clone() };
-            Some(build_saddle_point(&m_mat, dg, nx, neq))
+            let kkt = if let Some(v5c) = v5 {
+                // V5 streaming KKT fill (structure == build_saddle_point, proven byte-exact)
+                let dg_ref = dg.as_ref().expect("v5 KKT path requires equality dg");
+                let dgt = dg_ref.transpose();
+                let mut vals = vec![0.0f64; v5c.row_idx.len()];
+                v5c.fill_from_merged(
+                    m_mat.col_offsets(), m_mat.values(),
+                    dg_ref.col_offsets(), dg_ref.values(),
+                    dgt.col_offsets(), dgt.values(),
+                    &mut vals,
+                );
+                CscMatrix::try_from_csc_data(v5c.dim, v5c.dim, v5c.col_ptrs.clone(), v5c.row_idx.clone(), vals).unwrap()
+            } else {
+                build_saddle_point(&m_mat, dg, nx, neq)
+            };
+            Some(kkt)
         }
     } else { None };
     *total_kkt += t_kkt.elapsed();
