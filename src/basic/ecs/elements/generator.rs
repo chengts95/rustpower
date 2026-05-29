@@ -137,14 +137,18 @@ impl From<&PolyCostRow> for GenCost {
     }
 }
 
-/// Records the Vec-position of each generator/ext_grid entity in the original pandapower data.
+/// Records the Vec-position of each pandapower element to its spawned ECS entity.
 ///
-/// Stored as a resource after `load_pandapower_net`; used by `patch_gen_cost` to match
-/// `OPFCfg` entries (keyed by element index) to ECS entities.
+/// Stored as a resource after `load_pandapower_net`. Used by OPF translation systems
+/// (e.g. `patch_gen_cost`, `attach_line_flow_limits`) to attach optional OPF components
+/// to the right entities. Once translation is done, downstream computation should not
+/// need to consult pandapower types again — the components on entities are the truth.
 #[derive(bevy_ecs::prelude::Resource, Default, Debug)]
 pub struct PandapowerEntityMap {
     pub gen_entities: Vec<bevy_ecs::prelude::Entity>,
     pub ext_grid_entities: Vec<bevy_ecs::prelude::Entity>,
+    pub line_entities: Vec<bevy_ecs::prelude::Entity>,
+    pub trafo_entities: Vec<bevy_ecs::prelude::Entity>,
 }
 
 /// Marker for uncontrollable entity (for opf which is not implemented yet).

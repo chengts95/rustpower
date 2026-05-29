@@ -56,3 +56,13 @@ pub struct OpfResultVm(pub f64);
 /// Solved voltage angle for a bus (rad).
 #[derive(Component, Debug, Clone, Default)]
 pub struct OpfResultVa(pub f64);
+
+/// Branch apparent-power limit |S_max|, in per-unit on system base.
+///
+/// Optional OPF-only component. Attached by `attach_line_flow_limits` /
+/// `attach_trafo_flow_limits` from the matching pandapower fields. Absence on a
+/// branch entity means "no flow limit" (treated as infinity by the OPF solver).
+#[derive(Component, Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct BranchFlowLimit {
+    pub rate_a_pu: f64,
+}

@@ -46,15 +46,20 @@ impl LoadPandapowerNet for World {
         world.flush();
 
         let mut spawner = DeferBundleSpawner::new();
-        spawner.spawn_batch(world, ts);
-        spawner.spawn_batch(world, lines);
+        let trafo_entities = spawner.spawn_batch_with_ids(world, ts);
+        let line_entities = spawner.spawn_batch_with_ids(world, lines);
         let gen_entities = spawner.spawn_batch_with_ids(world, gens);
         spawner.spawn_batch(world, loads);
         let ext_grid_entities = spawner.spawn_batch_with_ids(world, ext_grid);
         spawner.spawn_batch(world, shunts);
         spawner.spawn_batch(world, sgens);
         spawner.spawn_batch(world, switches);
-        world.insert_resource(PandapowerEntityMap { gen_entities, ext_grid_entities });
+        world.insert_resource(PandapowerEntityMap {
+            gen_entities,
+            ext_grid_entities,
+            line_entities,
+            trafo_entities,
+        });
         world.insert_resource(PFCommonData {
             wbase: net.f_hz * 2.0 * std::f64::consts::PI,
             f_hz: net.f_hz,
