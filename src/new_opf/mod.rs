@@ -7,6 +7,7 @@ pub mod v3_numeric_scalar;
 pub mod v4_numeric_rect;
 pub mod v5_kkt;
 pub mod v5_2_kernel;
+pub mod v5_3_kernel;
 pub mod math_verify;
 pub mod pips;
 pub mod problem;
@@ -26,7 +27,7 @@ mod tests {
     use crate::opf::builder::opf_data_from_network;
     use crate::opf::PipsOpt;
     use nalgebra::DVector;
-    use nalgebra_sparse::CscMatrix;
+    use nalgebra_sparse::{CscMatrix, CooMatrix};
     use num_complex::Complex64;
 
     fn load_ieee39() -> crate::io::pandapower::Network {
@@ -111,6 +112,216 @@ mod tests {
 
         assert!(result.converged, "New OPF 118 should converge");
         assert!(result.f > 120000.0 && result.f < 140000.0, "Objective out of expected range: {}", result.f);
+    }
+
+    #[test]
+    fn test_v5_2_pips_ieee118() {
+        let net = crate::io::pandapower::load_csv_zip(&format!("{}/cases/IEEE118/data.zip", std::env::var("CARGO_MANIFEST_DIR").unwrap())).unwrap();
+        let mut base_data = opf_data_from_network(&net);
+        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let path = format!("{}/cases/IEEE118/data.zip", dir);
+        if let Some(opf_cfg) = crate::io::pandapower::load_opf_cfg_zip(&path) {
+            if let Some(row) = opf_cfg.get("ext_grid", 0) {
+                base_data.cost_coeffs[0] = [row.cp2_eur_per_mw2, row.cp1_eur_per_mw, row.cp0_eur];
+            }
+            for g in 0..54i64 {
+                if let Some(row) = opf_cfg.get("gen", g) {
+                    base_data.cost_coeffs[(1 + g) as usize] = [row.cp2_eur_per_mw2, row.cp1_eur_per_mw, row.cp0_eur];
+                }
+            }
+        }
+        let data = NewOPFData::new(base_data);
+        let x0 = data.warm_x0();
+        let (xmin, xmax) = data.bounds();
+        let opt = PipsOpt { max_it: 150, cost_mult: 1e-4, ..Default::default() };
+        let res52 = pips::pips_v5_2(&data, x0, xmin, xmax, opt);
+        println!("V5.2: converged={} iter={} f={:.6}", res52.converged, res52.iterations, res52.f);
+        assert!(res52.converged, "V5.2 should converge");
+        assert!((res52.f - 129662.9725).abs() < 1e-2, "V5.2 result mismatch: {}", res52.f);
+    }
+
+    #[test]
+    fn test_v5_versions_vs_v4_kkt_breakdown() {
+        let net = crate::io::pandapower::load_csv_zip(&format!("{}/cases/IEEE118/data.zip", std::env::var("CARGO_MANIFEST_DIR").unwrap())).unwrap();
+        let mut base_data = opf_data_from_network(&net);
+        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let path = format!("{}/cases/IEEE118/data.zip", dir);
+        if let Some(opf_cfg) = crate::io::pandapower::load_opf_cfg_zip(&path) {
+            if let Some(row) = opf_cfg.get("ext_grid", 0) {
+                base_data.cost_coeffs[0] = [row.cp2_eur_per_mw2, row.cp1_eur_per_mw, row.cp0_eur];
+            }
+            for g in 0..54i64 {
+                if let Some(row) = opf_cfg.get("gen", g) {
+                    base_data.cost_coeffs[(1 + g) as usize] = [row.cp2_eur_per_mw2, row.cp1_eur_per_mw, row.cp0_eur];
+                }
+            }
+        }
+        let data = NewOPFData::new(base_data);
+        let nb = data.nb;
+        let nx = data.nx();
+        let x = data.warm_x0();
+        let lam_eq = vec![0.1; 2 * data.nb];
+        let mu_ineq = vec![0.05; 2 * data.nl];
+        let z_ineq = vec![0.7; 2 * data.nl];
+        let cost_mult = 1e-4;
+
+        let v3c = crate::new_opf::v3_symbolic::V3SymbolicCache::analyze(&data);
+        let v5_sym = crate::new_opf::v5_kkt::KKTSymbolicV5::build(&data);
+        let v53_sym = v5_3_kernel::KKTSymbolicV5_3::build(&data);
+
+        // --- 1. Baseline: V4 Lxx and opf_consfcn dg ---
+        let lxx_v4 = crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
+            &data, &v3c, x.as_slice(), &lam_eq, &mu_ineq, Some(&z_ineq), cost_mult,
+        );
+        let (_, _, dgn, _) = crate::opf::constraints::opf_consfcn(&data, x.as_slice());
+        // build merged dg
+        let neqlin = v5_sym.ieq.len();
+        let mut dg_coo = CooMatrix::<f64>::new(nx, 2 * nb + neqlin);
+        for j in 0..dgn.ncols() {
+            for idx in dgn.col_offsets()[j]..dgn.col_offsets()[j + 1] {
+                dg_coo.push(dgn.row_indices()[idx], j, dgn.values()[idx]);
+            }
+        }
+        for (r, &v) in v5_sym.ieq.iter().enumerate() {
+            dg_coo.push(v, 2 * nb + r, 1.0);
+        }
+        let dg_full = CscMatrix::from(&dg_coo);
+        let dg_full_t = dg_full.transpose();
+
+        // Reference Full KKT values (V4 style)
+        let ref_kkt = crate::opf::pips::build_saddle_point(&lxx_v4, &Some(dg_full), nx, v5_sym.neq);
+        let ref_vals = ref_kkt.values();
+
+        // --- 2. Evaluate V5.2 ---
+        let mut vals52 = vec![0.0; v5_sym.row_idx.len()];
+        let mut gens_at_bus: Vec<Vec<usize>> = vec![Vec::new(); nb];
+        for g in 0..data.ng { gens_at_bus[data.gen_bus[g]].push(g); }
+        v5_2_kernel::fill_variable_columns(&v5_sym, &data, &v3c.y_transpose_idx, &x, &lam_eq, cost_mult, &mut vals52);
+        v5_2_kernel::fill_constraint_columns(&v5_sym, &data, &v3c.y_transpose_idx, &gens_at_bus, &x, &mut vals52);
+        v5_2_kernel::fill_branch_hessian(&v5_sym, &data, &x, &mu_ineq, &z_ineq, &mut vals52);
+
+        // --- 3. Evaluate V5.3 ---
+        let mut vals53 = vec![0.0; v53_sym.base.row_idx.len()];
+        v5_3_kernel::assemble_kkt_v5_3(&v53_sym, &data, &v3c.y_transpose_idx, &x, &lam_eq, &mu_ineq, &z_ineq, cost_mult, &mut vals53);
+
+        let compare = |label: &str, candidate: &[f64]| {
+            let mut max_diff: f64 = 0.0;
+            let mut diff_count = 0;
+            for i in 0..ref_vals.len() {
+                let d = (ref_vals[i] - candidate[i]).abs();
+                if d > 1e-11 {
+                    if diff_count < 5 {
+                        println!("{} Diff at nnz {}: ref={:.6e}, cand={:.6e} (err={:.3e})", label, i, ref_vals[i], candidate[i], d);
+                    }
+                    max_diff = max_diff.max(d);
+                    diff_count += 1;
+                }
+            }
+            println!("{} vs V4 KKT: diff_count={}, max_diff={:.3e}", label, diff_count, max_diff);
+        };
+
+        compare("V5.2", &vals52);
+        compare("V5.3", &vals53);
+    }
+
+    #[test]
+    fn test_v5_versions_vs_v4_lxx_only() {
+        let net = crate::io::pandapower::load_csv_zip(&format!("{}/cases/IEEE118/data.zip", std::env::var("CARGO_MANIFEST_DIR").unwrap())).unwrap();
+        let mut base_data = opf_data_from_network(&net);
+        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let path = format!("{}/cases/IEEE118/data.zip", dir);
+        if let Some(opf_cfg) = crate::io::pandapower::load_opf_cfg_zip(&path) {
+            if let Some(row) = opf_cfg.get("ext_grid", 0) {
+                base_data.cost_coeffs[0] = [row.cp2_eur_per_mw2, row.cp1_eur_per_mw, row.cp0_eur];
+            }
+            for g in 0..54i64 {
+                if let Some(row) = opf_cfg.get("gen", g) {
+                    base_data.cost_coeffs[(1 + g) as usize] = [row.cp2_eur_per_mw2, row.cp1_eur_per_mw, row.cp0_eur];
+                }
+            }
+        }
+        let data = NewOPFData::new(base_data);
+        let nb = data.nb;
+        let x = data.warm_x0();
+        let lam_eq = vec![0.1; 2 * data.nb];
+        let mu_ineq = vec![0.05; 2 * data.nl];
+        let z_ineq = vec![0.7; 2 * data.nl];
+        let cost_mult = 1e-4;
+
+        let v3c = crate::new_opf::v3_symbolic::V3SymbolicCache::analyze(&data);
+        let v5_sym = crate::new_opf::v5_kkt::KKTSymbolicV5::build(&data);
+        let v53_sym = v5_3_kernel::KKTSymbolicV5_3::build(&data);
+
+        // --- 1. Baseline: V4 Lxx only ---
+        let lxx_v4 = crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
+            &data, &v3c, x.as_slice(), &lam_eq, &mu_ineq, Some(&z_ineq), cost_mult,
+        );
+        let ref_lxx = lxx_v4.values();
+
+        // --- 2. Extract Lxx from V5.2 KKT ---
+        let mut vals52 = vec![0.0; v5_sym.row_idx.len()];
+        v5_2_kernel::fill_variable_columns(&v5_sym, &data, &v3c.y_transpose_idx, &x, &lam_eq, cost_mult, &mut vals52);
+        v5_2_kernel::fill_branch_hessian(&v5_sym, &data, &x, &mu_ineq, &z_ineq, &mut vals52);
+        
+        // --- 3. Extract Lxx from V5.3 KKT ---
+        let mut vals53 = vec![0.0; v53_sym.base.row_idx.len()];
+        v5_3_kernel::assemble_kkt_v5_3(&v53_sym, &data, &v3c.y_transpose_idx, &x, &lam_eq, &mu_ineq, &z_ineq, cost_mult, &mut vals53);
+
+        let compare_lxx = |label: &str, candidate_kkt: &[f64]| {
+            let mut max_diff: f64 = 0.0;
+            let mut diff_count = 0;
+            let mut ref_idx = 0;
+            // Variable columns (θ, Vm, Pg, Qg)
+            for j in 0..data.nx() {
+                let start = v5_sym.col_ptrs[j];
+                let end = v5_sym.col_ptrs[j + 1];
+                let deg = if j < 2*nb { (v3c.y_transpose_idx.len() / nb) } else { 0 }; // approximation
+                // wait, the actual Lxx part in KKT column j is the first block
+                let lxx_nnz = lxx_v4.col_offsets()[j + 1] - lxx_v4.col_offsets()[j];
+                for off in 0..lxx_nnz {
+                    let v_ref = ref_lxx[lxx_v4.col_offsets()[j] + off];
+                    let v_cand = candidate_kkt[start + off];
+                    let d = (v_ref - v_cand).abs();
+                    if d > 1e-11 {
+                        if diff_count < 5 {
+                            println!("{} Lxx Diff at col {}, nnz {}: ref={:.6e}, cand={:.6e} (err={:.3e})", label, j, off, v_ref, v_cand, d);
+                        }
+                        max_diff = max_diff.max(d);
+                        diff_count += 1;
+                    }
+                }
+            }
+            println!("{} vs V4 Lxx: diff_count={}, max_diff={:.3e}", label, diff_count, max_diff);
+        };
+
+        compare_lxx("V5.2", &vals52);
+        compare_lxx("V5.3", &vals53);
+    }
+
+    #[test]
+    fn test_v5_3_pips_ieee118() {
+        let net = crate::io::pandapower::load_csv_zip(&format!("{}/cases/IEEE118/data.zip", std::env::var("CARGO_MANIFEST_DIR").unwrap())).unwrap();
+        let mut base_data = opf_data_from_network(&net);
+        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let path = format!("{}/cases/IEEE118/data.zip", dir);
+        if let Some(opf_cfg) = crate::io::pandapower::load_opf_cfg_zip(&path) {
+            if let Some(row) = opf_cfg.get("ext_grid", 0) {
+                base_data.cost_coeffs[0] = [row.cp2_eur_per_mw2, row.cp1_eur_per_mw, row.cp0_eur];
+            }
+            for g in 0..54i64 {
+                if let Some(row) = opf_cfg.get("gen", g) {
+                    base_data.cost_coeffs[(1 + g) as usize] = [row.cp2_eur_per_mw2, row.cp1_eur_per_mw, row.cp0_eur];
+                }
+            }
+        }
+        let data = NewOPFData::new(base_data);
+        let x0 = data.warm_x0();
+        let (xmin, xmax) = data.bounds();
+        let opt = PipsOpt { max_it: 150, cost_mult: 1e-4, ..Default::default() };
+        let res53 = pips::pips_v5_3(&data, x0, xmin, xmax, opt);
+        println!("V5.3: converged={} iter={} f={:.6}", res53.converged, res53.iterations, res53.f);
+        assert!(res53.converged, "V5.3 should converge");
+        assert!((res53.f - 129662.9725).abs() < 1e-2, "V5.3 result mismatch: {}", res53.f);
     }
 
     #[test]
@@ -364,6 +575,16 @@ mod tests {
             let r5 = pips::pips_v5(&data, x0.clone(), xmin.clone(), xmax.clone(), PipsOpt { max_it: mi, cost_mult: 1e-4, ..Default::default() });
             let d5 = t0.elapsed();
             row(case, "V5.0", &r5, d5);
+
+            let t0 = std::time::Instant::now();
+            let r52 = pips::pips_v5_2(&data, x0.clone(), xmin.clone(), xmax.clone(), PipsOpt { max_it: mi, cost_mult: 1e-4, ..Default::default() });
+            let d52 = t0.elapsed();
+            row(case, "V5.2", &r52, d52);
+
+            let t0 = std::time::Instant::now();
+            let r53 = pips::pips_v5_3(&data, x0.clone(), xmin.clone(), xmax.clone(), PipsOpt { max_it: mi, cost_mult: 1e-4, ..Default::default() });
+            let d53 = t0.elapsed();
+            row(case, "V5.3", &r53, d53);
         }
     }
 

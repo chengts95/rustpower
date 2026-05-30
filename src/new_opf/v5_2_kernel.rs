@@ -325,6 +325,83 @@ pub fn fill_variable_columns(
     }
 }
 
+/// Add the branch-limit Hessian and Merged Slack Penalty to the KKT values.
+/// This uses the precomputed `br_to_kkt` mapping from the symbolic skeleton.
+pub fn fill_branch_hessian(
+    v5: &KKTSymbolicV5,
+    data: &OPFData,
+    x: &[f64],
+    mu_ineq: &[f64],
+    z_ineq: &[f64],
+    kkt_vals: &mut [f64],
+) {
+    let nl = data.nl;
+    let v = data.v_from_x(x);
+    let vs = v.as_slice();
+    let mu_f = &mu_ineq[..nl];
+    let mu_t = &mu_ineq[nl..];
+    let yf_vals = data.yf.values();
+    let yt_vals = data.yt.values();
+
+    use crate::new_opf::v4_numeric_rect::branch_end_hess_v4;
+
+    for l in 0..nl {
+        let f = data.f_buses[l];
+        let t = data.t_buses[l];
+
+        // Slacks penalty weights
+        let wf = mu_f[l] / z_ineq[l];
+        let wt = mu_t[l] / z_ineq[nl + l];
+
+        // We need to know which Yf/Yt entries correspond to (l,f) and (l,t).
+        // Since Yf/Yt are nl x nb and branches are rows, it's just the CSC indices.
+        // Actually, OPFData stores them as CSC nl x nb.
+        // Wait, the row indices are branch indices.
+        // So for branch l, we need to find row l in columns f and t.
+        let find_br_entry = |mat: &nalgebra_sparse::CscMatrix<Complex64>, c: usize, r: usize| -> usize {
+            let range = mat.col_offsets()[c]..mat.col_offsets()[c + 1];
+            mat.row_indices()[range.clone()].binary_search(&r).map(|p| range.start + p).unwrap()
+        };
+        
+        let hf = branch_end_hess_v4(
+            yf_vals[find_br_entry(&data.yf, f, l)].conj(),
+            yf_vals[find_br_entry(&data.yf, t, l)].conj(),
+            vs[f], vs[t], mu_f[l], wf,
+        );
+        let ht = branch_end_hess_v4(
+            yt_vals[find_br_entry(&data.yt, t, l)].conj(),
+            yt_vals[find_br_entry(&data.yt, f, l)].conj(),
+            vs[t], vs[f], mu_t[l], wt,
+        );
+
+        let mut hq = [[0.0f64; 4]; 4];
+        const P: [usize; 4] = [1, 0, 3, 2];
+        for i in 0..4 {
+            for k in 0..4 {
+                hq[i][k] += hf[i][k];
+                hq[P[i]][P[k]] += ht[i][k];
+            }
+        }
+
+        let ptrs = &v5.br_to_kkt[l];
+        // ptrs order was defined in v5_kkt.rs: ni*8 + nj*4 + row_node_idx*2 + row_var_idx
+        // hq[i][k] where i, k are indices into [θf, vmf, θt, vmt]
+        // ni=0 => f, ni=1 => t
+        // nj=0 => θ, nj=1 => Vm
+        for ni in 0..2 {
+            for nj in 0..2 {
+                for row_node in 0..2 {
+                    for row_var in 0..2 {
+                        let h_idx_row = row_var * 2 + row_node;
+                        let h_idx_col = nj * 2 + ni;
+                        kkt_vals[ptrs[ni*8 + nj*4 + row_node*2 + row_var]] += hq[h_idx_row][h_idx_col];
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

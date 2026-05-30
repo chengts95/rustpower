@@ -153,7 +153,7 @@ pub fn v4_rect_numeric_fill(
 }
 
 #[inline]
-fn branch_end_hess_v4(a: Complex64, b: Complex64, v_self: Complex64, v_other: Complex64, mu: f64, w: f64) -> [[f64; 4]; 4] {
+pub fn branch_end_hess_v4(a: Complex64, b: Complex64, v_self: Complex64, v_other: Complex64, mu: f64, w: f64) -> [[f64; 4]; 4] {
     let j = Complex64::i();
     let vms = v_self.norm();
     let vmo = v_other.norm();

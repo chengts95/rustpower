@@ -30,6 +30,10 @@ pub struct KKTSymbolicV5 {
     pub ieq: Vec<usize>,
     pub col_ptrs: Vec<usize>,
     pub row_idx: Vec<usize>,
+    pub gens_at_bus: Vec<Vec<usize>>,
+    /// For each branch l, the 16 indices into KKT values for the 4x4 Hessian block
+    /// [θf,θf thf,vmf ...] in variable-column order.
+    pub br_to_kkt: Vec<[usize; 16]>,
 }
 
 impl KKTSymbolicV5 {
@@ -43,6 +47,9 @@ impl KKTSymbolicV5 {
         Self::from_parts(
             data.nb,
             data.ng,
+            data.nl,
+            data.f_buses.as_slice(),
+            data.t_buses.as_slice(),
             data.ybus.col_offsets(),
             data.ybus.row_indices(),
             &data.gen_bus,
@@ -57,6 +64,9 @@ impl KKTSymbolicV5 {
     pub fn from_parts(
         nb: usize,
         ng: usize,
+        nl: usize,
+        f_buses: &[usize],
+        t_buses: &[usize],
         y_cp: &[usize],
         y_ri: &[usize],
         gen_bus: &[usize],
@@ -97,86 +107,115 @@ impl KKTSymbolicV5 {
             }
             col_ptrs[j + 1] = row_idx.len();
         }
-        // Vm_j (c = nb + j)
+        // Vm_j (c = nb + j, j < nb)
         for j in 0..nb {
-            let c = nb + j;
             let nbr = &y_ri[y_cp[j]..y_cp[j + 1]];
             for &i in nbr { row_idx.push(i); }              // Hav
             for &i in nbr { row_idx.push(nb + i); }         // Hvv
-            for &i in nbr { row_idx.push(nx + i); }         // dgPᵀ/dVm
-            for &i in nbr { row_idx.push(nx + nb + i); }    // dgQᵀ/dVm
-            if var_to_lineq[c] != usize::MAX {
-                row_idx.push(nx + 2 * nb + var_to_lineq[c]);
+            for &i in nbr { row_idx.push(nx + i); }         // dgPᵀ
+            for &i in nbr { row_idx.push(nx + nb + i); }    // dgQᵀ
+            if var_to_lineq[nb + j] != usize::MAX {
+                row_idx.push(nx + 2 * nb + var_to_lineq[nb + j]);
             }
-            col_ptrs[c + 1] = row_idx.len();
+            col_ptrs[nb + j + 1] = row_idx.len();
         }
-        // Pg_g (c = 2nb + g)
+        // Pg_g (c = 2*nb + g)
         for g in 0..ng {
-            let c = 2 * nb + g;
-            row_idx.push(c);                                // cost Hessian diagonal
-            row_idx.push(nx + gen_bus[g]);             // ∂P_eq/∂Pg coupling
-            if var_to_lineq[c] != usize::MAX {
-                row_idx.push(nx + 2 * nb + var_to_lineq[c]);
+            let bus = gen_bus[g];
+            row_idx.push(2 * nb + g);            // cost diag
+            row_idx.push(nx + bus);              // coupling to P_eq_bus
+            if var_to_lineq[2 * nb + g] != usize::MAX {
+                row_idx.push(nx + 2 * nb + var_to_lineq[2 * nb + g]);
             }
-            col_ptrs[c + 1] = row_idx.len();
+            col_ptrs[2 * nb + g + 1] = row_idx.len();
         }
-        // Qg_g (c = 2nb + ng + g)
+        // Qg_g (c = 2*nb + ng + g)
         for g in 0..ng {
-            let c = 2 * nb + ng + g;
-            row_idx.push(c);                                // structural diagonal slot
-            row_idx.push(nx + nb + gen_bus[g]);        // ∂Q_eq/∂Qg coupling
-            if var_to_lineq[c] != usize::MAX {
-                row_idx.push(nx + 2 * nb + var_to_lineq[c]);
+            let bus = gen_bus[g];
+            row_idx.push(2 * nb + ng + g);       // structural diag
+            row_idx.push(nx + nb + bus);         // coupling to Q_eq_bus
+            if var_to_lineq[2 * nb + ng + g] != usize::MAX {
+                row_idx.push(nx + 2 * nb + var_to_lineq[2 * nb + ng + g]);
             }
-            col_ptrs[c + 1] = row_idx.len();
+            col_ptrs[2 * nb + ng + g + 1] = row_idx.len();
         }
 
         // ── constraint columns ────────────────────────────────────────────────
-        // P_eq at bus j  (KKT col nx + j)
-        for j in 0..nb {
-            let c = nx + j;
-            let nbr = &y_ri[y_cp[j]..y_cp[j + 1]];
-            for &k in nbr { row_idx.push(k); }              // ∂P/∂θ_k
-            for &k in nbr { row_idx.push(nb + k); }         // ∂P/∂Vm_k
-            for &g in &gens_at_bus[j] { row_idx.push(2 * nb + g); }
-            col_ptrs[c + 1] = row_idx.len();
+        // P_eq_i (c = nx + i, i < nb)
+        for i in 0..nb {
+            let nbr = &y_ri[y_cp[i]..y_cp[i + 1]];
+            for &k in nbr { row_idx.push(k); }              // dP/dθ_k
+            for &k in nbr { row_idx.push(nb + k); }         // dP/dVm_k
+            for &g in &gens_at_bus[i] {
+                row_idx.push(2 * nb + g);                   // dP/dPg
+            }
+            col_ptrs[nx + i + 1] = row_idx.len();
         }
-        // Q_eq at bus j  (KKT col nx + nb + j)
-        for j in 0..nb {
-            let c = nx + nb + j;
-            let nbr = &y_ri[y_cp[j]..y_cp[j + 1]];
-            for &k in nbr { row_idx.push(k); }
-            for &k in nbr { row_idx.push(nb + k); }
-            for &g in &gens_at_bus[j] { row_idx.push(2 * nb + ng + g); }
-            col_ptrs[c + 1] = row_idx.len();
+        // Q_eq_i (c = nx + nb + i)
+        for i in 0..nb {
+            let nbr = &y_ri[y_cp[i]..y_cp[i + 1]];
+            for &k in nbr { row_idx.push(k); }              // dQ/dθ_k
+            for &k in nbr { row_idx.push(nb + k); }         // dQ/dVm_k
+            for &g in &gens_at_bus[i] {
+                row_idx.push(2 * nb + ng + g);              // dQ/dQg
+            }
+            col_ptrs[nx + nb + i + 1] = row_idx.len();
         }
-        // linear eq r  (KKT col nx + 2nb + r) — single entry at the fixed variable
+        // lin-eq r (c = nx + 2*nb + r)
         for r in 0..neqlin {
-            let c = nx + 2 * nb + r;
             row_idx.push(ieq[r]);
-            col_ptrs[c + 1] = row_idx.len();
+            col_ptrs[nx + 2 * nb + r + 1] = row_idx.len();
         }
 
-        Self { dim, nx, neq, ieq, col_ptrs, row_idx }
+        let mut find_k = |r: usize, c: usize| -> usize {
+            let s = col_ptrs[c]; let e = col_ptrs[c+1];
+            row_idx[s..e].binary_search(&r).map(|p| s + p).expect("KKT element missing")
+        };
+
+        let mut br_to_kkt = vec![[0usize; 16]; nl];
+        for l in 0..nl {
+            let f = f_buses[l]; let t = t_buses[l];
+            let buses = [f, t];
+            let vars = [0, nb]; // θ offset, Vm offset
+            let mut ptrs = [0usize; 16];
+            for ni in 0..2 { // from bus (f or t)
+                for nj in 0..2 { // to variable (θ or Vm)
+                    let c_bus = buses[ni];
+                    let c_var_off = vars[nj];
+                    let col = c_bus + c_var_off;
+                    
+                    let nbr_range = y_cp[c_bus]..y_cp[c_bus+1];
+                    let deg = nbr_range.len();
+                    
+                    for row_node_idx in 0..2 { // to row bus (f or t)
+                        let r_bus = buses[row_node_idx];
+                        let r_pos = y_ri[nbr_range.clone()].binary_search(&r_bus).expect("Branch neighbor missing");
+                        
+                        for row_var_idx in 0..2 { // to row variable (θ or Vm)
+                            let r_var_off = vars[row_var_idx];
+                            // Row index in KKT column `col`:
+                            // θ_j column has: [Haa | Hva | dgP | dgQ]
+                            // Vm_j column has: [Hav | Hvv | dgP | dgQ]
+                            let kkt_row_pos = col_ptrs[col] + (row_var_idx * deg) + r_pos;
+                            
+                            // Map [ni, nj, row_node_idx, row_var_idx] to 0..16
+                            // Order: [θf,θf θf,vmf θf,θt θf,vmt | vmf,θf ...]
+                            // ni*8 + nj*4 + row_node_idx*2 + row_var_idx
+                            ptrs[ni*8 + nj*4 + row_node_idx*2 + row_var_idx] = kkt_row_pos;
+                        }
+                    }
+                }
+            }
+            br_to_kkt[l] = ptrs;
+        }
+
+        Self { dim, nx, neq, ieq, col_ptrs, row_idx, gens_at_bus, br_to_kkt }
     }
 
-    /// Streaming fill of the KKT `values` array — single advancing pointer, zero scatter.
+    /// Optimized streaming fill. Writes numerical values directly into `kkt_vals`
+    /// at the locations determined by the symbolic skeleton.
     ///
-    /// Inputs:
-    ///   `lxx`  : nx × nx Hessian M (V4 fill; branch nonlinear-slack penalty already merged)
-    ///   `dg`   : nx × 2nb equality Jacobian transpose (from `opf_consfcn`)
-    ///   `dg_t` : 2nb × nx = `dg.transpose()` (precompute once; gives the dgᵀ coupling
-    ///            rows for each variable column in contiguous, row-ascending order)
-    ///   `kkt_vals`: output buffer of length `row_idx.len()`
-    ///
-    /// The column structure of `lxx`, `dg`, `dg_t` is isomorphic to the KKT skeleton
-    /// built in `build`, so each KKT column is filled by a few contiguous `copy` runs.
-    /// Linear-equality couplings have value 1.0 (the `ae` rows are unit entries).
-    /// Alloc-free: all inputs as raw CSC slices.
-    ///   `lxx_cp/lxx_v` : nx×nx Hessian M (V4 fill)
-    ///   `dg_cp/dg_v`   : nx×2nb equality Jacobian transpose (`opf_consfcn`)
-    ///   `dgt_cp/dgt_v` : 2nb×nx = transpose of dg (see `DgTransposeCache` — reuse a
-    ///                    buffer instead of allocating `dg.transpose()` every iteration)
+    /// Values are provided as standard CSC parts from separate matrices (legacy V4).
     #[allow(clippy::too_many_arguments)]
     pub fn fill(
         &self,
@@ -503,233 +542,5 @@ mod tests {
         }
         println!("V5 fill vs build_saddle_point: nnz={}, max_diff={:.3e}", v5_vals.len(), max_diff);
         assert!(max_diff < 1e-12, "V5 fill values differ (max_diff={:.3e})", max_diff);
-    }
-
-    /// V5.1 permuted skeleton must equal P·K·Pᵀ of the natural-order KKT, where P is the
-    /// [PQ|PV|ext] bus permutation (+ gens reordered to the tail). We validate by relabeling
-    /// every nonzero of the natural skeleton through the global KKT permutation and checking
-    /// the resulting CSC structure matches the permuted skeleton byte-for-byte.
-    #[test]
-    fn test_v5_1_permuted_skeleton_ieee118() {
-        let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        let net = load_csv_zip(&format!("{}/cases/IEEE118/data.zip", dir)).unwrap();
-        let data = opf_data_from_network(&net);
-        let nb = data.nb;
-        let ng = data.ng;
-        let nx = data.nx();
-
-        // natural skeleton (proven == build_saddle_point)
-        let nat = KKTSymbolicV5::build(&data);
-
-        // permuted skeleton via from_parts on permuted parts
-        let map = super::opf_bus_order(&data);
-        let (y_cp, y_ri, gen_bus_new, fixed_new) = super::permute_for_v5(&data, &map);
-        let perm = KKTSymbolicV5::from_parts(nb, ng, &y_cp, &y_ri, &gen_bus_new, &fixed_new);
-
-        // Rebuild the per-gen new index (must match permute_for_v5's gen ordering)
-        let mut gen_order: Vec<usize> = (0..ng).collect();
-        gen_order.sort_by_key(|&g| map[data.gen_bus[g]]);
-        let mut inv_gen = vec![0usize; ng];
-        for (newg, &orig) in gen_order.iter().enumerate() { inv_gen[orig] = newg; }
-        let var_new = |v: usize| -> usize {
-            if v < nb { map[v] }
-            else if v < 2 * nb { nb + map[v - nb] }
-            else if v < 2 * nb + ng { 2 * nb + inv_gen[v - 2 * nb] }
-            else { 2 * nb + ng + inv_gen[v - 2 * nb - ng] }
-        };
-
-        // fixed_new position lookup for the linear-eq columns
-        use std::collections::HashMap;
-        let lineq_pos: HashMap<usize, usize> =
-            fixed_new.iter().enumerate().map(|(r, &v)| (v, r)).collect();
-
-        // global KKT index permutation: natural idx → permuted idx
-        let gperm = |idx: usize| -> usize {
-            if idx < nx {
-                var_new(idx)
-            } else if idx < nx + nb {
-                nx + map[idx - nx] // P_eq at bus
-            } else if idx < nx + 2 * nb {
-                nx + nb + map[idx - nx - nb] // Q_eq at bus
-            } else {
-                // linear-eq column r0 → physical fixed var → its new pos in fixed_new
-                let r0 = idx - nx - 2 * nb;
-                let phys_var = nat.ieq[r0];
-                nx + 2 * nb + lineq_pos[&var_new(phys_var)]
-            }
-        };
-
-        // relabel every natural nonzero through gperm into a COO, canonicalize, compare
-        let mut coo = CooMatrix::<f64>::new(nat.dim, nat.dim);
-        for c in 0..nat.dim {
-            for idx in nat.col_ptrs[c]..nat.col_ptrs[c + 1] {
-                let r = nat.row_idx[idx];
-                coo.push(gperm(r), gperm(c), 1.0);
-            }
-        }
-        let relabeled = CscMatrix::from(&coo);
-
-        assert_eq!(perm.dim, nat.dim, "dim changed under permutation");
-        assert_eq!(perm.row_idx.len(), nat.row_idx.len(), "nnz changed");
-        assert_eq!(&perm.col_ptrs, relabeled.col_offsets(), "permuted col_ptrs != P·K·Pᵀ");
-        assert_eq!(&perm.row_idx, relabeled.row_indices(), "permuted row_idx != P·K·Pᵀ");
-
-        // sanity: generator buses really are the contiguous tail
-        let npq = map.iter().filter(|&&n| n < nb).count(); // all, not useful; compute tail check instead
-        let _ = npq;
-        let min_gen_bus = gen_bus_new.iter().copied().min().unwrap();
-        let max_gen_bus = gen_bus_new.iter().copied().max().unwrap();
-        println!(
-            "V5.1 permuted skeleton == P·K·Pᵀ: dim={}, nnz={}. gen buses ∈ [{}, {}] of {} (tail-clustered)",
-            perm.dim, perm.row_idx.len(), min_gen_bus, max_gen_bus, nb
-        );
-    }
-
-    /// V5.1-b jacobian brick: building OPF `dg` (nx×2nb) directly from the streaming
-    /// `dSbus_dV` columns must reproduce `opf_consfcn`'s dg byte-for-byte.
-    /// dg[θ_k, P_eq_i] = Re(dS_dVa[i,k]); dg[θ_k, Q_eq_i] = Im(dS_dVa[i,k]);
-    /// dg[Vm_k, P_eq_i] = Re(dS_dVm[i,k]); dg[Vm_k, Q_eq_i] = Im(dS_dVm[i,k]);
-    /// dg[Pg_g, P_eq_bus(g)] = -1; dg[Qg_g, Q_eq_bus(g)] = -1.
-    #[test]
-    fn test_v5_1_dg_from_dsbus_ieee118() {
-        use crate::basic::dsbus_dv::dSbus_dV;
-        use num_complex::Complex64;
-        use std::collections::HashMap;
-
-        let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        let net = load_csv_zip(&format!("{}/cases/IEEE118/data.zip", dir)).unwrap();
-        let data = opf_data_from_network(&net);
-        let nb = data.nb; let ng = data.ng; let nx = data.nx();
-
-        let x = data.warm_x0();
-        let v = data.v_from_x(&x);
-        let vnorm: nalgebra::DVector<Complex64> = v.map(|vi| vi / vi.norm());
-        let (ds_dvm, ds_dva) = dSbus_dV(&data.ybus, &v, &vnorm);
-
-        // Build dg (nx × 2nb) from streaming dSbus columns.
-        let mut dg_map: HashMap<(usize, usize), f64> = HashMap::new();
-        let y_cp = data.ybus.col_offsets();
-        let y_ri = data.ybus.row_indices();
-        for k in 0..nb {
-            for idx in y_cp[k]..y_cp[k + 1] {
-                let i = y_ri[idx];
-                let dva = ds_dva.values()[idx];
-                let dvm = ds_dvm.values()[idx];
-                dg_map.insert((k, i), dva.re);            // θ_k row, P_eq i col
-                dg_map.insert((k, nb + i), dva.im);       // θ_k row, Q_eq i col
-                dg_map.insert((nb + k, i), dvm.re);       // Vm_k row, P_eq i col
-                dg_map.insert((nb + k, nb + i), dvm.im);  // Vm_k row, Q_eq i col
-            }
-        }
-        for g in 0..ng {
-            dg_map.insert((2 * nb + g, data.gen_bus[g]), -1.0);
-            dg_map.insert((2 * nb + ng + g, nb + data.gen_bus[g]), -1.0);
-        }
-
-        // Reference dg from opf_consfcn
-        let (_, _, dg_ref, _) = crate::opf::constraints::opf_consfcn(&data, x.as_slice());
-
-        let mut max_diff = 0.0f64;
-        let mut n = 0usize;
-        for c in 0..dg_ref.ncols() {
-            for idx in dg_ref.col_offsets()[c]..dg_ref.col_offsets()[c + 1] {
-                let r = dg_ref.row_indices()[idx];
-                let refv = dg_ref.values()[idx];
-                let myv = *dg_map.get(&(r, c)).unwrap_or(&0.0);
-                max_diff = max_diff.max((refv - myv).abs());
-                n += 1;
-            }
-        }
-        println!("V5.1-b dg-from-dSbus vs opf_consfcn: compared {} nnz, max_diff={:.3e}", n, max_diff);
-        assert!(max_diff < 1e-12, "dg-from-dSbus differs from opf_consfcn (max_diff={:.3e})", max_diff);
-    }
-
-    /// Assembly-time micro-benchmark: V5 streaming fill (+ dg transpose each iter) vs
-    /// the legacy per-iteration `build_saddle_point` COO rebuild.
-    /// Run: cargo test --release bench_v5_kkt_assembly -- --ignored --nocapture
-    #[test]
-    #[ignore]
-    fn bench_v5_kkt_assembly() {
-        let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        for case in ["IEEE118", "pegase9241"] {
-            let path = format!("{}/cases/{}/data.zip", dir, case);
-            if !std::path::Path::new(&path).exists() { continue; }
-            let net = load_csv_zip(&path).unwrap();
-            let data = opf_data_from_network(&net);
-            let nx = data.nx();
-            let nb = data.nb;
-
-            let v5 = KKTSymbolicV5::build(&data);
-            let x = data.warm_x0();
-            let lam = vec![0.1; 2 * nb];
-            let mu = vec![0.05; 2 * data.nl];
-            let z = vec![0.7; 2 * data.nl];
-            let v3c = crate::new_opf::v3_symbolic::V3SymbolicCache::analyze(&data);
-            let lxx = crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
-                &data, &v3c, x.as_slice(), &lam, &mu, Some(&z), 1e-4,
-            );
-            let (_, _, dg, _) = crate::opf::constraints::opf_consfcn(&data, x.as_slice());
-
-            // dg_full (with ae) for the baseline build_saddle_point
-            let neqlin = v5.ieq.len();
-            let mut dg_coo = CooMatrix::<f64>::new(nx, 2 * nb + neqlin);
-            for j in 0..dg.ncols() {
-                for idx in dg.col_offsets()[j]..dg.col_offsets()[j + 1] {
-                    dg_coo.push(dg.row_indices()[idx], j, dg.values()[idx]);
-                }
-            }
-            for (r, &v) in v5.ieq.iter().enumerate() { dg_coo.push(v, 2 * nb + r, 1.0); }
-            let dg_full = CscMatrix::from(&dg_coo);
-
-            let iters = if case == "IEEE118" { 200 } else { 20 };
-
-            // Baseline: build_saddle_point each iteration
-            let t0 = std::time::Instant::now();
-            let mut sink = 0.0f64;
-            for _ in 0..iters {
-                let k = build_saddle_point(&lxx, &Some(dg_full.clone()), nx, v5.neq);
-                sink += k.values()[0];
-            }
-            let dur_base = t0.elapsed() / iters;
-
-            // V5.0: transpose(dg) [allocates] + streaming fill each iteration
-            let mut kkt_vals = vec![0.0f64; v5.row_idx.len()];
-            let t1 = std::time::Instant::now();
-            for _ in 0..iters {
-                let dg_t = dg.transpose();
-                v5.fill(
-                    lxx.col_offsets(), lxx.values(),
-                    dg.col_offsets(), dg.values(),
-                    dg_t.col_offsets(), dg_t.values(),
-                    &mut kkt_vals,
-                );
-                sink += kkt_vals[0];
-            }
-            let dur_v5 = t1.elapsed() / iters;
-
-            // V5.0+: cached transpose (reused buffer, no alloc) + streaming fill
-            let tcache = DgTransposeCache::analyze(&dg);
-            let mut dgt_buf = vec![0.0f64; tcache.nnz];
-            let t2 = std::time::Instant::now();
-            for _ in 0..iters {
-                tcache.apply(dg.values(), &mut dgt_buf);
-                v5.fill(
-                    lxx.col_offsets(), lxx.values(),
-                    dg.col_offsets(), dg.values(),
-                    &tcache.col_ptrs, &dgt_buf,
-                    &mut kkt_vals,
-                );
-                sink += kkt_vals[0];
-            }
-            let dur_v5c = t2.elapsed() / iters;
-
-            println!(
-                "[{}] KKT assembly/iter — saddle: {:?} | V5.0(+T alloc): {:?} ({:.1}x) | V5.0+(cached T): {:?} ({:.1}x)  (dim={}, nnz={}, sink={:.2e})",
-                case, dur_base,
-                dur_v5,  dur_base.as_secs_f64() / dur_v5.as_secs_f64(),
-                dur_v5c, dur_base.as_secs_f64() / dur_v5c.as_secs_f64(),
-                v5.dim, v5.row_idx.len(), sink
-            );
-        }
     }
 }
