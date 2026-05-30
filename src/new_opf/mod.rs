@@ -309,6 +309,64 @@ mod tests {
         assert!(worst_v4.3 < 1.0, "v4 Hessian disagrees with finite differences");
     }
 
+    /// Ablation breakdown: end-to-end PIPS per version (V1 legacy / V4 / V5.0), reporting
+    /// per-stage wall-clock (Hess / G-H / KKT / Solve) + overall. This is the data source
+    /// for the "KKT assembly shrinks from a big slice to invisible" ablation figure.
+    /// cargo test --release bench_ablation_breakdown -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn bench_ablation_breakdown() {
+        let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        println!("\n| Case | Version | Iter | Hess | G/H | KKT | Solve | Overall |");
+        println!("|---|---|---|---|---|---|---|---|");
+        for case in ["IEEE39", "IEEE118", "pegase9241"] {
+            let path = format!("{}/cases/{}/data.zip", dir, case);
+            if !std::path::Path::new(&path).exists() { continue; }
+            let net = crate::io::pandapower::load_csv_zip(&path).unwrap();
+            let mut base_data = opf_data_from_network(&net);
+            if let Some(cfg) = crate::io::pandapower::load_opf_cfg_zip(&path) {
+                if case == "IEEE39" {
+                    for g in 0..10i64 { if let Some(r) = cfg.get("gen", g) { base_data.cost_coeffs[g as usize] = [r.cp2_eur_per_mw2, r.cp1_eur_per_mw, r.cp0_eur]; } }
+                } else {
+                    if let Some(r) = cfg.get("ext_grid", 0) { base_data.cost_coeffs[0] = [r.cp2_eur_per_mw2, r.cp1_eur_per_mw, r.cp0_eur]; }
+                    for g in 0..54i64 { if let Some(r) = cfg.get("gen", g) { base_data.cost_coeffs[(1 + g) as usize] = [r.cp2_eur_per_mw2, r.cp1_eur_per_mw, r.cp0_eur]; } }
+                }
+            }
+            let mi = if case == "pegase9241" { 30 } else { 150 };
+            let x0 = base_data.warm_x0();
+            let (xmin, xmax) = base_data.bounds();
+
+            let row = |case: &str, ver: &str, r: &PipsResult, overall: std::time::Duration| {
+                let t = &r.timing;
+                println!("| {} | {} | {} | {:?} | {:?} | {:?} | {:?} | {:?} |",
+                    case, ver, r.iterations, t.hess, t.gh, t.kkt, t.solve, overall);
+            };
+
+            // V1 legacy (opf_hessfcn, no merged slacks)
+            let t0 = std::time::Instant::now();
+            let r1 = crate::opf::pips::pips(
+                |x| crate::opf::cost::opf_costfcn(&base_data, x),
+                |x| { let (g,h,dg,dh) = crate::opf::constraints::opf_consfcn(&base_data, x); (h,g,dh,dg) },
+                |x,l,m,_z,c| crate::opf::hessian::opf_hessfcn(&base_data, x, l, m, c),
+                x0.clone(), xmin.clone(), xmax.clone(),
+                PipsOpt { max_it: mi, cost_mult: 1e-4, merged_slacks: false, ..Default::default() },
+            );
+            let d1 = t0.elapsed();
+            row(case, "V1", &r1, d1);
+
+            let data = NewOPFData::new(base_data.clone());
+            let t0 = std::time::Instant::now();
+            let r4 = pips(&data, x0.clone(), xmin.clone(), xmax.clone(), PipsOpt { max_it: mi, cost_mult: 1e-4, ..Default::default() });
+            let d4 = t0.elapsed();
+            row(case, "V4", &r4, d4);
+
+            let t0 = std::time::Instant::now();
+            let r5 = pips::pips_v5(&data, x0.clone(), xmin.clone(), xmax.clone(), PipsOpt { max_it: mi, cost_mult: 1e-4, ..Default::default() });
+            let d5 = t0.elapsed();
+            row(case, "V5.0", &r5, d5);
+        }
+    }
+
     #[test]
     #[ignore] // cargo test --release bench_v4_vs_v5_endtoend -- --ignored --nocapture
     fn bench_v4_vs_v5_endtoend() {

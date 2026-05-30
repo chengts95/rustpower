@@ -4,6 +4,17 @@ pub struct PipsResult {
     pub x: Vec<f64>, pub f: f64, pub converged: bool, pub iterations: usize,
     pub lam_eq: Vec<f64>, pub mu_ineq: Vec<f64>, pub mu_lower: Vec<f64>, pub mu_upper: Vec<f64>,
     pub message: String,
+    /// Per-stage wall-clock totals over all iterations (for ablation breakdown plots).
+    pub timing: PipsTiming,
+}
+
+/// Structured per-stage timing breakdown (sums over the whole solve).
+#[derive(Clone, Copy, Default)]
+pub struct PipsTiming {
+    pub hess: std::time::Duration,
+    pub gh: std::time::Duration,
+    pub kkt: std::time::Duration,
+    pub solve: std::time::Duration,
 }
 
 pub struct PipsOpt {
@@ -133,6 +144,7 @@ where
         lam_eq: lam[..neqnln].to_vec(), mu_ineq: mu[..niqnln].to_vec(),
         mu_lower: vec![0.0; nx], mu_upper: vec![0.0; nx],
         message: if converged { "Converged".to_string() } else { "Failed".to_string() },
+        timing: PipsTiming { hess: total_hess, gh: total_gh, kkt: total_kkt, solve: total_solve },
     }
 }
 
