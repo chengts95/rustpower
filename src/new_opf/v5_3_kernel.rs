@@ -93,7 +93,7 @@ pub fn assemble_kkt_v5_3(
     // 2. Pre-Project Branch Hessians into Ybus Operator Space
     // We allocate a buffer matching Ybus nnz exactly.
     let mut ybus_br_hess = vec![[0.0f64; 4]; ybus.values().len()];
-    pre_project_branch_hessians(data, vs, mu_ineq, z_ineq, nl, &v53.br_to_ybus_idx, &mut ybus_br_hess);
+    pre_project_branch_hessians(data, &v53.base, vs, mu_ineq, z_ineq, nl, &v53.br_to_ybus_idx, &mut ybus_br_hess);
 
     // 3. Clear KKT
     kkt_vals.fill(0.0);
@@ -103,18 +103,19 @@ pub fn assemble_kkt_v5_3(
     fill_vm_columns(nb, v53, ybus, vs, &vnorm, &inv_vmag, &lam_v, ibus_s, &d_lam, y_trans, &ybus_br_hess, &is_fixed, kkt_vals);
     fill_generator_columns(data, nx, cost_mult, &is_fixed, &v53.base.col_ptrs, kkt_vals);
 
-    // 5. Constraint & Linear Eq Columns (Reuse V5.2 sequential fill)
-    let mut gens_at_bus: Vec<Vec<usize>> = vec![Vec::new(); nb];
-    for g in 0..data.ng { gens_at_bus[data.gen_bus[g]].push(g); }
-    let mut v52_temp = vec![0.0; v53.base.row_idx.len()];
-    super::v5_2_kernel::fill_constraint_columns(&v53.base, data, y_trans, &gens_at_bus, x, &mut v52_temp);
-    let c_start = v53.base.col_ptrs[nx];
-    kkt_vals[c_start..].copy_from_slice(&v52_temp[c_start..]);
+    // 5. Constraint & Linear Eq Columns (Reuse V5.2 sequential fill).
+    // fill_constraint_columns writes only the constraint-column region [cp[nx]..] with
+    // direct assignment, so it can target kkt_vals directly — no temp, no double write.
+    // Reuse the prestored gens_at_bus from the symbolic cache (no per-iter rebuild).
+    super::v5_2_kernel::fill_constraint_columns(
+        &v53.base, data, y_trans, &v53.base.gens_at_bus, x, kkt_vals,
+    );
 }
 
 #[inline(always)]
 fn pre_project_branch_hessians(
     data: &OPFData,
+    base: &KKTSymbolicV5,
     vs: &[Complex64],
     mu_ineq: &[f64],
     z_ineq: &[f64],
@@ -123,10 +124,8 @@ fn pre_project_branch_hessians(
     ybus_br_hess: &mut [[f64; 4]],
 ) {
     use super::v4_numeric_rect::branch_end_hess_v4;
-    let find_br_entry = |mat: &nalgebra_sparse::CscMatrix<Complex64>, c: usize, r: usize| -> usize {
-        let range = (mat.col_offsets()[c] as usize)..(mat.col_offsets()[c + 1] as usize);
-        mat.row_indices()[range.clone()].iter().position(|&val| val as usize == r).unwrap() + range.start
-    };
+    let yf_vals = data.yf.values();
+    let yt_vals = data.yt.values();
 
     for l in 0..nl {
         let f = data.f_buses[l];
@@ -136,14 +135,17 @@ fn pre_project_branch_hessians(
         let mu_t = mu_ineq[nl + l];
         let wt = mu_t / z_ineq[nl + l];
 
+        // Prestored Yf/Yt nnz indices (no per-iter search).
+        let yf_l = base.br_yf_idx[l]; // [(col=f,row=l), (col=t,row=l)]
+        let yt_l = base.br_yt_idx[l]; // [(col=t,row=l), (col=f,row=l)]
         let hf_all = branch_end_hess_v4(
-            data.yf.values()[find_br_entry(&data.yf, f, l)].conj(),
-            data.yf.values()[find_br_entry(&data.yf, t, l)].conj(),
+            yf_vals[yf_l[0]].conj(),
+            yf_vals[yf_l[1]].conj(),
             vs[f], vs[t], mu_f, wf,
         );
         let ht_all = branch_end_hess_v4(
-            data.yt.values()[find_br_entry(&data.yt, t, l)].conj(),
-            data.yt.values()[find_br_entry(&data.yt, f, l)].conj(),
+            yt_vals[yt_l[0]].conj(),
+            yt_vals[yt_l[1]].conj(),
             vs[t], vs[f], mu_t, wt,
         );
 

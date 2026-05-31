@@ -353,24 +353,17 @@ pub fn fill_branch_hessian(
         let wf = mu_f[l] / z_ineq[l];
         let wt = mu_t[l] / z_ineq[nl + l];
 
-        // We need to know which Yf/Yt entries correspond to (l,f) and (l,t).
-        // Since Yf/Yt are nl x nb and branches are rows, it's just the CSC indices.
-        // Actually, OPFData stores them as CSC nl x nb.
-        // Wait, the row indices are branch indices.
-        // So for branch l, we need to find row l in columns f and t.
-        let find_br_entry = |mat: &nalgebra_sparse::CscMatrix<Complex64>, c: usize, r: usize| -> usize {
-            let range = mat.col_offsets()[c]..mat.col_offsets()[c + 1];
-            mat.row_indices()[range.clone()].binary_search(&r).map(|p| range.start + p).unwrap()
-        };
-        
+        // Prestored Yf/Yt nnz indices (structure-invariant) — no per-iter search.
+        let yf_l = v5.br_yf_idx[l]; // [(col=f,row=l), (col=t,row=l)]
+        let yt_l = v5.br_yt_idx[l]; // [(col=t,row=l), (col=f,row=l)]
         let hf = branch_end_hess_v4(
-            yf_vals[find_br_entry(&data.yf, f, l)].conj(),
-            yf_vals[find_br_entry(&data.yf, t, l)].conj(),
+            yf_vals[yf_l[0]].conj(),
+            yf_vals[yf_l[1]].conj(),
             vs[f], vs[t], mu_f[l], wf,
         );
         let ht = branch_end_hess_v4(
-            yt_vals[find_br_entry(&data.yt, t, l)].conj(),
-            yt_vals[find_br_entry(&data.yt, f, l)].conj(),
+            yt_vals[yt_l[0]].conj(),
+            yt_vals[yt_l[1]].conj(),
             vs[t], vs[f], mu_t[l], wt,
         );
 

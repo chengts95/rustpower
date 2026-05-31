@@ -21,6 +21,7 @@
 //!   lin-eq r (col nx+2nb+r): {ieq[r]}
 
 use crate::opf::problem::OPFData;
+use num_complex::Complex64;
 
 pub struct KKTSymbolicV5 {
     pub dim: usize,
@@ -34,6 +35,11 @@ pub struct KKTSymbolicV5 {
     /// For each branch l, the 16 indices into KKT values for the 4x4 Hessian block
     /// [θf,θf thf,vmf ...] in variable-column order.
     pub br_to_kkt: Vec<[usize; 16]>,
+    /// Prestored Yf nnz indices per branch: [(col=f,row=l), (col=t,row=l)].
+    /// Eliminates per-iteration find_br_entry searches. Empty unless built via `build`.
+    pub br_yf_idx: Vec<[usize; 2]>,
+    /// Prestored Yt nnz indices per branch: [(col=t,row=l), (col=f,row=l)].
+    pub br_yt_idx: Vec<[usize; 2]>,
 }
 
 impl KKTSymbolicV5 {
@@ -44,7 +50,7 @@ impl KKTSymbolicV5 {
         let fixed: Vec<usize> = (0..nx)
             .filter(|&i| (xmax[i] - xmin[i]).abs() <= f64::EPSILON)
             .collect();
-        Self::from_parts(
+        let mut s = Self::from_parts(
             data.nb,
             data.ng,
             data.nl,
@@ -54,7 +60,22 @@ impl KKTSymbolicV5 {
             data.ybus.row_indices(),
             &data.gen_bus,
             &fixed,
-        )
+        );
+        // Prestore Yf/Yt nnz indices per branch (structure-invariant) to remove
+        // per-iteration find_br_entry searches in the branch-Hessian kernels.
+        let find = |mat: &nalgebra_sparse::CscMatrix<Complex64>, c: usize, r: usize| -> usize {
+            let range = mat.col_offsets()[c]..mat.col_offsets()[c + 1];
+            mat.row_indices()[range.clone()].binary_search(&r).map(|p| range.start + p).unwrap()
+        };
+        s.br_yf_idx = (0..data.nl).map(|l| {
+            let f = data.f_buses[l]; let t = data.t_buses[l];
+            [find(&data.yf, f, l), find(&data.yf, t, l)]
+        }).collect();
+        s.br_yt_idx = (0..data.nl).map(|l| {
+            let f = data.f_buses[l]; let t = data.t_buses[l];
+            [find(&data.yt, t, l), find(&data.yt, f, l)]
+        }).collect();
+        s
     }
 
     /// Build the KKT skeleton from raw structural parts. Works for any bus/gen ordering
@@ -209,7 +230,8 @@ impl KKTSymbolicV5 {
             br_to_kkt[l] = ptrs;
         }
 
-        Self { dim, nx, neq, ieq, col_ptrs, row_idx, gens_at_bus, br_to_kkt }
+        Self { dim, nx, neq, ieq, col_ptrs, row_idx, gens_at_bus, br_to_kkt,
+               br_yf_idx: Vec::new(), br_yt_idx: Vec::new() }
     }
 
     /// Optimized streaming fill. Writes numerical values directly into `kkt_vals`
