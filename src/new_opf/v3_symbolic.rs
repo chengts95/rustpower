@@ -1,4 +1,4 @@
-use nalgebra_sparse::{CscMatrix, CooMatrix};
+use nalgebra_sparse::CscMatrix;
 use num_complex::Complex64;
 use crate::opf::problem::OPFData;
 

@@ -51,17 +51,14 @@ pub fn opf_consfcn(
         g[nb + i] = mis[i].im;
     }
 
-    // ── inequality constraint values ────────────────────────────────────────
+    // ── inequality constraint values + branch jacobian (single dSbr_dV pass) ──
+    // Previously dSbr_dV was called twice: once here discarding derivatives (only Sf/St),
+    // and again below for dh. They produce identical Sf/St, so we fuse into one call.
     let flow_max = data.flow_max_sq();
     let nl2 = nl; // all branches constrained for now
 
-    let (_, _, _, _, Sf, St) = dSbr_dV(
-        &data.yf,
-        &data.yt,
-        &data.f_buses,
-        &data.t_buses,
-        &v,
-        &v_norm,
+    let (dSf_dVa, dSf_dVm, dSt_dVa, dSt_dVm, Sf, St) = dSbr_dV(
+        &data.yf, &data.yt, &data.f_buses, &data.t_buses, &v, &v_norm,
     );
 
     let mut h = vec![0.0f64; 2 * nl2];
@@ -91,13 +88,10 @@ pub fn opf_consfcn(
         &data.cg,
     );
 
-    // dh (2nl2 × nx) transposed = (nx × 2nl2)
+    // dh (2nl2 × nx) transposed = (nx × 2nl2), reusing the dSbr_dV derivatives above.
     let dh_t = {
-        let (dSf_dVa, dSf_dVm, dSt_dVa, dSt_dVm, Sf2, St2) = dSbr_dV(
-            &data.yf, &data.yt, &data.f_buses, &data.t_buses, &v, &v_norm,
-        );
         let (dAf_dVa, dAf_dVm, dAt_dVa, dAt_dVm) =
-            dAbr_dV(&dSf_dVa, &dSf_dVm, &dSt_dVa, &dSt_dVm, &Sf2, &St2);
+            dAbr_dV(&dSf_dVa, &dSf_dVm, &dSt_dVa, &dSt_dVm, &Sf, &St);
         build_dh_transposed(nb, nx, nl2, &dAf_dVa, &dAf_dVm, &dAt_dVa, &dAt_dVm)
     };
 

@@ -186,7 +186,7 @@ fn coo_to_csc_f64(nrows: usize, ncols: usize, ri: &[usize], ci: &[usize]) -> Csc
     
     let mut c_cp = vec![0usize; ncols + 1];
     let mut c_ri: Vec<usize> = Vec::with_capacity(entries.len());
-    let mut c_v: Vec<f64> = vec![0.0; entries.len()];
+    let c_v: Vec<f64> = vec![0.0; entries.len()];
     
     for &(r, c, _) in &entries {
         c_cp[c + 1] += 1;

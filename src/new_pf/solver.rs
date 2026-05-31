@@ -1,11 +1,10 @@
 use bevy_ecs::prelude::*;
-use bevy_app::prelude::*;
 use nalgebra::*;
 use nalgebra_sparse::*;
 use num_complex::Complex64;
 use std::f64::consts::PI;
 
-use crate::new_pf::systems::{NetworkOperators, BinaryIncidence, PFOrder};
+use crate::new_pf::systems::{NetworkOperators, PFOrder};
 use crate::basic::new_dsdvbus2::{JacobianPattern2};
 use crate::basic::new_dsdvbus3::fill_jacobian_v3;
 use crate::basic::solver::Solve;
@@ -93,8 +92,8 @@ pub fn run_newton_pf<S: Solve>(
 
 /// Thin Bevy System Wrapper
 pub fn newton_pf_system(
-    mut ops: ResMut<NetworkOperators>,
-    order: Res<PFOrder>,
+    ops: ResMut<NetworkOperators>,
+    _order: Res<PFOrder>,
     // TODO: Add queries for current voltage and setpoints
 ) {
     let Some(_ybus) = &ops.ybus else { return };

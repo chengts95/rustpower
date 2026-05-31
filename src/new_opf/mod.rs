@@ -26,9 +26,9 @@ mod tests {
     use crate::io::pandapower::load_csv_zip;
     use crate::opf::builder::opf_data_from_network;
     use crate::opf::PipsOpt;
-    use nalgebra::DVector;
+    
     use nalgebra_sparse::{CscMatrix, CooMatrix};
-    use num_complex::Complex64;
+    
 
     fn load_ieee39() -> crate::io::pandapower::Network {
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -186,7 +186,7 @@ mod tests {
             dg_coo.push(v, 2 * nb + r, 1.0);
         }
         let dg_full = CscMatrix::from(&dg_coo);
-        let dg_full_t = dg_full.transpose();
+        let _dg_full_t = dg_full.transpose();
 
         // Reference Full KKT values (V4 style)
         let ref_kkt = crate::opf::pips::build_saddle_point(&lxx_v4, &Some(dg_full), nx, v5_sym.neq);
@@ -270,12 +270,12 @@ mod tests {
         let compare_lxx = |label: &str, candidate_kkt: &[f64]| {
             let mut max_diff: f64 = 0.0;
             let mut diff_count = 0;
-            let mut ref_idx = 0;
+            let _ref_idx = 0;
             // Variable columns (θ, Vm, Pg, Qg)
             for j in 0..data.nx() {
                 let start = v5_sym.col_ptrs[j];
-                let end = v5_sym.col_ptrs[j + 1];
-                let deg = if j < 2*nb { (v3c.y_transpose_idx.len() / nb) } else { 0 }; // approximation
+                let _end = v5_sym.col_ptrs[j + 1];
+                let _deg = if j < 2*nb { v3c.y_transpose_idx.len() / nb  } else { 0 }; // approximation
                 // wait, the actual Lxx part in KKT column j is the first block
                 let lxx_nnz = lxx_v4.col_offsets()[j + 1] - lxx_v4.col_offsets()[j];
                 for off in 0..lxx_nnz {
@@ -368,7 +368,7 @@ mod tests {
         let mu_ineq = vec![0.05; 2 * base_data.nl];
         let cost_mult = 1e-4;
 
-        let h_v1 = crate::opf::hessian::opf_hessfcn(&base_data, x.as_slice(), &lam_eq, &mu_ineq, cost_mult);
+        let _h_v1 = crate::opf::hessian::opf_hessfcn(&base_data, x.as_slice(), &lam_eq, &mu_ineq, cost_mult);
         let h_v3 = v3_numeric_scalar::v3_scalar_numeric_fill(&base_data, &v3_cache, x.as_slice(), &lam_eq, &mu_ineq, cost_mult);
         let h_v4 = v4_numeric_rect::v4_rect_numeric_fill(&base_data, &v3_cache, x.as_slice(), &lam_eq, &mu_ineq, None, cost_mult);
 
@@ -549,8 +549,8 @@ mod tests {
 
             let row = |case: &str, ver: &str, r: &PipsResult, overall: std::time::Duration| {
                 let t = &r.timing;
-                println!("| {} | {} | {} | {:?} | {:?} | {:?} | {:?} | {:?} |",
-                    case, ver, r.iterations, t.hess, t.gh, t.kkt, t.solve, overall);
+                println!("| {} | {} | {} | {:?} | {:?} | {:?} | {:?} | {:?} | {:?} |",
+                    case, ver, r.iterations, t.hess, t.gh, t.kkt, t.solve_sym, t.solve_num, overall);
             };
 
             // V1 legacy (opf_hessfcn, no merged slacks)

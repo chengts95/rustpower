@@ -2,7 +2,7 @@ use bevy_ecs::prelude::*;
 use nalgebra::{Complex, Matrix2};
 use nalgebra_sparse::{CooMatrix, CscMatrix};
 use num_complex::Complex64;
-use crate::basic::ecs::elements::{Line, LineParams, Transformer, Admittance, Port2, VBase, PFCommonData, BusID, BusType, PPNetwork, Port4MatPatch, NodeLookup, VNominal, FromBus, ToBus, TransformerDevice, ShuntDevice, TargetBus, OutOfService};
+use crate::basic::ecs::elements::{Line, LineParams, PFCommonData, BusID, BusType, Port4MatPatch, NodeLookup, VNominal, FromBus, ToBus, TransformerDevice, ShuntDevice, TargetBus, OutOfService};
 
 /// Specialized component for the new data path: stores the 2x2 primitive block of a branch.
 #[derive(Component, Debug, Clone)]
@@ -191,7 +191,7 @@ fn add_to_csc_diagonal(mat: &mut CscMatrix<Complex64>, idx: usize, val: Complex6
 }
 
 pub fn assemble_yf_yt_system(
-    mut ops: ResMut<NetworkOperators>,
+    _ops: ResMut<NetworkOperators>,
     incidence: Res<BinaryIncidence>,
     query_branches: Query<&PrimitiveY2x2>,
 ) {
@@ -208,7 +208,7 @@ pub fn assemble_yf_yt_system(
     let a_mat = &incidence.a_mat;
     
     // M = Y_prim * A
-    let m_mat = &y_prim * a_mat;
+    let _m_mat = &y_prim * a_mat;
 
     // Slice M to get Yf and Yt
     // ... Extraction logic ...

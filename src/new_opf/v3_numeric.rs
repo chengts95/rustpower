@@ -102,7 +102,7 @@ pub fn v3_numeric_fill(
     let hf = d2ASbr_dV2(&dSf_dVa, &dSf_dVm, &Sf, &data.cf, &data.yf, &v, &DVector::from_column_slice(mu_f));
     let ht = d2ASbr_dV2(&dSt_dVa, &dSt_dVm, &St, &data.ct, &data.yt, &v, &DVector::from_column_slice(mu_t));
 
-    let mut add_br_h = |lxx: &mut [f64], h_blocks: (CscMatrix<f64>, CscMatrix<f64>, CscMatrix<f64>, CscMatrix<f64>)| {
+    let add_br_h = |lxx: &mut [f64], h_blocks: (CscMatrix<f64>, CscMatrix<f64>, CscMatrix<f64>, CscMatrix<f64>)| {
         let (haa, hav, hva, hvv) = h_blocks;
         let blks = [haa, hav, hva, hvv];
         for (b_idx, block) in blks.iter().enumerate() {

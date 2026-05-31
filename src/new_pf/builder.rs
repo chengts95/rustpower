@@ -174,7 +174,7 @@ mod tests {
     #[test]
     fn compare_new_pf_performance() {
         use crate::new_pf::solver;
-        use nalgebra::DVector;
+        
         let net = load_ieee39();
         
         // 1. Setup Old Path

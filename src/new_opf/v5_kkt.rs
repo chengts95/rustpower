@@ -167,7 +167,7 @@ impl KKTSymbolicV5 {
             col_ptrs[nx + 2 * nb + r + 1] = row_idx.len();
         }
 
-        let mut find_k = |r: usize, c: usize| -> usize {
+        let _find_k = |r: usize, c: usize| -> usize {
             let s = col_ptrs[c]; let e = col_ptrs[c+1];
             row_idx[s..e].binary_search(&r).map(|p| s + p).expect("KKT element missing")
         };
@@ -192,7 +192,7 @@ impl KKTSymbolicV5 {
                         let r_pos = y_ri[nbr_range.clone()].binary_search(&r_bus).expect("Branch neighbor missing");
                         
                         for row_var_idx in 0..2 { // to row variable (θ or Vm)
-                            let r_var_off = vars[row_var_idx];
+                            let _r_var_off = vars[row_var_idx];
                             // Row index in KKT column `col`:
                             // θ_j column has: [Haa | Hva | dgP | dgQ]
                             // Vm_j column has: [Hav | Hvv | dgP | dgQ]

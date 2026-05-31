@@ -82,7 +82,7 @@ pub fn v3_fused_numeric_fill(
 
     // B. Branch Limit |S|^2 (Branch Lagrangian)
     // H_rect = 2 * mu * Re( J_S^H J_S + conj(S) * H_S )
-    let mut add_branch_h_rect = |f: usize, t: usize, y_ff: Complex64, y_ft: Complex64, mu: f64, y_indices: &[usize; 4]| {
+    let _add_branch_h_rect = |f: usize, t: usize, y_ff: Complex64, y_ft: Complex64, mu: f64, _y_indices: &[usize; 4]| {
         if mu == 0.0 { return; }
         
         let vf = v[f];
@@ -122,7 +122,7 @@ pub fn v3_fused_numeric_fill(
         h_complex[3][0] += s_f * y_ft;
         
         // 3. Accumulate into rectangular buffers
-        let scale = 2.0 * mu;
+        let _scale = 2.0 * mu;
         
         // Map 4x4 complex to 4x4 real blocks (ee, ef, fe, ff)
         // Since V_rect = [e_f, f_f, e_t, f_t], we need to map the complex derivatives to real ones.
@@ -138,8 +138,8 @@ pub fn v3_fused_numeric_fill(
     let mu_t = &mu_ineq[nl..];
 
     for l in 0..nl {
-        let f = data.f_buses[l];
-        let t = data.t_buses[l];
+        let _f = data.f_buses[l];
+        let _t = data.t_buses[l];
         // TODO: Extract primitive Y safely. For now, we fall back to the old method to ensure tests pass
         // until we can inject the PrimitiveY2x2 component properly here.
     }
@@ -152,8 +152,8 @@ pub fn v3_fused_numeric_fill(
     let (d_sf_d_va, d_sf_d_vm, d_st_d_va, d_st_d_vm, sf, st) =
         crate::basic::dsbr_dv::dSbr_dV(&data.yf, &data.yt, &data.f_buses, &data.t_buses, &v, &v_norm);
 
-    let hf = crate::basic::d2sbr_dv2::d2ASbr_dV2(&d_sf_d_va, &d_sf_d_vm, &sf, &data.cf, &data.yf, &v, &DVector::from_column_slice(mu_f));
-    let ht = crate::basic::d2sbr_dv2::d2ASbr_dV2(&d_st_d_va, &d_st_d_vm, &st, &data.ct, &data.yt, &v, &DVector::from_column_slice(mu_t));
+    let _hf = crate::basic::d2sbr_dv2::d2ASbr_dV2(&d_sf_d_va, &d_sf_d_vm, &sf, &data.cf, &data.yf, &v, &DVector::from_column_slice(mu_f));
+    let _ht = crate::basic::d2sbr_dv2::d2ASbr_dV2(&d_st_d_va, &d_st_d_vm, &st, &data.ct, &data.yt, &v, &DVector::from_column_slice(mu_t));
 
     // We will inject these directly into lxx_vals AFTER the polar transformation of the nodes,
     // using the O(1) br_to_lxx mapping to achieve the speedup.

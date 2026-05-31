@@ -14,7 +14,8 @@ pub struct PipsTiming {
     pub hess: std::time::Duration,
     pub gh: std::time::Duration,
     pub kkt: std::time::Duration,
-    pub solve: std::time::Duration,
+    pub solve_sym: std::time::Duration,
+    pub solve_num: std::time::Duration,
 }
 
 pub struct PipsOpt {
@@ -88,7 +89,8 @@ where
 
     let mut total_hess = std::time::Duration::ZERO;
     let mut total_kkt = std::time::Duration::ZERO;
-    let mut total_solve = std::time::Duration::ZERO;
+    let mut total_solve_sym = std::time::Duration::ZERO;
+    let mut total_solve_num = std::time::Duration::ZERO;
     let mut total_gh = std::time::Duration::ZERO;
 
     while !converged && i < opt.max_it {
@@ -100,7 +102,11 @@ where
         let gap = if niq > 0 { z.iter().zip(mu.iter()).map(|(a, b)| a * b).sum::<f64>() } else { 0.0 };
         let gamma = if niq > 0 { SIGMA * gap / niq as f64 } else { 0.0 };
 
-        let (dx, dlam_n, dz_n, dmu_n) = solve_kkt_timed(&lxx, &lx, &dg, &dh, &g, &h, &z, &mu, gamma, nx, neq, niq, niqnln, solver, opt.merged_slacks, v5, &mut total_kkt, &mut total_solve);
+        let mut dt_kkt = std::time::Duration::ZERO;
+        let mut dt_solve = std::time::Duration::ZERO;
+        let (dx, dlam_n, dz_n, dmu_n) = solve_kkt_timed(&lxx, &lx, &dg, &dh, &g, &h, &z, &mu, gamma, nx, neq, niq, niqnln, solver, opt.merged_slacks, v5, &mut dt_kkt, &mut dt_solve);
+        total_kkt += dt_kkt;
+        if i == 1 { total_solve_sym += dt_solve; } else { total_solve_num += dt_solve; }
 
         let alphap = step_size(&z, &dz_n, 0.99995);
         let alphad = step_size(&mu, &dmu_n, 0.99995);
@@ -136,7 +142,7 @@ where
     }
 
     if i > 0 {
-        eprintln!("\nPIPS ({} iters): Hess: {:?} G/H: {:?} KKT: {:?} Solv: {:?}", i, total_hess, total_gh, total_kkt, total_solve);
+        eprintln!("\nPIPS ({} iters): Hess: {:?} G/H: {:?} KKT: {:?} Solv(Sym): {:?} Solv(Num): {:?}", i, total_hess, total_gh, total_kkt, total_solve_sym, total_solve_num);
     }
 
     PipsResult {
@@ -144,7 +150,7 @@ where
         lam_eq: lam[..neqnln].to_vec(), mu_ineq: mu[..niqnln].to_vec(),
         mu_lower: vec![0.0; nx], mu_upper: vec![0.0; nx],
         message: if converged { "Converged".to_string() } else { "Failed".to_string() },
-        timing: PipsTiming { hess: total_hess, gh: total_gh, kkt: total_kkt, solve: total_solve },
+        timing: PipsTiming { hess: total_hess, gh: total_gh, kkt: total_kkt, solve_sym: total_solve_sym, solve_num: total_solve_num },
     }
 }
 
@@ -168,7 +174,7 @@ fn solve_kkt_timed<S: crate::basic::solver::Solve>(
         } else {
             let m_mat = if let Some(dh_ref) = dh {
                 if merged_slacks {
-                    let mut lxx_mod = lxx.clone();
+                    let lxx_mod = lxx.clone();
                     let mut diag_vals = vec![0.0; nx];
                     for k in niqnln..niq {
                         let weight = mu[k] / z[k];
@@ -461,7 +467,8 @@ where
 
     let mut total_hess = std::time::Duration::ZERO;
     let mut total_kkt = std::time::Duration::ZERO;
-    let mut total_solve = std::time::Duration::ZERO;
+    let mut total_solve_sym = std::time::Duration::ZERO;
+    let mut total_solve_num = std::time::Duration::ZERO;
     let mut total_gh = std::time::Duration::ZERO;
 
     let mut kkt_vals = vec![0.0f64; v5.row_idx.len()];
@@ -476,7 +483,11 @@ where
         let gap = if niq > 0 { z.iter().zip(mu.iter()).map(|(a, b)| a * b).sum::<f64>() } else { 0.0 };
         let gamma = if niq > 0 { SIGMA * gap / niq as f64 } else { 0.0 };
 
-        let (dx, dlam_n, dz_n, dmu_n) = solve_kkt_fused_timed(&kkt_vals, &lx, &dh, &g, &h, &z, &mu, gamma, nx, neq, niq, niqnln, solver, v5, &mut total_kkt, &mut total_solve);
+        let mut dt_kkt = std::time::Duration::ZERO;
+        let mut dt_solve = std::time::Duration::ZERO;
+        let (dx, dlam_n, dz_n, dmu_n) = solve_kkt_fused_timed(&kkt_vals, &lx, &dh, &g, &h, &z, &mu, gamma, nx, neq, niq, niqnln, solver, v5, &mut dt_kkt, &mut dt_solve);
+        total_kkt += dt_kkt;
+        if i == 1 { total_solve_sym += dt_solve; } else { total_solve_num += dt_solve; }
 
         let alphap = step_size(&z, &dz_n, 0.99995);
         let alphad = step_size(&mu, &dmu_n, 0.99995);
@@ -512,7 +523,7 @@ where
     }
 
     if i > 0 {
-        eprintln!("\nPIPS ({} iters): Hess: {:?} G/H: {:?} KKT: {:?} Solv: {:?}", i, total_hess, total_gh, total_kkt, total_solve);
+        eprintln!("\nPIPS ({} iters): Hess: {:?} G/H: {:?} KKT: {:?} Solv(Sym): {:?} Solv(Num): {:?}", i, total_hess, total_gh, total_kkt, total_solve_sym, total_solve_num);
     }
 
     PipsResult {
@@ -520,7 +531,7 @@ where
         lam_eq: lam[..neqnln].to_vec(), mu_ineq: mu[..niqnln].to_vec(),
         mu_lower: vec![0.0; nx], mu_upper: vec![0.0; nx],
         message: if converged { "Converged".to_string() } else { "Failed".to_string() },
-        timing: PipsTiming { hess: total_hess, gh: total_gh, kkt: total_kkt, solve: total_solve },
+        timing: PipsTiming { hess: total_hess, gh: total_gh, kkt: total_kkt, solve_sym: total_solve_sym, solve_num: total_solve_num },
     }
 }
 

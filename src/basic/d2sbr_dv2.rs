@@ -323,7 +323,7 @@ pub(crate) fn spgemm(
     let m = a.nrows();
     let n = b.ncols();
     assert_eq!(a.ncols(), b.nrows());
-    let k = a.ncols();
+    let _k = a.ncols();
 
     let a_cp = a.col_offsets();
     let a_ri = a.row_indices();
@@ -541,8 +541,8 @@ fn subtract_diags(
     negate_e: bool,
 ) -> CscMatrix<Complex64> {
     let nb = mat.ncols();
-    let mut c_cp = mat.col_offsets().to_vec();
-    let mut c_ri = mat.row_indices().to_vec();
+    let c_cp = mat.col_offsets().to_vec();
+    let c_ri = mat.row_indices().to_vec();
     let mut c_v = mat.values().to_vec();
 
     // For each diagonal position j, add -(d[j] + e[j]) to mat[j,j] (if present)
