@@ -130,3 +130,66 @@ pub fn pips_v5_3(
         &v53_cache.base,
     )
 }
+
+/// V5.6 path: V5.3 KKT assembly + V5.6 G/H direct-fill with linear bound constraints
+/// baked into a static dg/dh structure. No merge_constraints/transpose/hstack in the loop.
+pub fn pips_v5_6(
+    data: &NewOPFData,
+    x0: Vec<f64>,
+    xmin: Vec<f64>,
+    xmax: Vec<f64>,
+    opt: PipsOpt,
+) -> PipsResult {
+    let v3_cache = V3SymbolicCache::analyze(data);
+    let v53_cache = crate::new_opf::v5_3_kernel::KKTSymbolicV5_3::build(data);
+    let ev = crate::new_opf::v5_6_evaluator::V56Evaluator::new(data);
+    let mut persistent_solver = crate::basic::solver::DefaultSolver::default();
+
+    crate::opf::pips::pips_with_fused_assembly_v56(
+        |x| cost::opf_costfcn(data, x),
+        |x, g, h, dg_v, dh_v| ev.update(data, x, g, h, dg_v, dh_v),
+        |x, lam_eq, mu_ineq, z_ineq, cost_mult, kkt_vals| {
+            use super::v5_3_kernel::*;
+            assemble_kkt_v5_3(&v53_cache, data, &v3_cache.y_transpose_idx, x, lam_eq, mu_ineq, z_ineq, cost_mult, kkt_vals);
+        },
+        x0, xmin, xmax,
+        PipsOpt { merged_slacks: true, ..opt },
+        &mut persistent_solver,
+        &v53_cache.base,
+        ev.dg_cp.clone(), ev.dg_ri.clone(), ev.dg_vals0.clone(),
+        ev.dh_cp.clone(), ev.dh_ri.clone(), ev.dh_vals0.clone(),
+        ev.neqnln, ev.niqnln, ev.neq, ev.niq,
+    )
+}
+
+/// V5.5 path: Zero-Allocation Jacobian + Partitioned Isomorphic assembly.
+/// Eliminates intermediate matrices for both Hessian and Jacobian during the iteration loop.
+pub fn pips_v5_5(
+    data: &NewOPFData,
+    x0: Vec<f64>,
+    xmin: Vec<f64>,
+    xmax: Vec<f64>,
+    opt: PipsOpt,
+) -> PipsResult {
+    let v3_cache = V3SymbolicCache::analyze(data);
+    let v53_cache = crate::new_opf::v5_3_kernel::KKTSymbolicV5_3::build(data);
+    let v55_evaluator = crate::new_opf::v5_5_evaluator::V55Evaluator::new(data);
+    let mut persistent_solver = crate::basic::solver::DefaultSolver::default();
+
+    crate::opf::pips::pips_with_fused_assembly_v55(
+        |x| cost::opf_costfcn(data, x),
+        |x, g, h, dgn_v, dhn_v| v55_evaluator.update(data, x, g, h, dgn_v, dhn_v),
+        |x| {
+            let (g, h, dg, dh) = constraints::opf_consfcn(data, x);
+            (h, g, dh, dg)
+        },
+        |x, lam_eq, mu_ineq, z_ineq, cost_mult, kkt_vals| {
+            use super::v5_3_kernel::*;
+            assemble_kkt_v5_3(&v53_cache, data, &v3_cache.y_transpose_idx, x, lam_eq, mu_ineq, z_ineq, cost_mult, kkt_vals);
+        },
+        x0, xmin, xmax,
+        PipsOpt { merged_slacks: true, ..opt },
+        &mut persistent_solver,
+        &v53_cache.base,
+    )
+}

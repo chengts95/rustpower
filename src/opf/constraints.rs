@@ -52,47 +52,32 @@ pub fn opf_consfcn(
     }
 
     // ── inequality constraint values + branch jacobian (single dSbr_dV pass) ──
-    // Previously dSbr_dV was called twice: once here discarding derivatives (only Sf/St),
-    // and again below for dh. They produce identical Sf/St, so we fuse into one call.
     let flow_max = data.flow_max_sq();
-    let nl2 = nl; // all branches constrained for now
+    let nl2 = nl;
 
-    let (dSf_dVa, dSf_dVm, dSt_dVa, dSt_dVm, Sf, St) = dSbr_dV(
+    let (d_sf_d_va, d_sf_d_vm, d_st_d_va, d_st_d_vm, sf, st) = dSbr_dV(
         &data.yf, &data.yt, &data.f_buses, &data.t_buses, &v, &v_norm,
     );
 
     let mut h = vec![0.0f64; 2 * nl2];
     for l in 0..nl2 {
-        h[l] = Sf[l].norm_sqr() - flow_max[l];
-        h[nl2 + l] = St[l].norm_sqr() - flow_max[l];
+        h[l] = sf[l].norm_sqr() - flow_max[l];
+        h[nl2 + l] = st[l].norm_sqr() - flow_max[l];
     }
 
     // ── Jacobians ────────────────────────────────────────────────────────────
-    // dSbus_dV returns (dS_dVm, dS_dVa) — note: pypower returns (dVm, dVa) order
-    let (dSbus_dVm, dSbus_dVa) = dSbus_dV(&data.ybus, &v, &v_norm);
-
-    // dg has size 2nb × nx.  We store it transposed (nx × 2nb) for PIPS.
-    // Columns of dg^T = rows of dg:
-    //   dg[i, :]      = d(g_i) / dx   for P mismatch rows
-    //   dg[nb+i, :]   = d(g_nb+i) / dx  for Q mismatch rows
-    //
-    // Block layout of dg (2nb × nx):
-    //   [Re(dSbus_dVa)  Re(dSbus_dVm)  -Cg   0  ]   P rows
-    //   [Im(dSbus_dVa)  Im(dSbus_dVm)   0  -Cg  ]   Q rows
-    //
-    // We build dg^T (nx × 2nb) as CSC directly.
+    let (d_sbus_d_vm, d_sbus_d_va) = dSbus_dV(&data.ybus, &v, &v_norm);
 
     let dg_t = build_dg_transposed(
         nb, ng, nx,
-        &dSbus_dVa, &dSbus_dVm,
+        &d_sbus_d_va, &d_sbus_d_vm,
         &data.cg,
     );
 
-    // dh (2nl2 × nx) transposed = (nx × 2nl2), reusing the dSbr_dV derivatives above.
     let dh_t = {
-        let (dAf_dVa, dAf_dVm, dAt_dVa, dAt_dVm) =
-            dAbr_dV(&dSf_dVa, &dSf_dVm, &dSt_dVa, &dSt_dVm, &Sf, &St);
-        build_dh_transposed(nb, nx, nl2, &dAf_dVa, &dAf_dVm, &dAt_dVa, &dAt_dVm)
+        let (d_af_d_va, d_af_d_vm, d_at_d_va, d_at_d_vm) =
+            dAbr_dV(&d_sf_d_va, &d_sf_d_vm, &d_st_d_va, &d_st_d_vm, &sf, &st);
+        build_dh_transposed(nb, nx, nl2, &d_af_d_va, &d_af_d_vm, &d_at_d_va, &d_at_d_vm)
     };
 
     (g, h, dg_t, dh_t)

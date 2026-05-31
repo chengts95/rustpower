@@ -485,7 +485,7 @@ where
 
         let mut dt_kkt = std::time::Duration::ZERO;
         let mut dt_solve = std::time::Duration::ZERO;
-        let (dx, dlam_n, dz_n, dmu_n) = solve_kkt_fused_timed(&kkt_vals, &lx, &dh, &g, &h, &z, &mu, gamma, nx, neq, niq, niqnln, solver, v5, &mut dt_kkt, &mut dt_solve);
+        let (dx, dlam_n, dz_n, dmu_n) = solve_kkt_fused_timed(&kkt_vals, &lx, dh.as_ref(), &g, &h, &z, &mu, gamma, nx, neq, niq, niqnln, solver, v5, &mut dt_kkt, &mut dt_solve);
         total_kkt += dt_kkt;
         if i == 1 { total_solve_sym += dt_solve; } else { total_solve_num += dt_solve; }
 
@@ -535,8 +535,258 @@ where
     }
 }
 
+pub fn pips_with_fused_assembly_v55<F, Eval, GH, FA, S>(
+    f_fcn: F, eval_fcn: Eval, gh_fcn: GH, mut fused_assembly: FA, x0: Vec<f64>, xmin: Vec<f64>, xmax: Vec<f64>, opt: PipsOpt, solver: &mut S,
+    v5: &crate::new_opf::v5_kkt::KKTSymbolicV5,
+) -> PipsResult
+where
+    F: Fn(&[f64]) -> (f64, Vec<f64>),
+    Eval: Fn(&[f64], &mut [f64], &mut [f64], &mut [f64], &mut [f64]),
+    GH: Fn(&[f64]) -> (Vec<f64>, Vec<f64>, CscMatrix<f64>, CscMatrix<f64>),
+    FA: FnMut(&[f64], &[f64], &[f64], &[f64], f64, &mut [f64]),
+    S: crate::basic::solver::Solve,
+{
+    const XI: f64 = 0.99995; const SIGMA: f64 = 0.1; const Z0: f64 = 1.0;
+    const ALPHA_MIN: f64 = 1e-8;
+
+    let nx = x0.len(); let cm = opt.cost_mult;
+    let eps = f64::EPSILON;
+    let mut ieq = Vec::new(); let mut ilt = Vec::new(); let mut igt = Vec::new(); let mut ibx = Vec::new();
+    for i in 0..nx {
+        let lo = xmin[i]; let hi = xmax[i];
+        if (hi - lo).abs() <= eps { ieq.push(i); }
+        else if lo <= -1e10 && hi < 1e10 { ilt.push(i); }
+        else if lo > -1e10 && hi >= 1e10 { igt.push(i); }
+        else if lo > -1e10 && hi < 1e10 { ibx.push(i); }
+    }
+    let (ai, bi_vec, ae, be_vec) = build_linear_constraints(nx, &ieq, &ilt, &igt, &ibx, &xmin, &xmax);
+
+    let mut x = x0.clone();
+    let (f0_raw, df0) = f_fcn(&x);
+    let mut f = f0_raw * cm;
+    let mut df: Vec<f64> = df0.iter().map(|&v| v * cm).collect();
+
+    // Init matrices structure using the slow path ONCE
+    let (hn, gn, dhn, dgn) = gh_fcn(&x);
+    let (mut h, mut g, mut dh, mut dg) = merge_constraints(&x, &hn, &gn, &dhn, &dgn, &ai, &bi_vec, &ae, &be_vec);
+    
+    let mut gn_v = gn.clone();
+    let mut hn_v = hn.clone();
+    let mut dgn_v = dgn.values().to_vec();
+    let mut dhn_v = dhn.values().to_vec();
+
+    let neq = g.len(); let niq = h.len();
+    let neqnln = gn.len(); let niqnln = hn.len();
+
+    let mut lam = vec![0.0f64; neq];
+    let mut z = vec![Z0; niq]; let mut mu = vec![Z0; niq];
+    for k in 0..niq { if h[k] < -Z0 { z[k] = -h[k]; } mu[k] = Z0 / z[k]; }
+
+    let mut lx = df.clone();
+    if let Some(ref dg_ref) = dg { matvec_add_to(&mut lx, dg_ref, &lam); }
+    if let Some(ref dh_ref) = dh { matvec_add_to(&mut lx, dh_ref, &mu); }
+
+    let (mut feascond, mut gradcond, mut compcond, mut costcond) = convergence_measures(&g, &h, &lx, &lam, &mu, &z, &x, f, f);
+    let mut converged = feascond < opt.feastol && gradcond < opt.gradtol && compcond < opt.comptol && costcond < opt.costtol;
+    let mut i = 0usize; let mut f0 = f;
+
+    let mut total_hess = std::time::Duration::ZERO;
+    let mut total_kkt = std::time::Duration::ZERO;
+    let mut total_solve_sym = std::time::Duration::ZERO;
+    let mut total_solve_num = std::time::Duration::ZERO;
+    let mut total_gh = std::time::Duration::ZERO;
+
+    let mut kkt_vals = vec![0.0f64; v5.row_idx.len()];
+
+    while !converged && i < opt.max_it {
+        i += 1;
+        let t_start = std::time::Instant::now();
+        // Fused Assembly
+        fused_assembly(&x, &lam[..neqnln], &mu[..niqnln], &z[..niqnln], cm, &mut kkt_vals);
+        total_hess += t_start.elapsed();
+
+        let gap = if niq > 0 { z.iter().zip(mu.iter()).map(|(a, b)| a * b).sum::<f64>() } else { 0.0 };
+        let gamma = if niq > 0 { SIGMA * gap / niq as f64 } else { 0.0 };
+
+        let mut dt_kkt = std::time::Duration::ZERO;
+        let mut dt_solve = std::time::Duration::ZERO;
+        let (dx, dlam_n, dz_n, dmu_n) = solve_kkt_fused_timed(&kkt_vals, &lx, dh.as_ref(), &g, &h, &z, &mu, gamma, nx, neq, niq, niqnln, solver, v5, &mut dt_kkt, &mut dt_solve);
+        total_kkt += dt_kkt;
+        if i == 1 { total_solve_sym += dt_solve; } else { total_solve_num += dt_solve; }
+
+        let alphap = step_size(&z, &dz_n, 0.99995);
+        let alphad = step_size(&mu, &dmu_n, 0.99995);
+
+        for j in 0..nx { x[j] += alphap * dx[j]; }
+        for j in 0..niq { z[j] += alphap * dz_n[j]; }
+        for j in 0..neq { lam[j] += alphad * dlam_n[j]; }
+        for j in 0..niq { mu[j] += alphad * dmu_n[j]; }
+
+        let t_gh_start = std::time::Instant::now();
+        let (f_new, df_new) = f_fcn(&x);
+        f = f_new * cm;
+        df = df_new.iter().map(|&v| v * cm).collect();
+
+        // V5.5 Zero-Allocation Update
+        eval_fcn(&x, &mut gn_v, &mut hn_v, &mut dgn_v, &mut dhn_v);
+        
+        let dgn_csc = CscMatrix::try_from_csc_data(dgn.nrows(), dgn.ncols(), dgn.col_offsets().to_vec(), dgn.row_indices().to_vec(), dgn_v.clone()).unwrap();
+        let dhn_csc = CscMatrix::try_from_csc_data(dhn.nrows(), dhn.ncols(), dhn.col_offsets().to_vec(), dhn.row_indices().to_vec(), dhn_v.clone()).unwrap();
+        
+        // We still use merge_constraints to handle the linear boundary equations.
+        let (h_new, g_new, dh_new, dg_new) = merge_constraints(&x, &hn_v, &gn_v, &dhn_csc, &dgn_csc, &ai, &bi_vec, &ae, &be_vec);
+        h = h_new; g = g_new; dh = dh_new; dg = dg_new;
+
+        lx = df.clone();
+        if let Some(ref dg_ref) = dg { matvec_add_to(&mut lx, dg_ref, &lam); }
+        if let Some(ref dh_ref) = dh { matvec_add_to(&mut lx, dh_ref, &mu); }
+        total_gh += t_gh_start.elapsed();
+
+        let (fc, gc, cc, cc2) = convergence_measures(&g, &h, &lx, &lam, &mu, &z, &x, f, f0);
+        feascond = fc; gradcond = gc; compcond = cc; costcond = cc2;
+        
+        if nx > 20000 {
+            // println!("Iter {} f={:.6} fc={:.2e} gc={:.2e} cc={:.2e}", i, f/cm, fc, gc, cc);
+        }
+
+        if feascond < opt.feastol && gradcond < opt.gradtol && compcond < opt.comptol && costcond < opt.costtol {
+            converged = true;
+        } else if x.iter().any(|v| v.is_nan()) || alphap < 1e-8 || alphad < 1e-8 {
+            break;
+        }
+        f0 = f;
+    }
+
+    if i > 0 {
+        eprintln!("\nPIPS ({} iters): Hess: {:?} G/H: {:?} KKT: {:?} Solv(Sym): {:?} Solv(Num): {:?}", i, total_hess, total_gh, total_kkt, total_solve_sym, total_solve_num);
+    }
+
+    PipsResult {
+        x, f: f / cm, converged, iterations: i,
+        lam_eq: lam[..neqnln].to_vec(), mu_ineq: mu[..niqnln].to_vec(),
+        mu_lower: vec![0.0; nx], mu_upper: vec![0.0; nx],
+        message: if converged { "Converged".to_string() } else { "Failed".to_string() },
+        timing: PipsTiming { hess: total_hess, gh: total_gh, kkt: total_kkt, solve_sym: total_solve_sym, solve_num: total_solve_num },
+    }
+}
+
+/// V5.6 loop: G/H fully direct-filled INCLUDING linear bound constraints. The merged
+/// dg/dh CSC matrices are built once; each iteration only overwrites their `.values`
+/// (in place, no realloc) and the g/h vectors. No merge_constraints / transpose / hstack.
+#[allow(clippy::too_many_arguments)]
+pub fn pips_with_fused_assembly_v56<F, Eval, FA, S>(
+    f_fcn: F,
+    eval_fcn: Eval,
+    mut fused_assembly: FA,
+    x0: Vec<f64>, xmin: Vec<f64>, xmax: Vec<f64>, opt: PipsOpt, solver: &mut S,
+    v5: &crate::new_opf::v5_kkt::KKTSymbolicV5,
+    // Prebuilt merged structures (constant) from V56Evaluator.
+    dg_cp: Vec<usize>, dg_ri: Vec<usize>, dg_vals0: Vec<f64>,
+    dh_cp: Vec<usize>, dh_ri: Vec<usize>, dh_vals0: Vec<f64>,
+    neqnln: usize, niqnln: usize, neq: usize, niq: usize,
+) -> PipsResult
+where
+    F: Fn(&[f64]) -> (f64, Vec<f64>),
+    // eval(x, g[neq], h[niq], dg_v, dh_v) — fills merged g/h and dg/dh value arrays.
+    Eval: Fn(&[f64], &mut [f64], &mut [f64], &mut [f64], &mut [f64]),
+    FA: FnMut(&[f64], &[f64], &[f64], &[f64], f64, &mut [f64]),
+    S: crate::basic::solver::Solve,
+{
+    const SIGMA: f64 = 0.1; const Z0: f64 = 1.0;
+    let nx = x0.len(); let cm = opt.cost_mult;
+
+    let mut x = x0.clone();
+    let (f0_raw, df0) = f_fcn(&x);
+    let mut f = f0_raw * cm;
+    let mut df: Vec<f64> = df0.iter().map(|&v| v * cm).collect();
+
+    // Merged dg/dh as owned CSC; only values mutate each iter.
+    let mut dg = CscMatrix::try_from_csc_data(nx, neq, dg_cp, dg_ri, dg_vals0).unwrap();
+    let mut dh = CscMatrix::try_from_csc_data(nx, niq, dh_cp, dh_ri, dh_vals0).unwrap();
+    let mut g = vec![0.0f64; neq];
+    let mut h = vec![0.0f64; niq];
+    eval_fcn(&x, &mut g, &mut h, dg.values_mut(), dh.values_mut());
+
+    let mut lam = vec![0.0f64; neq];
+    let mut z = vec![Z0; niq]; let mut mu = vec![Z0; niq];
+    for k in 0..niq { if h[k] < -Z0 { z[k] = -h[k]; } mu[k] = Z0 / z[k]; }
+
+    let mut lx = df.clone();
+    matvec_add_to(&mut lx, &dg, &lam);
+    matvec_add_to(&mut lx, &dh, &mu);
+
+    let (mut feascond, mut gradcond, mut compcond, mut costcond) = convergence_measures(&g, &h, &lx, &lam, &mu, &z, &x, f, f);
+    let mut converged = feascond < opt.feastol && gradcond < opt.gradtol && compcond < opt.comptol && costcond < opt.costtol;
+    let mut i = 0usize; let mut f0 = f;
+
+    let mut total_hess = std::time::Duration::ZERO;
+    let mut total_kkt = std::time::Duration::ZERO;
+    let mut total_solve_sym = std::time::Duration::ZERO;
+    let mut total_solve_num = std::time::Duration::ZERO;
+    let mut total_gh = std::time::Duration::ZERO;
+
+    let mut kkt_vals = vec![0.0f64; v5.row_idx.len()];
+
+    while !converged && i < opt.max_it {
+        i += 1;
+        let t_start = std::time::Instant::now();
+        fused_assembly(&x, &lam[..neqnln], &mu[..niqnln], &z[..niqnln], cm, &mut kkt_vals);
+        total_hess += t_start.elapsed();
+
+        let gap = if niq > 0 { z.iter().zip(mu.iter()).map(|(a, b)| a * b).sum::<f64>() } else { 0.0 };
+        let gamma = if niq > 0 { SIGMA * gap / niq as f64 } else { 0.0 };
+
+        let mut dt_kkt = std::time::Duration::ZERO;
+        let mut dt_solve = std::time::Duration::ZERO;
+        let (dx, dlam_n, dz_n, dmu_n) = solve_kkt_fused_timed(&kkt_vals, &lx, Some(&dh), &g, &h, &z, &mu, gamma, nx, neq, niq, niqnln, solver, v5, &mut dt_kkt, &mut dt_solve);
+        total_kkt += dt_kkt;
+        if i == 1 { total_solve_sym += dt_solve; } else { total_solve_num += dt_solve; }
+
+        let alphap = step_size(&z, &dz_n, 0.99995);
+        let alphad = step_size(&mu, &dmu_n, 0.99995);
+        for j in 0..nx { x[j] += alphap * dx[j]; }
+        for j in 0..niq { z[j] += alphap * dz_n[j]; }
+        for j in 0..neq { lam[j] += alphad * dlam_n[j]; }
+        for j in 0..niq { mu[j] += alphad * dmu_n[j]; }
+
+        let t_gh_start = std::time::Instant::now();
+        let (f_new, df_new) = f_fcn(&x);
+        f = f_new * cm;
+        df = df_new.iter().map(|&v| v * cm).collect();
+
+        // V5.6: overwrite g/h and dg/dh values in place — no matrix construction.
+        eval_fcn(&x, &mut g, &mut h, dg.values_mut(), dh.values_mut());
+
+        lx = df.clone();
+        matvec_add_to(&mut lx, &dg, &lam);
+        matvec_add_to(&mut lx, &dh, &mu);
+        total_gh += t_gh_start.elapsed();
+
+        let (fc, gc, cc, cc2) = convergence_measures(&g, &h, &lx, &lam, &mu, &z, &x, f, f0);
+        feascond = fc; gradcond = gc; compcond = cc; costcond = cc2;
+        if feascond < opt.feastol && gradcond < opt.gradtol && compcond < opt.comptol && costcond < opt.costtol {
+            converged = true;
+        } else if x.iter().any(|v| v.is_nan()) || alphap < 1e-8 || alphad < 1e-8 {
+            break;
+        }
+        f0 = f;
+    }
+
+    if i > 0 {
+        eprintln!("\nPIPS-v56 ({} iters): Hess: {:?} G/H: {:?} KKT: {:?} Solv(Sym): {:?} Solv(Num): {:?}", i, total_hess, total_gh, total_kkt, total_solve_sym, total_solve_num);
+    }
+
+    PipsResult {
+        x, f: f / cm, converged, iterations: i,
+        lam_eq: lam[..neqnln].to_vec(), mu_ineq: mu[..niqnln].to_vec(),
+        mu_lower: vec![0.0; nx], mu_upper: vec![0.0; nx],
+        message: if converged { "Converged".to_string() } else { "Failed".to_string() },
+        timing: PipsTiming { hess: total_hess, gh: total_gh, kkt: total_kkt, solve_sym: total_solve_sym, solve_num: total_solve_num },
+    }
+}
+
 fn solve_kkt_fused_timed<S: crate::basic::solver::Solve>(
-    kkt_vals: &[f64], lx: &[f64], dh: &Option<CscMatrix<f64>>,
+    kkt_vals: &[f64], lx: &[f64], dh: Option<&CscMatrix<f64>>,
     g: &[f64], h: &[f64], z: &[f64], mu: &[f64], gamma: f64,
     nx: usize, neq: usize, niq: usize, niqnln: usize, solver: &mut S,
     v5: &crate::new_opf::v5_kkt::KKTSymbolicV5,

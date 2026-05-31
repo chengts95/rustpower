@@ -8,6 +8,8 @@ pub mod v4_numeric_rect;
 pub mod v5_kkt;
 pub mod v5_2_kernel;
 pub mod v5_3_kernel;
+pub mod v5_5_evaluator;
+pub mod v5_6_evaluator;
 pub mod math_verify;
 pub mod pips;
 pub mod problem;
@@ -225,11 +227,11 @@ mod tests {
     }
 
     #[test]
-    fn test_v5_versions_vs_v4_lxx_only() {
-        let net = crate::io::pandapower::load_csv_zip(&format!("{}/cases/IEEE118/data.zip", std::env::var("CARGO_MANIFEST_DIR").unwrap())).unwrap();
+    fn test_v5_5_evaluator_correctness() {
+        let net = crate::io::pandapower::load_csv_zip(&format!("{}/cases/pegase9241/data.zip", std::env::var("CARGO_MANIFEST_DIR").unwrap())).unwrap();
         let mut base_data = opf_data_from_network(&net);
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-        let path = format!("{}/cases/IEEE118/data.zip", dir);
+        let path = format!("{}/cases/pegase9241/data.zip", dir);
         if let Some(opf_cfg) = crate::io::pandapower::load_opf_cfg_zip(&path) {
             if let Some(row) = opf_cfg.get("ext_grid", 0) {
                 base_data.cost_coeffs[0] = [row.cp2_eur_per_mw2, row.cp1_eur_per_mw, row.cp0_eur];
@@ -241,61 +243,50 @@ mod tests {
             }
         }
         let data = NewOPFData::new(base_data);
-        let nb = data.nb;
-        let x = data.warm_x0();
-        let lam_eq = vec![0.1; 2 * data.nb];
-        let mu_ineq = vec![0.05; 2 * data.nl];
-        let z_ineq = vec![0.7; 2 * data.nl];
-        let cost_mult = 1e-4;
+        let x0 = data.warm_x0();
 
-        let v3c = crate::new_opf::v3_symbolic::V3SymbolicCache::analyze(&data);
-        let v5_sym = crate::new_opf::v5_kkt::KKTSymbolicV5::build(&data);
-        let v53_sym = v5_3_kernel::KKTSymbolicV5_3::build(&data);
+        // 1. Baseline: opf_consfcn
+        let (g_ref, h_ref, dgn_ref, dhn_ref) = crate::opf::constraints::opf_consfcn(&data, &x0);
 
-        // --- 1. Baseline: V4 Lxx only ---
-        let lxx_v4 = crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
-            &data, &v3c, x.as_slice(), &lam_eq, &mu_ineq, Some(&z_ineq), cost_mult,
-        );
-        let ref_lxx = lxx_v4.values();
+        // 2. V5.5 Evaluator
+        let evaluator = crate::new_opf::v5_5_evaluator::V55Evaluator::new(&data);
+        let mut g_test = vec![0.0; g_ref.len()];
+        let mut h_test = vec![0.0; h_ref.len()];
+        let mut dgn_v_test = vec![0.0; dgn_ref.values().len()];
+        let mut dhn_v_test = vec![0.0; dhn_ref.values().len()];
 
-        // --- 2. Extract Lxx from V5.2 KKT ---
-        let mut vals52 = vec![0.0; v5_sym.row_idx.len()];
-        v5_2_kernel::fill_variable_columns(&v5_sym, &data, &v3c.y_transpose_idx, &x, &lam_eq, cost_mult, &mut vals52);
-        v5_2_kernel::fill_branch_hessian(&v5_sym, &data, &x, &mu_ineq, &z_ineq, &mut vals52);
-        
-        // --- 3. Extract Lxx from V5.3 KKT ---
-        let mut vals53 = vec![0.0; v53_sym.base.row_idx.len()];
-        v5_3_kernel::assemble_kkt_v5_3(&v53_sym, &data, &v3c.y_transpose_idx, &x, &lam_eq, &mu_ineq, &z_ineq, cost_mult, &mut vals53);
+        evaluator.update(&data, &x0, &mut g_test, &mut h_test, &mut dgn_v_test, &mut dhn_v_test);
 
-        let compare_lxx = |label: &str, candidate_kkt: &[f64]| {
-            let mut max_diff: f64 = 0.0;
-            let mut diff_count = 0;
-            let _ref_idx = 0;
-            // Variable columns (θ, Vm, Pg, Qg)
-            for j in 0..data.nx() {
-                let start = v5_sym.col_ptrs[j];
-                let _end = v5_sym.col_ptrs[j + 1];
-                let _deg = if j < 2*nb { v3c.y_transpose_idx.len() / nb  } else { 0 }; // approximation
-                // wait, the actual Lxx part in KKT column j is the first block
-                let lxx_nnz = lxx_v4.col_offsets()[j + 1] - lxx_v4.col_offsets()[j];
-                for off in 0..lxx_nnz {
-                    let v_ref = ref_lxx[lxx_v4.col_offsets()[j] + off];
-                    let v_cand = candidate_kkt[start + off];
-                    let d = (v_ref - v_cand).abs();
-                    if d > 1e-11 {
-                        if diff_count < 5 {
-                            println!("{} Lxx Diff at col {}, nnz {}: ref={:.6e}, cand={:.6e} (err={:.3e})", label, j, off, v_ref, v_cand, d);
-                        }
-                        max_diff = max_diff.max(d);
-                        diff_count += 1;
-                    }
-                }
-            }
-            println!("{} vs V4 Lxx: diff_count={}, max_diff={:.3e}", label, diff_count, max_diff);
-        };
+        // Verify g
+        for (a, b) in g_ref.iter().zip(g_test.iter()) { assert!((a - b).abs() < 1e-12, "g mismatch"); }
+        // Verify h
+        for (a, b) in h_ref.iter().zip(h_test.iter()) { assert!((a - b).abs() < 1e-12, "h mismatch"); }
+        // Verify dgn
+        for (a, b) in dgn_ref.values().iter().zip(dgn_v_test.iter()) { assert!((a - b).abs() < 1e-12, "dgn mismatch: ref {}, test {}", a, b); }
+        // Verify dhn
+        for (a, b) in dhn_ref.values().iter().zip(dhn_v_test.iter()) { assert!((a - b).abs() < 1e-12, "dhn mismatch: ref {}, test {}", a, b); }
 
-        compare_lxx("V5.2", &vals52);
-        compare_lxx("V5.3", &vals53);
+        let mut x_rand = x0.clone();
+        for i in 0..x_rand.len() {
+            x_rand[i] += 0.1 * (i as f64 % 3.0 - 1.0);
+        }
+
+        // Baseline: opf_consfcn
+        let (g_ref, h_ref, dgn_ref, dhn_ref) = crate::opf::constraints::opf_consfcn(&data, &x_rand);
+
+        // V5.5 Evaluator
+        evaluator.update(&data, &x_rand, &mut g_test, &mut h_test, &mut dgn_v_test, &mut dhn_v_test);
+
+        // Verify g
+        for (a, b) in g_ref.iter().zip(g_test.iter()) { assert!((a - b).abs() < 1e-12, "g mismatch on rand"); }
+        // Verify h
+        for (a, b) in h_ref.iter().zip(h_test.iter()) { assert!((a - b).abs() < 1e-12, "h mismatch on rand"); }
+        // Verify dgn
+        for (a, b) in dgn_ref.values().iter().zip(dgn_v_test.iter()) { assert!((a - b).abs() < 1e-12, "dgn mismatch on rand: ref {}, test {}", a, b); }
+        // Verify dhn
+        for (a, b) in dhn_ref.values().iter().zip(dhn_v_test.iter()) { assert!((a - b).abs() < 1e-12, "dhn mismatch on rand: ref {}, test {}", a, b); }
+
+        println!("V5.5 Evaluator exactly matches opf_consfcn baseline on random x!");
     }
 
     #[test]
@@ -585,6 +576,11 @@ mod tests {
             let r53 = pips::pips_v5_3(&data, x0.clone(), xmin.clone(), xmax.clone(), PipsOpt { max_it: mi, cost_mult: 1e-4, ..Default::default() });
             let d53 = t0.elapsed();
             row(case, "V5.3", &r53, d53);
+
+            let t0 = std::time::Instant::now();
+            let r55 = pips::pips_v5_5(&data, x0.clone(), xmin.clone(), xmax.clone(), PipsOpt { max_it: mi, cost_mult: 1e-4, ..Default::default() });
+            let d55 = t0.elapsed();
+            row(case, "V5.5", &r55, d55);
         }
     }
 
