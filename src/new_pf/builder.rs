@@ -62,12 +62,17 @@ pub fn build_ybus_binary(net: &Network) -> (CscMatrix<Complex64>, CscMatrix<Comp
     let mut ybus = &a_mat.transpose() * &m_mat;
 
     // 6. Add Shunts
+    // Convention (pandapower load sign): Q_mvar > 0 = inductive (B < 0), Q_mvar < 0 = capacitive (B > 0).
+    // Y = G + jB = P/V² - jQ/V²  →  b_pu = -q_mvar/base_mva.
+    // Also apply (vbus/vn_shunt)² ratio when the shunt's rated voltage differs from the bus voltage.
     for sh in net.shunt.as_deref().unwrap_or(&[]) {
         if !sh.in_service { continue; }
         if let Some(&idx) = bus_id_to_idx.get(&sh.bus) {
             let step = sh.step as f64;
-            let g_pu = sh.p_mw * step / base_mva;
-            let b_pu = sh.q_mvar * step / base_mva;
+            let v_ratio = vbase[idx] / sh.vn_kv;
+            let scale = v_ratio * v_ratio;
+            let g_pu = sh.p_mw * step / base_mva * scale;
+            let b_pu = -sh.q_mvar * step / base_mva * scale;
             let y_sh = Complex64::new(g_pu, b_pu);
             
             // Add to Ybus diagonal
@@ -169,6 +174,79 @@ mod tests {
 
         println!("IEEE 118 Ybus Max Diff: {:.2e}", max_diff);
         assert!(max_diff < 1e-12, "Ybus values differ too much on IEEE 118!");
+    }
+
+    fn load_ybus_ground_truth() -> Vec<Complex64> {
+        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let path = format!("{}/cases/IEEE118/ybus_pp_ground_truth.csv", dir);
+        let content = std::fs::read_to_string(&path).expect("ybus_pp_ground_truth.csv not found");
+        let mut ybus = Vec::new();
+        for line in content.lines() {
+            if line.trim().is_empty() { continue; }
+            let cells: Vec<&str> = line.split(',').collect();
+            for chunk in cells.chunks(2) {
+                if chunk.len() == 2 {
+                    let re = chunk[0].trim().parse::<f64>().unwrap_or(0.0);
+                    let im = chunk[1].trim().parse::<f64>().unwrap_or(0.0);
+                    ybus.push(Complex64::new(re, im));
+                }
+            }
+        }
+        ybus
+    }
+
+    #[test]
+    fn test_ybus_vs_pandapower_case118() {
+        let net = load_ieee118();
+        let data = opf_data_from_network(&net);
+        let ybus_rp = &data.ybus;
+
+        let ybus_pp = load_ybus_ground_truth();
+        assert_eq!(ybus_pp.len(), 118 * 118, "Ground truth should be 118x118 flattened");
+
+        // Convert RustPower Ybus to dense map
+        let mut rp_map: HashMap<(usize, usize), Complex64> = HashMap::new();
+        for j in 0..ybus_rp.ncols() {
+            for idx in ybus_rp.col_offsets()[j]..ybus_rp.col_offsets()[j + 1] {
+                let r = ybus_rp.row_indices()[idx];
+                let v = ybus_rp.values()[idx];
+                rp_map.insert((r, j), v);
+            }
+        }
+
+        // Compare
+        let mut max_diff = 0.0f64;
+        let mut max_diff_pos = (0usize, 0usize);
+        let mut mismatches = Vec::new();
+
+        for i in 0..118 {
+            for j in 0..118 {
+                let rp_val = rp_map.get(&(i, j)).copied().unwrap_or(Complex64::new(0.0, 0.0));
+                let pp_val = ybus_pp[i * 118 + j];
+                let diff = (rp_val - pp_val).norm();
+                if diff > max_diff {
+                    max_diff = diff;
+                    max_diff_pos = (i, j);
+                }
+                if diff > 1e-10 {
+                    mismatches.push((i, j, rp_val, pp_val, diff));
+                }
+            }
+        }
+
+        println!("Max diff: {:.2e} at ({}, {})", max_diff, max_diff_pos.0, max_diff_pos.1);
+        println!("Mismatches (>1e-10): {}", mismatches.len());
+
+        let mut sorted = mismatches.clone();
+        sorted.sort_by(|a, b| b.4.partial_cmp(&a.4).unwrap());
+        for (i, j, rp, pp, diff) in sorted.iter().take(10) {
+            println!(
+                "  [{},{}]: RP=({}, {})  PP=({}, {})  diff={:.2e}",
+                i, j, rp.re, rp.im, pp.re, pp.im, diff
+            );
+        }
+
+        assert!(max_diff < 1e-8, "Max diff {:.2e} at ({},{}) too large.", max_diff, max_diff_pos.0, max_diff_pos.1);
     }
 
     #[test]
