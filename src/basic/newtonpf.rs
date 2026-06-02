@@ -3,7 +3,8 @@ use std::f64::consts::PI;
 use super::dsbus_dv::{dSbus_dV, dSbus_dV_old};
 use super::sparse::slice::*;
 use super::solver::Solve;
-use super::new_dsdvbus2::{JacobianPattern2, fill_jacobian_v2};
+use super::new_dsdvbus2::JacobianPattern2;
+use super::new_dsdvbus3::fill_jacobian_v3;
 use crate::basic::sparse::{
     conj::RealImage,
     stack::{csc_hstack, csc_vstack},
@@ -218,12 +219,13 @@ pub fn newton_pf<Solver: Solve>(
 
     for it in 0..max_iter {
         let ibus = Ybus * &v;
+        let s_calc = v.component_mul(&ibus.map(|e| e.conj()));
 
-        fill_jacobian_v2(
+        fill_jacobian_v3(
             Ybus,
             v.as_slice(),
             v_norm.as_slice(),
-            ibus.as_slice(),
+            s_calc.as_slice(),
             &j_pattern,
             npv,
             npq,

@@ -1,6 +1,9 @@
 #![doc = include_str!("../doc/manifest.md")]
 mod basic;
+
+#[allow(non_snake_case)]
 pub mod opf;
+#[allow(non_snake_case)]
 pub mod new_opf;
 pub mod new_pf;
 pub use basic::ecs::network;
