@@ -108,8 +108,8 @@ where
         total_kkt += dt_kkt;
         if i == 1 { total_solve_sym += dt_solve; } else { total_solve_num += dt_solve; }
 
-        let alphap = step_size(&z, &dz_n, 0.99995);
-        let alphad = step_size(&mu, &dmu_n, 0.99995);
+        let alphap = step_size(&z, &dz_n, XI);
+        let alphad = step_size(&mu, &dmu_n, XI);
 
         for j in 0..nx { x[j] += alphap * dx[j]; }
         for j in 0..niq { z[j] += alphap * dz_n[j]; }
@@ -135,7 +135,7 @@ where
 
         if feascond < opt.feastol && gradcond < opt.gradtol && compcond < opt.comptol && costcond < opt.costtol {
             converged = true;
-        } else if x.iter().any(|v| v.is_nan()) || alphap < 1e-8 || alphad < 1e-8 {
+        } else if x.iter().any(|v| v.is_nan()) || alphap < ALPHA_MIN || alphad < ALPHA_MIN {
             break;
         }
         f0 = f;
@@ -489,8 +489,8 @@ where
         total_kkt += dt_kkt;
         if i == 1 { total_solve_sym += dt_solve; } else { total_solve_num += dt_solve; }
 
-        let alphap = step_size(&z, &dz_n, 0.99995);
-        let alphad = step_size(&mu, &dmu_n, 0.99995);
+        let alphap = step_size(&z, &dz_n, XI);
+        let alphad = step_size(&mu, &dmu_n, XI);
 
         for j in 0..nx { x[j] += alphap * dx[j]; }
         for j in 0..niq { z[j] += alphap * dz_n[j]; }
@@ -516,7 +516,7 @@ where
 
         if feascond < opt.feastol && gradcond < opt.gradtol && compcond < opt.comptol && costcond < opt.costtol {
             converged = true;
-        } else if x.iter().any(|v| v.is_nan()) || alphap < 1e-8 || alphad < 1e-8 {
+        } else if x.iter().any(|v| v.is_nan()) || alphap < ALPHA_MIN || alphad < ALPHA_MIN {
             break;
         }
         f0 = f;
@@ -614,8 +614,8 @@ where
         total_kkt += dt_kkt;
         if i == 1 { total_solve_sym += dt_solve; } else { total_solve_num += dt_solve; }
 
-        let alphap = step_size(&z, &dz_n, 0.99995);
-        let alphad = step_size(&mu, &dmu_n, 0.99995);
+        let alphap = step_size(&z, &dz_n, XI);
+        let alphad = step_size(&mu, &dmu_n, XI);
 
         for j in 0..nx { x[j] += alphap * dx[j]; }
         for j in 0..niq { z[j] += alphap * dz_n[j]; }
@@ -651,7 +651,7 @@ where
 
         if feascond < opt.feastol && gradcond < opt.gradtol && compcond < opt.comptol && costcond < opt.costtol {
             converged = true;
-        } else if x.iter().any(|v| v.is_nan()) || alphap < 1e-8 || alphad < 1e-8 {
+        } else if x.iter().any(|v| v.is_nan()) || alphap < ALPHA_MIN || alphad < ALPHA_MIN {
             break;
         }
         f0 = f;
@@ -678,7 +678,7 @@ pub fn pips_with_fused_assembly_v56<F, Eval, FA, S>(
     f_fcn: F,
     eval_fcn: Eval,
     mut fused_assembly: FA,
-    x0: Vec<f64>, xmin: Vec<f64>, xmax: Vec<f64>, opt: PipsOpt, solver: &mut S,
+    x0: Vec<f64>, _xmin: Vec<f64>, _xmax: Vec<f64>, opt: PipsOpt, solver: &mut S,
     v5: &crate::new_opf::v5_kkt::KKTSymbolicV5,
     // Prebuilt merged structures (constant) from V56Evaluator.
     dg_cp: Vec<usize>, dg_ri: Vec<usize>, dg_vals0: Vec<f64>,
@@ -692,7 +692,8 @@ where
     FA: FnMut(&[f64], &[f64], &[f64], &[f64], f64, &mut [f64]),
     S: crate::basic::solver::Solve,
 {
-    const SIGMA: f64 = 0.1; const Z0: f64 = 1.0;
+    const XI: f64 = 0.99995; const SIGMA: f64 = 0.1; const Z0: f64 = 1.0;
+    const ALPHA_MIN: f64 = 1e-8;
     let nx = x0.len(); let cm = opt.cost_mult;
 
     let mut x = x0.clone();
@@ -742,8 +743,8 @@ where
         total_kkt += dt_kkt;
         if i == 1 { total_solve_sym += dt_solve; } else { total_solve_num += dt_solve; }
 
-        let alphap = step_size(&z, &dz_n, 0.99995);
-        let alphad = step_size(&mu, &dmu_n, 0.99995);
+        let alphap = step_size(&z, &dz_n, XI);
+        let alphad = step_size(&mu, &dmu_n, XI);
         for j in 0..nx { x[j] += alphap * dx[j]; }
         for j in 0..niq { z[j] += alphap * dz_n[j]; }
         for j in 0..neq { lam[j] += alphad * dlam_n[j]; }
@@ -766,7 +767,7 @@ where
         feascond = fc; gradcond = gc; compcond = cc; costcond = cc2;
         if feascond < opt.feastol && gradcond < opt.gradtol && compcond < opt.comptol && costcond < opt.costtol {
             converged = true;
-        } else if x.iter().any(|v| v.is_nan()) || alphap < 1e-8 || alphad < 1e-8 {
+        } else if x.iter().any(|v| v.is_nan()) || alphap < ALPHA_MIN || alphad < ALPHA_MIN {
             break;
         }
         f0 = f;
