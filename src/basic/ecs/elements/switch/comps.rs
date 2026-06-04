@@ -1,12 +1,8 @@
 use crate::basic::ecs::elements::bus::SnaptShotRegGroup;
 use crate::io::pandapower::SwitchType;
-use crate::prelude::ecs::defer_builder::DeferBundle;
-use crate::prelude::ecs::defer_builder::DeferredBundleBuilder;
 use bevy_archive::prelude::SnapshotRegistry;
-use bevy_ecs::component::Component;
-use bevy_ecs::name::Name;
+use bevy_ecs::prelude::*;
 use derive_more::derive::{Deref, DerefMut};
-use rustpower_proc_marco::DeferBundle;
 /// Represents a network switch in the power flow network.
 ///
 /// A switch connects two buses or a bus and an element, and can have a given impedance (z_ohm).
@@ -22,12 +18,11 @@ pub struct Switch {
 /// Represents the state of a switch (either open or closed).
 ///
 /// The state (`true` for closed and `false` for open) is wrapped in the `SwitchState` component.
-#[derive(
-    Default, Debug, Clone, Component, Deref, DerefMut, serde::Serialize, serde::Deserialize,
+#[derive(Default, Debug, Clone, Component, Deref, DerefMut, serde::Serialize, serde::Deserialize,
 )]
 pub struct SwitchState(pub bool);
 
-#[derive(DeferBundle, Default, Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct SwitchBundle {
     pub switch: Switch,
     pub state: SwitchState,

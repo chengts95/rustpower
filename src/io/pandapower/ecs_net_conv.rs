@@ -1,7 +1,7 @@
-use crate::basic::ecs::defer_builder::DeferBundleSpawner;
 use crate::basic::ecs::network::DataOps;
 use crate::basic::ecs::network::PowerGrid;
 use crate::basic::ecs::*;
+use crate::bevy_cmdbuffer::buffer::HarvardCommandBuffer;
 
 use crate::prelude::pandapower::*;
 use bevy_ecs::prelude::*;
@@ -33,27 +33,89 @@ impl LoadPandapowerNet for PowerGrid {
 impl LoadPandapowerNet for World {
     fn load_pandapower_net(&mut self, net: &Network) {
         let world = self;
-        let buses: Vec<BusBundle> = net.bus.iter().map(|x| x.into()).collect();
-        let ts: Vec<TransformerBundle> = net.trafo.clone().to_bundle_vec();
-        let lines: Vec<LineBundle> = net.line.clone().to_bundle_vec();
-        let gens: Vec<GeneratorBundle> = net.r#gen.clone().to_bundle_vec();
-        let loads: Vec<LoadBundle> = net.load.clone().to_bundle_vec();
-        let ext_grid: Vec<ExtGridBundle> = net.ext_grid.clone().to_bundle_vec();
-        let shunts: Vec<ShuntBundle> = net.shunt.clone().to_bundle_vec();
-        let sgens: Vec<SGenBundle> = net.sgen.clone().to_bundle_vec();
-        let switches: Vec<SwitchBundle> = net.switch.clone().to_bundle_vec();
-        world.commands().spawn_batch(buses);
-        world.flush();
+        let mut buffer = HarvardCommandBuffer::new();
 
-        let mut spawner = DeferBundleSpawner::new();
-        spawner.spawn_batch(world, ts);
-        spawner.spawn_batch(world, lines);
-        spawner.spawn_batch(world, gens);
-        spawner.spawn_batch(world, loads);
-        spawner.spawn_batch(world, ext_grid);
-        spawner.spawn_batch(world, shunts);
-        spawner.spawn_batch(world, sgens);
-        spawner.spawn_batch(world, switches);
+        // Buses
+        for bus in &net.bus {
+            let b: BusBundle = bus.into();
+            let e = world.spawn_empty().id();
+            buffer.insert_bundle(world, e, (b.name, b.bus_id, b.vm_pu, b.vn_kv, b.zone));
+        }
+
+        // Transformers
+        let ts: Vec<TransformerBundle> = net.trafo.clone().to_bundle_vec();
+        for t in ts {
+            let e = world.spawn_empty().id();
+            buffer.insert_bundle(world, e, (t.device, t.from_bus, t.to_bus));
+            if let Some(n) = t.name { buffer.insert(world, e, n); }
+            if let Some(s) = t.std_type { buffer.insert(world, e, s); }
+        }
+
+        // Lines
+        let lines: Vec<LineBundle> = net.line.clone().to_bundle_vec();
+        for l in lines {
+            let e = world.spawn_empty().id();
+            buffer.insert_bundle(world, e, (l.tag, l.from, l.to, l.params));
+            if let Some(n) = l.name { buffer.insert(world, e, n); }
+            if let Some(s) = l.std_spec { buffer.insert(world, e, s); }
+            if let Some(o) = l.out { buffer.insert(world, e, o); }
+        }
+
+        // Generators
+        let gens: Vec<GeneratorBundle> = net.r#gen.clone().to_bundle_vec();
+        for g in gens {
+            let e = world.spawn_empty().id();
+            buffer.insert_bundle(world, e, (g.target_bus, g.target_p, g.target_vm, g.pq_range, g.cfg));
+            if let Some(s) = g.slack { buffer.insert(world, e, s); }
+            if let Some(u) = g.uncontrollable { buffer.insert(world, e, u); }
+            if let Some(s) = g.sn_mva { buffer.insert(world, e, s); }
+            if let Some(n) = g.name { buffer.insert(world, e, n); }
+        }
+
+        // Loads
+        let loads: Vec<LoadBundle> = net.load.clone().to_bundle_vec();
+        for l in loads {
+            let e = world.spawn_empty().id();
+            buffer.insert_bundle(world, e, (l.target_bus, l.target_p, l.target_q, l.cfg, l.model));
+            if let Some(u) = l.uncontrollable { buffer.insert(world, e, u); }
+            if let Some(n) = l.name { buffer.insert(world, e, n); }
+            if let Some(s) = l.sn_mva { buffer.insert(world, e, s); }
+        }
+
+        // Ext Grid
+        let ext_grid: Vec<ExtGridBundle> = net.ext_grid.clone().to_bundle_vec();
+        for g in ext_grid {
+            let e = world.spawn_empty().id();
+            buffer.insert_bundle(world, e, (g.target_bus, g.target_vm, g.target_va, g.cfg, g.pq_range, g.slack));
+        }
+
+        // Shunts
+        let shunts: Vec<ShuntBundle> = net.shunt.clone().to_bundle_vec();
+        for s in shunts {
+            let e = world.spawn_empty().id();
+            buffer.insert_bundle(world, e, (s.target_bus, s.device));
+            if let Some(o) = s.oos { buffer.insert(world, e, o); }
+        }
+
+        // SGens
+        let sgens: Vec<SGenBundle> = net.sgen.clone().to_bundle_vec();
+        for s in sgens {
+            let e = world.spawn_empty().id();
+            buffer.insert_bundle(world, e, (s.target_bus, s.device, s.target_p, s.target_q));
+            if let Some(u) = s.uncontrollable { buffer.insert(world, e, u); }
+            if let Some(n) = s.name { buffer.insert(world, e, n); }
+        }
+
+        // Switches
+        let switches: Vec<SwitchBundle> = net.switch.clone().to_bundle_vec();
+        for s in switches {
+            let e = world.spawn_empty().id();
+            buffer.insert_bundle(world, e, (s.switch, s.state));
+            if let Some(n) = s.name { buffer.insert(world, e, n); }
+        }
+
+        buffer.apply(world);
+
         world.insert_resource(PFCommonData {
             wbase: net.f_hz * 2.0 * std::f64::consts::PI,
             f_hz: net.f_hz,

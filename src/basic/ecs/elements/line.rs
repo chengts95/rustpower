@@ -3,10 +3,8 @@ use crate::io::pandapower::Line;
 use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
 use derive_more::From;
-use rustpower_proc_marco::DeferBundle;
 
 use super::bus::{OutOfService, SnaptShotRegGroup};
-use crate::prelude::ecs::defer_builder::*;
 use bevy_ecs::name::Name;
 
 /// Source bus ID (i64) for a  connection.
@@ -54,7 +52,7 @@ pub struct LineParams {
 ///
 /// Combines connection endpoints, physical parameters, optional naming,
 /// standard specification and operational status.
-#[derive(Clone, DeferBundle)]
+#[derive(Clone)]
 pub struct LineBundle {
     /// tag
     pub tag: basic::ecs::elements::Line,
