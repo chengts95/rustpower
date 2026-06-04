@@ -231,7 +231,6 @@ impl From<&ExtGrid> for ExtGridBundle {
 ///
 /// This includes target values (p, q, vm, va), mode flags (slack/uncontrol),
 /// and configuration metadata (e.g., `gen_cfg`, `pq_range`).
-
 pub struct GenSnapShotReg;
 
 impl SnaptShotRegGroup for GenSnapShotReg {

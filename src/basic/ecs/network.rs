@@ -119,7 +119,7 @@ pub fn ecs_run_pf(
     let v = newton_pf(
         &mat.y_bus,
         &mat.s_bus,
-        &v_init,
+        v_init,
         mat.npv,
         mat.npq,
         tol,
@@ -131,7 +131,6 @@ pub fn ecs_run_pf(
     match v {
         Ok((v, iterations)) => {
             //let v = mat.reorder.transpose() * v;
-            let v = v;
             cmd.insert_resource(PowerFlowResult {
                 v,
                 iterations,
@@ -140,9 +139,8 @@ pub fn ecs_run_pf(
         }
         Err((_err, v_err)) => {
             // let v = mat.reorder.transpose() * v_err;
-            let v = v_err;
             cmd.insert_resource(PowerFlowResult {
-                v,
+                v: v_err,
                 iterations: 0,
                 converged: false,
             });
@@ -167,7 +165,7 @@ impl DataOps for PowerGrid {
     fn get<T: Component>(&self, entity: Entity) -> Option<&T> {
         self.world().get(entity)
     }
-    fn get_mut<T: Component>(&'_ mut self, entity: Entity) -> Option<Mut<'_, T>>
+    fn get_mut<T>(&'_ mut self, entity: Entity) -> Option<Mut<'_, T>>
     where
         T: Component<Mutability = Mutable>,
     {

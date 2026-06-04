@@ -5,13 +5,19 @@ use numpy::IntoPyArray;
 #[cfg(feature = "python")]
 use crate::prelude::*;
 #[cfg(feature = "python")]
-use crate::basic::ecs::elements::{BusID, Line, LineParams, TransformerDevice, TapChanger};
+use crate::basic::ecs::elements::{BusID, Line, LineParams, FromBus, ToBus, TransformerDevice, TapChanger};
 #[cfg(feature = "python")]
 use crate::basic::ecs::powerflow::prelude::{PowerFlowMat, PowerFlowResult};
 #[cfg(feature = "python")]
 use crate::basic::ecs::post_processing::{VBusResult, SBusResult};
 #[cfg(feature = "python")]
 use crate::io::pandapower::load_csv_zip;
+#[cfg(feature = "python")]
+use crate::timeseries::{
+    sim_time::{DeltaTime, Time},
+    scheduled::{ScheduledStaticActions, ScheduledStaticAction, ScheduledActionKind},
+    TimeSeriesDefaultPlugins,
+};
 #[cfg(feature = "python")]
 use num_complex::ComplexFloat;
 #[cfg(feature = "python")]
@@ -285,6 +291,114 @@ impl PowerGrid {
         self.inner.init_pf_net();
     }
 
+    /// Processes ideal switches and performs node collapsing (aggregation).
+    /// This should be called after init_pf() and before solve().
+    fn process_switches(&mut self) -> PyResult<()> {
+        use crate::basic::ecs::elements::switch::{
+            process_switch_state, node_aggregation_system, handle_node_merge
+        };
+        use bevy_ecs::system::RunSystemOnce;
+        
+        let world = self.inner.world_mut();
+        
+        // 1. Process switch states to determine connectivity
+        world.run_system_once(process_switch_state)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Switch processing failed: {}", e)))?;
+        
+        // 2. Perform node aggregation (pipe pattern)
+        world.run_system_once(node_aggregation_system.pipe(handle_node_merge))
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Node aggregation failed: {}", e)))?;
+            
+        Ok(())
+    }
+
+    /// Enable time-series simulation by adding required plugins.
+    fn enable_timeseries(&mut self) {
+        self.inner.app_mut().add_plugins(TimeSeriesDefaultPlugins);
+    }
+
+    /// Advance simulation by a fixed time step.
+    fn step(&mut self, dt: f64) {
+        self.inner.world_mut().insert_resource(DeltaTime(dt));
+        self.inner.run_pf();
+    }
+
+    /// Current simulation time in seconds.
+    #[getter]
+    fn time(&self) -> f64 {
+        self.inner.world().get_resource::<Time>()
+            .map(|t| t.0)
+            .unwrap_or(0.0)
+    }
+
+    /// Schedule a real power target change for a bus at a specific time.
+    fn schedule_p_mw(&mut self, execute_at: f64, bus: i64, value: f64) {
+        let action = ScheduledStaticAction {
+            execute_at,
+            action: ScheduledActionKind::SetTargetPMW { bus, value },
+        };
+        let world = self.inner.world_mut();
+        let mut query = world.query::<(Entity, &mut ScheduledStaticActions)>();
+        if let Some((_, mut actions)) = query.iter_mut(world).next() {
+            actions.queue.push_back(action);
+        } else {
+            let mut queue = std::collections::VecDeque::new();
+            queue.push_back(action);
+            world.spawn(ScheduledStaticActions { queue });
+        }
+    }
+
+    /// Schedule a reactive power target change for a bus at a specific time.
+    fn schedule_q_mvar(&mut self, execute_at: f64, bus: i64, value: f64) {
+        let action = ScheduledStaticAction {
+            execute_at,
+            action: ScheduledActionKind::SetTargetQMvar { bus, value },
+        };
+        let world = self.inner.world_mut();
+        let mut query = world.query::<(Entity, &mut ScheduledStaticActions)>();
+        if let Some((_, mut actions)) = query.iter_mut(world).next() {
+            actions.queue.push_back(action);
+        } else {
+            let mut queue = std::collections::VecDeque::new();
+            queue.push_back(action);
+            world.spawn(ScheduledStaticActions { queue });
+        }
+    }
+
+    /// Schedule a voltage magnitude target change for a bus at a specific time.
+    fn schedule_vm_pu(&mut self, execute_at: f64, bus: i64, value: f64) {
+        let action = ScheduledStaticAction {
+            execute_at,
+            action: ScheduledActionKind::SetTargetVM { bus, value },
+        };
+        let world = self.inner.world_mut();
+        let mut query = world.query::<(Entity, &mut ScheduledStaticActions)>();
+        if let Some((_, mut actions)) = query.iter_mut(world).next() {
+            actions.queue.push_back(action);
+        } else {
+            let mut queue = std::collections::VecDeque::new();
+            queue.push_back(action);
+            world.spawn(ScheduledStaticActions { queue });
+        }
+    }
+
+    /// Schedule a voltage angle target change for a bus at a specific time.
+    fn schedule_va_degree(&mut self, execute_at: f64, bus: i64, value: f64) {
+        let action = ScheduledStaticAction {
+            execute_at,
+            action: ScheduledActionKind::SetTargetVa { bus, value },
+        };
+        let world = self.inner.world_mut();
+        let mut query = world.query::<(Entity, &mut ScheduledStaticActions)>();
+        if let Some((_, mut actions)) = query.iter_mut(world).next() {
+            actions.queue.push_back(action);
+        } else {
+            let mut queue = std::collections::VecDeque::new();
+            queue.push_back(action);
+            world.spawn(ScheduledStaticActions { queue });
+        }
+    }
+
     /// Run a single power flow calculation.
     fn run_pf(&mut self) {
         self.inner.run_pf();
@@ -391,6 +505,7 @@ impl PowerGrid {
         let world = self.inner.world_mut();
         
         let mut bus_ids = Vec::new();
+        let mut v_complex = Vec::new();
         let mut vms = Vec::new();
         let mut vas = Vec::new();
         let mut ps = Vec::new();
@@ -398,7 +513,8 @@ impl PowerGrid {
 
         let mut query = world.query::<(&BusID, &VBusResult, &SBusResult)>();
         for (id, v, s) in query.iter(world) {
-            bus_ids.push(id.0 as i32);
+            bus_ids.push(id.0); // Use i64
+            v_complex.push(v.0);
             vms.push(v.0.norm());
             vas.push(v.0.arg().to_degrees());
             ps.push(s.0.re());
@@ -407,6 +523,7 @@ impl PowerGrid {
 
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item("bus_id", bus_ids.into_pyarray(py))?;
+        dict.set_item("v_pu", v_complex.into_pyarray(py))?;
         dict.set_item("vm_pu", vms.into_pyarray(py))?;
         dict.set_item("va_degree", vas.into_pyarray(py))?;
         dict.set_item("p_mw", ps.into_pyarray(py))?;
@@ -418,26 +535,38 @@ impl PowerGrid {
     fn get_line_results<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
         let world = self.inner.world_mut();
         
+        let mut from_bus = Vec::new();
+        let mut to_bus = Vec::new();
         let mut p_f = Vec::new();
         let mut q_f = Vec::new();
         let mut p_t = Vec::new();
         let mut q_t = Vec::new();
+        let mut pl = Vec::new();
+        let mut ql = Vec::new();
         let mut loading = Vec::new();
 
-        let mut query = world.query::<&crate::basic::ecs::post_processing::LineResultData>();
-        for data in query.iter(world) {
+        let mut query = world.query::<(&FromBus, &ToBus, &crate::basic::ecs::post_processing::LineResultData)>();
+        for (f, t, data) in query.iter(world) {
+            from_bus.push(f.0);
+            to_bus.push(t.0);
             p_f.push(data.p_from_mw);
             q_f.push(data.q_from_mvar);
             p_t.push(data.p_to_mw);
             q_t.push(data.q_to_mvar);
+            pl.push(data.pl_mw);
+            ql.push(data.ql_mvar);
             loading.push(data.loading_percent);
         }
 
         let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("from_bus", from_bus.into_pyarray(py))?;
+        dict.set_item("to_bus", to_bus.into_pyarray(py))?;
         dict.set_item("p_from_mw", p_f.into_pyarray(py))?;
         dict.set_item("q_from_mvar", q_f.into_pyarray(py))?;
         dict.set_item("p_to_mw", p_t.into_pyarray(py))?;
         dict.set_item("q_to_mvar", q_t.into_pyarray(py))?;
+        dict.set_item("pl_mw", pl.into_pyarray(py))?;
+        dict.set_item("ql_mvar", ql.into_pyarray(py))?;
         dict.set_item("loading_percent", loading.into_pyarray(py))?;
         Ok(dict)
     }

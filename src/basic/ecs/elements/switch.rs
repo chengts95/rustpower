@@ -23,9 +23,9 @@ pub use comps::*;
 /// from aggregated (merged) representations, typically after ideal switch-based node collapsing.
 ///
 /// - `expand_mat` maps vectors from merged-node space back to full-node space.
-///     For example: `v_full = expand_mat * v_merged`.
+///   For example: `v_full = expand_mat * v_merged`.
 /// - `expand_mat_v` is a filtered version applied to voltage initialization,
-///     where only a subset of nodes (e.g., representative ones) retain values.
+///   where only a subset of nodes (e.g., representative ones) retain values.
 ///
 /// These matrices are especially useful in:
 /// - Reconstructing full-dimension results after power flow solves on reduced systems
@@ -137,10 +137,11 @@ impl NodeMerge {
         nodes.sort();
         for &node in &nodes {
             let root = self.parent[&node];
-            if !root_to_new_id.contains_key(&root) {
-                root_to_new_id.insert(root, new_node_id);
+            root_to_new_id.entry(root).or_insert_with(|| {
+                let id = new_node_id;
                 new_node_id += 1;
-            }
+                id
+            });
             node_mapping.insert(*node, root_to_new_id[&root]);
         }
         node_mapping
@@ -236,14 +237,14 @@ pub fn process_switch_state_admit(
 /// # Returns
 /// * A COO matrix representing the node aggregation.
 fn build_aggregation_matrix(node_mapping: &HashMap<u64, u64>) -> CooMatrix<u64> {
-    let mut nodes: Vec<_> = node_mapping.keys().collect();
-    nodes.sort();
+    let mut nodes: Vec<_> = node_mapping.keys().cloned().collect();
+    nodes.sort_unstable();
     let original_node_count = nodes.len();
     let new_node_count = node_mapping.values().collect::<HashSet<_>>().len();
 
     let mut mat = CooMatrix::new(original_node_count, new_node_count);
-    for (i, &node) in nodes.iter().enumerate() {
-        let new_node = node_mapping.get(&node).unwrap_or(&node);
+    for (i, node) in nodes.iter().enumerate() {
+        let new_node = node_mapping.get(node).unwrap_or(node);
         mat.push(i, *new_node as usize, 1);
     }
     mat
@@ -473,9 +474,9 @@ fn filter_and_remap_nodes(
         panic!("cannot find ext grid after merge!");
     }
 
-    let mut pv = pv.iter().cloned().collect::<Vec<_>>();
-    let mut pq = pq.iter().cloned().collect::<Vec<_>>();
-    let mut ext = ext.iter().cloned().collect::<Vec<_>>();
+    let mut pv = pv;
+    let mut pq = pq;
+    let mut ext = ext;
     pv.sort_unstable();
     pq.sort_unstable();
     ext.sort_unstable();

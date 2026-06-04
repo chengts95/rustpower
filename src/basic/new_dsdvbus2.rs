@@ -78,15 +78,14 @@ impl JacobianPattern2 {
 
             // J11 (rows = all active rows of col k; J_red row = Ybus row).
             j11_starts[k] = current_nnz;
-            for offset in 0..idx_active_end {
-                j_row_indices.push(row_slice[offset]);
+            for &r in row_slice.iter().take(idx_active_end) {
+                j_row_indices.push(r);
             }
             current_nnz += idx_active_end;
 
             // J21 (rows = PQ rows of col k; J_red Q-eq row = n_active + Ybus row).
             j21_starts[k] = current_nnz;
-            for offset in 0..idx_pq_end {
-                let r = row_slice[offset];
+            for &r in row_slice.iter().take(idx_pq_end) {
                 j_row_indices.push(n_active + r);
             }
             current_nnz += idx_pq_end;
@@ -103,15 +102,14 @@ impl JacobianPattern2 {
 
             // J12 (rows = all active rows of col k).
             j12_starts[k] = current_nnz;
-            for offset in 0..idx_active_end {
-                j_row_indices.push(row_slice[offset]);
+            for &r in row_slice.iter().take(idx_active_end) {
+                j_row_indices.push(r);
             }
             current_nnz += idx_active_end;
 
             // J22 (rows = PQ rows of col k).
             j22_starts[k] = current_nnz;
-            for offset in 0..idx_pq_end {
-                let r = row_slice[offset];
+            for &r in row_slice.iter().take(idx_pq_end) {
                 j_row_indices.push(n_active + r);
             }
             current_nnz += idx_pq_end;
@@ -136,8 +134,7 @@ impl JacobianPattern2 {
 
 /// Numeric fill under `[PQ | PV | slack]` ordering. Branch-free: the outer
 /// column loop splits at `npq`, the inner row loop splits at `pq_ends[k]`.
-#[allow(non_snake_case)]
-
+#[allow(non_snake_case, clippy::too_many_arguments)]
 #[inline(always)]
 pub fn fill_jacobian_v2(
     Ybus: &CscMatrix<Complex64>,
@@ -274,6 +271,7 @@ pub fn fill_jacobian_v2(
         }
 
         // PV-row slice: writes J11 only.
+        #[allow(clippy::needless_range_loop)]
         for offset in pq_end..active_end {
             let y_ptr = y_start + offset;
             let i = y_row_indices[y_ptr];
