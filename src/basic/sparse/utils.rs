@@ -125,6 +125,77 @@ where
         .expect("Sort-free scatter produced invalid CSC matrix")
 }
 
+/// Permutes a CSC matrix `Y_new = P * Y_old * P^T`.
+///
+/// This iterates over columns, scatters elements into new columns, and performs a local 
+/// sort on each column bucket. For highly sparse matrices (like power grids with avg degree ~3),
+/// this local sorting is extremely fast ($O(NNZ \cdot \log(\text{avg\_degree}))$).
+pub fn permute_csc_to_csc_local_sort<T>(
+    csc: &CscMatrix<T>,
+    p_vec: &[usize], // new -> old
+    p_inv: &[usize], // old -> new
+) -> CscMatrix<T>
+where
+    T: Scalar + Clone + Default,
+{
+    let n = csc.ncols();
+    let indptr = csc.col_offsets();
+    let indices = csc.row_indices();
+    let data = csc.values();
+
+    let mut nnz_per_new_col = vec![0; n];
+    for old_col in 0..n {
+        let new_col = p_inv[old_col];
+        nnz_per_new_col[new_col] = indptr[old_col + 1] - indptr[old_col];
+    }
+
+    let mut csc_indptr = vec![0; n + 1];
+    for i in 0..n {
+        csc_indptr[i + 1] = csc_indptr[i] + nnz_per_new_col[i];
+    }
+
+    let mut csc_indices = vec![0; data.len()];
+    let mut csc_data = vec![T::default(); data.len()];
+    let mut current_col_head = csc_indptr.clone();
+
+    for old_col in 0..n {
+        let new_col = p_inv[old_col];
+        let start = indptr[old_col];
+        let end = indptr[old_col + 1];
+        
+        for idx in start..end {
+            let old_row = indices[idx];
+            let new_row = p_inv[old_row];
+            let val = data[idx].clone();
+            
+            let insert_idx = current_col_head[new_col];
+            csc_indices[insert_idx] = new_row;
+            csc_data[insert_idx] = val;
+            current_col_head[new_col] += 1;
+        }
+    }
+
+    // Local sort within each column bucket
+    for col in 0..n {
+        let start = csc_indptr[col];
+        let end = csc_indptr[col + 1];
+        if end - start > 1 {
+            let mut row_val_pairs: Vec<(usize, T)> = csc_indices[start..end]
+                .iter()
+                .zip(csc_data[start..end].iter())
+                .map(|(&r, v)| (r, v.clone()))
+                .collect();
+            row_val_pairs.sort_by_key(|&(r, _)| r);
+            for (i, (r, v)) in row_val_pairs.into_iter().enumerate() {
+                csc_indices[start + i] = r;
+                csc_data[start + i] = v;
+            }
+        }
+    }
+
+    CscMatrix::try_from_csc_data(n, n, csc_indptr, csc_indices, csc_data).unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
