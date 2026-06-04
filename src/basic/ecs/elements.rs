@@ -1,14 +1,14 @@
 use std::collections::HashMap;
-mod bus;
-mod ele_process;
-mod generator;
-mod line;
-mod load;
-mod sgen;
-mod shunt;
-mod switch;
-mod trans;
-mod units;
+pub mod bus;
+pub mod ele_process;
+pub mod generator;
+pub mod line;
+pub mod load;
+pub mod sgen;
+pub mod shunt;
+pub mod switch;
+pub mod trans;
+pub mod units;
 use crate::io::pandapower;
 
 use bevy_ecs::entity::EntityHash;
