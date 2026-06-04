@@ -64,86 +64,24 @@ impl NewtonSolver {
     ) -> PyResult<()> {
         let n = v_init.len()?;
         
-        // 1. Unpack Python CSR inputs
         let indptr: Vec<usize> = y_indptr.readonly().as_slice()?.iter().map(|&x| x as usize).collect();
         let indices: Vec<usize> = y_indices.readonly().as_slice()?.iter().map(|&x| x as usize).collect();
         let data = y_data.readonly().as_slice()?.to_vec();
 
-        // 2. Direct O(NNZ) Sort-Free CSR to CSC Permutation
-        // 
-        // =====================================================================================
-        // MATHEMATICAL ALGORITHM: The "Sort-Free Scatter" Trick
-        // =====================================================================================
-        // Goal: Compute Y_new = P * Y_old * P^T, where Y_old is CSR, and output Y_new as CSC.
-        // P maps old indices to new indices: i_new = p_inv[i_old], or equivalently i_old = p_vec[i_new].
-        // 
-        // Naive approaches are slow:
-        // 1. Generic matrix multiplication (P * Y * P^T) involves heavy structure lookups.
-        // 2. Direct scattering (i_new = p_inv[i_old], j_new = p_inv[j_old]) usually produces 
-        //    unsorted row indices in the resulting CSC columns, requiring an expensive O(NNZ log(NNZ)) sort.
-        // 
-        // The Optimal O(NNZ) Solution:
-        // In a valid CSC matrix, elements within each column MUST be strictly sorted by their row index.
-        // To achieve this *without sorting*, we make the outer loop iterate over `new_row` in strictly
-        // ascending order (0, 1, 2, ..., N-1). 
-        // 
-        // For each `new_row`, we map back to the `old_row` = p_vec[new_row].
-        // Because Y_old is in CSR format, we can instantly retrieve all non-zero elements of `old_row` in O(1).
-        // Each element has an `old_col`, which maps to `new_col` = p_inv[old_col].
-        // We then scatter the value into the `new_col` bucket.
-        // 
-        // Why this guarantees sorted columns:
-        // Because we process `new_row` sequentially, any element we drop into a `new_col` bucket
-        // is guaranteed to have a `new_row` index strictly greater than the element we dropped into 
-        // that same bucket during an earlier iteration. 
-        // Thus, the CSC structure is perfectly formed and sorted in a single O(NNZ) pass!
-        // =====================================================================================
-        
-        let nnz = data.len();
-        
-        // Step 2a: Count non-zeros per new column to pre-allocate CSC indptr
-        let mut nnz_per_new_col = vec![0; n];
-        for &old_col in indices.iter() {
-            let new_col = p_inv[old_col];
-            nnz_per_new_col[new_col] += 1;
-        }
-
-        // Step 2b: Build CSC col_offsets (indptr)
-        let mut csc_indptr = vec![0; n + 1];
-        for i in 0..n {
-            csc_indptr[i + 1] = csc_indptr[i] + nnz_per_new_col[i];
-        }
-
-        // Step 2c: Scatter data (Magically Sorted by design)
-        let mut current_col_head = csc_indptr.clone();
-        let mut csc_indices = vec![0; nnz];
-        let mut csc_data = vec![num_complex::Complex64::new(0.0, 0.0); nnz];
-
-        // The outer loop guarantees ascending `new_row` insertion!
-        for new_row in 0..n {
-            let old_row = p_vec[new_row];
-            let start = indptr[old_row];
-            let end = indptr[old_row + 1];
-            
-            for idx in start..end {
-                let old_col = indices[idx];
-                let val = data[idx];
-                let new_col = p_inv[old_col];
-                
-                let insert_idx = current_col_head[new_col];
-                csc_indices[insert_idx] = new_row;
-                csc_data[insert_idx] = val;
-                current_col_head[new_col] += 1;
-            }
-        }
-
-        let y_perm_csc = CscMatrix::try_from_csc_data(n, n, csc_indptr, csc_indices, csc_data)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Failed to build CSC: {}", e)))?;
+        // Use the ultra-fast O(NNZ) sort-free permutation utility
+        let y_perm_csc = crate::basic::sparse::utils::permute_csr_to_csc_sort_free(
+            n,
+            &indptr,
+            &indices,
+            &data,
+            &p_vec,
+            &p_inv,
+        );
         
         let s_raw = DVector::from_vec(s_bus.readonly().as_slice()?.to_vec());
         let v_raw = DVector::from_vec(v_init.readonly().as_slice()?.to_vec());
 
-        // 3. Permute Vectors
+        // Permute Vectors
         let mut s_perm = DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
         let mut v_perm = DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
         for (i, &old_idx) in p_vec.iter().enumerate() {

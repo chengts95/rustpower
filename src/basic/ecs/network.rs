@@ -83,23 +83,36 @@ impl PowerFlow for PowerGrid {
 }
 
 pub fn apply_permutation(mut mat: ResMut<PowerFlowMat>) {
-    let reorder = &mat.reorder.clone().transpose_as_csc();
-    let y_bus = &mat.y_bus;
-    let rt = reorder.transpose();
-    let reordered_y_bus = &rt * y_bus * reorder;
-    mat.s_bus = &rt * &mat.s_bus;
-    mat.v_bus_init = &rt * &mat.v_bus_init;
-    mat.y_bus = reordered_y_bus;
+    let p_vec = mat.from_perm.clone();
+    let p_inv = mat.to_perm.clone();
+
+    mat.y_bus = crate::basic::sparse::utils::permute_csc_to_csc_local_sort(&mat.y_bus, &p_vec, &p_inv);
+
+    let mut new_s_bus = mat.s_bus.clone();
+    let mut new_v_bus = mat.v_bus_init.clone();
+    for (new_idx, &old_idx) in p_vec.iter().enumerate() {
+        new_s_bus[new_idx] = mat.s_bus[old_idx];
+        new_v_bus[new_idx] = mat.v_bus_init[old_idx];
+    }
+    mat.s_bus = new_s_bus;
+    mat.v_bus_init = new_v_bus;
 }
+
 #[allow(unused)]
 fn apply_inversed_permutation(mut mat: ResMut<PowerFlowMat>) {
-    let reorder = &mat.reorder.clone().transpose_as_csc();
-    let y_bus = &mat.y_bus;
-    let rt = reorder.transpose();
-    let reordered_y_bus = reorder * y_bus * &rt;
-    mat.s_bus = reorder * &mat.s_bus;
-    mat.v_bus_init = reorder * &mat.v_bus_init;
-    mat.y_bus = reordered_y_bus;
+    let p_vec = mat.to_perm.clone();
+    let p_inv = mat.from_perm.clone();
+
+    mat.y_bus = crate::basic::sparse::utils::permute_csc_to_csc_local_sort(&mat.y_bus, &p_vec, &p_inv);
+
+    let mut new_s_bus = mat.s_bus.clone();
+    let mut new_v_bus = mat.v_bus_init.clone();
+    for (new_idx, &old_idx) in p_vec.iter().enumerate() {
+        new_s_bus[new_idx] = mat.s_bus[old_idx];
+        new_v_bus[new_idx] = mat.v_bus_init[old_idx];
+    }
+    mat.s_bus = new_s_bus;
+    mat.v_bus_init = new_v_bus;
 }
 /// ECS system that runs the p ower flow calculation based on the current configuration and matrices.
 ///

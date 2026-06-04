@@ -421,14 +421,15 @@ fn extract_pv_pq_ext_nodes(
     mats: &PowerFlowMat,
     input_vector: &DVector<f64>,
 ) -> (Vec<i64>, Vec<i64>, Vec<i64>) {
+    // reordered_v_before is in [PQ | PV | EXT] order
     let reordered_v_before = &mats.reorder.real() * input_vector;
     let reordered_v_before = reordered_v_before.map(|x| x as i64);
 
-    let (npv, npq, _total_nodes) = (mats.npv, mats.npq, mats.v_bus_init.len());
+    let (npv, npq) = (mats.npv, mats.npq);
     let ext_idx = npv + npq;
 
-    let pv_nodes = reordered_v_before.as_slice()[0..npv].to_vec();
-    let pq_nodes = reordered_v_before.as_slice()[npv..npq].to_vec();
+    let pq_nodes = reordered_v_before.as_slice()[0..npq].to_vec();
+    let pv_nodes = reordered_v_before.as_slice()[npq..ext_idx].to_vec();
     let ext_nodes = reordered_v_before.as_slice()[ext_idx..].to_vec();
 
     (pv_nodes, pq_nodes, ext_nodes)
@@ -515,6 +516,25 @@ fn update_power_flow_matrix(
 ) {
     let permutation_matrix = create_permutation_matrix(&pv, &pq, &ext, new_total_nodes);
     mats.reorder = permutation_matrix;
+    
+    let mut to_perm = vec![0; new_total_nodes];
+    let mut from_perm = vec![0; new_total_nodes];
+    let n_bus_re = pq.len() + pv.len();
+    for (i, &v) in pq.iter().enumerate() {
+        to_perm[v as usize] = i;
+        from_perm[i] = v as usize;
+    }
+    for (i, &v) in pv.iter().enumerate() {
+        to_perm[v as usize] = pq.len() + i;
+        from_perm[pq.len() + i] = v as usize;
+    }
+    for (i, &v) in ext.iter().enumerate() {
+        to_perm[v as usize] = n_bus_re + i;
+        from_perm[n_bus_re + i] = v as usize;
+    }
+    mats.to_perm = to_perm;
+    mats.from_perm = from_perm;
+
     mats.npq = pq.len();
     mats.npv = pv.len();
     mats.y_bus = mat.transpose().cast() * &mats.y_bus * &mat.cast();
