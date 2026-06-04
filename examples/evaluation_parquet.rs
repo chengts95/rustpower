@@ -2,7 +2,7 @@ use std::env;
 use std::io::Write;
 use bevy_archive::{binary_archive::WorldArrowSnapshot, prelude::*};
 use rustpower::{io::archive::aurora_format::{ArchivePlugin, ArchiveSnapshotRes}, prelude::*};
-use rustpower::network::{PowerGrid, PowerFlow, DataOps};
+use rustpower::prelude::{PowerGrid, PowerFlow, DataOps};
 use rustpower::io::pandapower::load_csv_zip;
 
 fn main() {
