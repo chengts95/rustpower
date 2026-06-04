@@ -8,38 +8,22 @@ use super::{
 };
 
 /// Represents a reactive (and possibly active) shunt device in the network.
-///
-/// Shunt devices inject or absorb reactive power (Q) and may also
-/// consume active power (P) for internal losses or compensation.
-/// Unlike generators, they are not dispatchable and thus do **not**
-/// use `TargetPMW` or `TargetQMVar`, but are modeled as **fixed admittance**.
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ShuntDevice {
-    /// Active power loss in MW
     pub p_mw: f64,
-    /// Reactive power in MVAr (usually negative for capacitive devices)
     pub q_mvar: f64,
-    /// Nominal voltage level of the shunt terminal in kV
     pub vn_kv: f64,
-    /// Current tap step (for tap-changing devices)
     pub step: i32,
-    /// Maximum allowed tap steps
     pub max_step: i32,
 }
 
 use rustpower_proc_marco::DeferBundle;
 
 /// ECS bundle for inserting a shunt device into the simulation.
-///
-/// Includes target bus reference, fixed parameter device model,
-/// and optional out-of-service flag.
-#[derive(Clone)]
+#[derive(Clone, DeferBundle)]
 pub struct ShuntBundle {
-    /// Target bus entity ID (as i64) for the shunt connection
     pub target_bus: TargetBus,
-    /// Static device data (Q/P/voltage level)
     pub device: ShuntDevice,
-    /// Optional marker for being disconnected from the network
     pub oos: Option<OutOfService>,
 }
 
@@ -74,18 +58,9 @@ impl SnaptShotRegGroup for ShuntSnapShotReg {
 pub mod shunt_systems {
     use crate::basic::ecs::{elements::*, network::GND};
     use bevy_ecs::prelude::Commands;
-    use nalgebra::vector;
-    /// Converts a `ShuntDevice` into an equivalent 2-port admittance branch.
-    ///
-    /// This treats the shunt as a constant S = P + jQ load,
-    /// and transforms it into Y = S / V² form. The resulting branch
-    /// connects `target_bus` to the ground (GND).
-    ///
-    /// Note: Since shunts are passive, the direction of power is *injected*
-    /// from the network into the shunt, thus the `S` is negated here.
-    ///
-    /// 💡 This system allows shunt devices to be modeled as embedded admittance
-    /// branches in the power flow solution.
+    use nalgebra::{vector, Complex};
+    use super::*;
+
     fn shunt_internal(item: &ShuntDevice, bus: &TargetBus) -> AdmittanceBranch {
         let s = Complex::new(-item.p_mw, -item.q_mvar) * Complex::new(item.step as f64, 0.0);
         let y = s / (item.vn_kv * item.vn_kv);

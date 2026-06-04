@@ -1,3 +1,8 @@
+//! ECS definitions for power system transmission lines.
+//!
+//! Includes components for line geometry, electrical parameters, and
+//! operational status, along with systems for admittance matrix construction.
+
 use crate::basic;
 use crate::io::pandapower::Line;
 use bevy_archive::prelude::SnapshotRegistry;

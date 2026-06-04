@@ -66,12 +66,20 @@ impl Default for VNominal {
 
 #[derive(Component, Default, serde::Serialize, serde::Deserialize)]
 pub struct Zone(pub i64);
+/// Bundle for initializing a bus entity.
+///
+/// Groups core identity, naming, voltage limits and nominal levels into a single spawnable unit.
 #[derive(DeferBundle, Default)]
 pub struct BusBundle {
+    /// Human-readable identifier (e.g. "Bus 1")
     pub name: Name,
+    /// Numeric ID used in network definitions
     pub bus_id: BusID,
+    /// Voltage magnitude limits (pu)
     pub vm_pu: VmLimit<PerUnit>,
+    /// Nominal voltage level (kV)
     pub vn_kv: VNominal,
+    /// Administrative or geographical zone ID
     pub zone: Zone,
 }
 
