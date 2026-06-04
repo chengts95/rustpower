@@ -514,7 +514,7 @@ fn update_power_flow_matrix(
     new_total_nodes: usize,
 ) {
     let permutation_matrix = create_permutation_matrix(&pv, &pq, &ext, new_total_nodes);
-    mats.reorder = sparse::cast::Cast::<_>::cast(&CsrMatrix::from(&permutation_matrix));
+    mats.reorder = permutation_matrix;
     mats.npq = pq.len();
     mats.npv = pv.len();
     mats.y_bus = mat.transpose().cast() * &mats.y_bus * &mat.cast();
