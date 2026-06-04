@@ -7,6 +7,7 @@ use std::marker::PhantomData;
 
 use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
+use rustpower_proc_marco::DeferBundle;
 use const_format::concatcp;
 use derive_more::derive::{Deref, DerefMut, From, Into};
 use nalgebra::Complex;
@@ -65,7 +66,7 @@ impl Default for VNominal {
 
 #[derive(Component, Default, serde::Serialize, serde::Deserialize)]
 pub struct Zone(pub i64);
-#[derive(Bundle, Default)]
+#[derive(DeferBundle, Default)]
 pub struct BusBundle {
     pub name: Name,
     pub bus_id: BusID,
@@ -184,13 +185,19 @@ mod tests {
     }
     #[test]
     fn test_snapshot() {
+        use crate::bevy_cmdbuffer::buffer::HarvardCommandBuffer;
         let net = load_net();
         let buses: Vec<BusBundle> = net.bus.iter().map(|x| x.into()).collect();
         let mut pf_net = PowerGrid::default();
-        let mut cmd = pf_net.world_mut().commands();
-        cmd.spawn_batch(buses);
+        let world = pf_net.world_mut();
+        
+        let mut buffer = HarvardCommandBuffer::new();
+        for b in buses {
+            let e = world.spawn_empty().id();
+            buffer.insert_bundle(world, e, b);
+        }
+        buffer.apply(world);
 
-        pf_net.world_mut().flush();
         let mut registry = SnapshotRegistry::default();
         BusSnapShotReg::register_snap_shot(&mut registry);
         let world = pf_net.world();
