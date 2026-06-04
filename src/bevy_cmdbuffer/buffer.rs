@@ -3,7 +3,6 @@ use bevy_ecs::ptr::{Aligned, OwningPtr};
 use bevy_ecs::component::ComponentId;
 use bumpalo::Bump;
 use std::ptr::NonNull;
-use crate::bevy_cmdbuffer::ArenaBox;
 
 // Safety: Must be called with a pointer to the correct type T.
 pub type DropFn = unsafe fn(OwningPtr<'_, Aligned>);

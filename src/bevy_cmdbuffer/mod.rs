@@ -2,7 +2,6 @@ pub mod buffer;
 pub use buffer::*;
 
 use bevy_ecs::ptr::{Aligned, OwningPtr, PtrMut};
-use bevy_ecs::prelude::*;
 use std::ptr::NonNull;
 
 // this allows to have a type erased box that can drop the inner type correctly
