@@ -27,6 +27,8 @@ pub struct ShuntDevice {
     pub max_step: i32,
 }
 
+use rustpower_proc_marco::DeferBundle;
+
 /// ECS bundle for inserting a shunt device into the simulation.
 ///
 /// Includes target bus reference, fixed parameter device model,
@@ -70,7 +72,6 @@ impl SnaptShotRegGroup for ShuntSnapShotReg {
 }
 
 pub mod shunt_systems {
-
     use crate::basic::ecs::{elements::*, network::GND};
     use bevy_ecs::prelude::Commands;
     use nalgebra::vector;
@@ -94,11 +95,7 @@ pub mod shunt_systems {
             v_base: VBase(item.vn_kv),
         }
     }
-    /// System for spawning shunt admittance branches into the simulation.
-    ///
-    /// Filters out all shunt devices marked `OutOfService`,
-    /// then for each remaining `ShuntDevice`, calculates its
-    /// equivalent admittance and adds it as an `EShunt` entity.
+
     pub fn setup_shunt_systems(
         mut commands: Commands,
         q: Query<(&TargetBus, &ShuntDevice), Without<OutOfService>>,

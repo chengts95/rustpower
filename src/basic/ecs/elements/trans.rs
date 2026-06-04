@@ -2,6 +2,7 @@ use crate::io::pandapower::Transformer;
 use bevy_archive::prelude::SnapshotRegistry;
 
 use bevy_ecs::prelude::*;
+use rustpower_proc_marco::DeferBundle;
 use nalgebra::Complex;
 use nalgebra::Matrix2;
 
@@ -135,7 +136,7 @@ pub struct TapChanger {
 }
 
 /// ECS bundle representing a transformer entity.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, DeferBundle)]
 pub struct TransformerBundle {
     /// Transformer device parameters.
     pub device: TransformerDevice,

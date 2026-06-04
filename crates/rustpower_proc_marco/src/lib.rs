@@ -1,6 +1,7 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::*;
+
 #[proc_macro_derive(DeferBundle)]
 pub fn derive_defer_bundle(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -16,27 +17,26 @@ pub fn derive_defer_bundle(input: TokenStream) -> TokenStream {
                         let fname = f.ident.as_ref().unwrap();
                         let ty = &f.ty;
 
-                        // 判断是不是 Option<_>
+                        // Check if it's Option<T>
                         if let syn::Type::Path(type_path) = ty {
                             if type_path.path.segments.len() == 1
                                 && type_path.path.segments[0].ident == "Option"
                             {
-                                // 是 Option<T>
+                                // It is Option<T>, only insert if Some
                                 quote! {
-                                    if let Some(val) = &self.#fname {
-                                        builder.insert(val.clone());
+                                    if let Some(val) = self.#fname {
+                                        buffer.insert(world, entity, val);
                                     }
                                 }
                             } else {
-                                // 不是 Option<T>
+                                // Standard field, always insert
                                 quote! {
-                                    builder.insert(self.#fname.clone());
+                                    buffer.insert(world, entity, self.#fname);
                                 }
                             }
                         } else {
-                            // fallback: treat as always insert
                             quote! {
-                                builder.insert(self.#fname.clone());
+                                buffer.insert(world, entity, self.#fname);
                             }
                         }
                     })
@@ -48,8 +48,8 @@ pub fn derive_defer_bundle(input: TokenStream) -> TokenStream {
     };
 
     let expanded = quote! {
-        impl DeferBundle for #name {
-            fn insert_to(self, builder: &mut DeferredBundleBuilder) {
+        impl crate::bevy_cmdbuffer::buffer::DeferBundle for #name {
+            fn insert_into(self, buffer: &mut crate::bevy_cmdbuffer::buffer::HarvardCommandBuffer, world: &mut bevy_ecs::prelude::World, entity: bevy_ecs::prelude::Entity) {
                 #(#field_insertions)*
             }
         }
