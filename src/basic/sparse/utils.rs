@@ -45,6 +45,86 @@ where
         .expect("Valid permutation data should never fail CSR construction")
 }
 
+/// Performs a direct O(NNZ) sort-free permutation and format conversion from CSR to CSC.
+///
+/// Computes `Y_new = P * Y_old * P^T`, where `Y_old` is CSR, and outputs `Y_new` as CSC.
+/// 
+/// # Mathematical Algorithm: The "Sort-Free Scatter" Trick
+/// 
+/// In a valid CSC matrix, elements within each column MUST be strictly sorted by their row index.
+/// To achieve this *without sorting*, we make the outer loop iterate over `new_row` in strictly
+/// ascending order (0, 1, 2, ..., N-1). 
+/// 
+/// For each `new_row`, we map back to the `old_row` = `p_vec[new_row]`.
+/// Because `Y_old` is in CSR format, we can instantly retrieve all non-zero elements of `old_row` in O(1).
+/// Each element has an `old_col`, which maps to `new_col` = `p_inv[old_col]`.
+/// We then scatter the value into the `new_col` bucket.
+/// 
+/// Because we process `new_row` sequentially, any element we drop into a `new_col` bucket
+/// is guaranteed to have a `new_row` index strictly greater than the element we dropped into 
+/// that same bucket during an earlier iteration. 
+/// Thus, the CSC structure is perfectly formed and sorted in a single O(NNZ) pass!
+///
+/// # Arguments
+/// * `n` - Dimension of the square matrix.
+/// * `csr_indptr` - Row offsets of the input CSR matrix.
+/// * `csr_indices` - Column indices of the input CSR matrix.
+/// * `csr_data` - Values of the input CSR matrix.
+/// * `p_vec` - Vector mapping new row indices to old row indices: `old_row = p_vec[new_row]`.
+/// * `p_inv` - Vector mapping old column indices to new column indices: `new_col = p_inv[old_col]`.
+pub fn permute_csr_to_csc_sort_free<T>(
+    n: usize,
+    csr_indptr: &[usize],
+    csr_indices: &[usize],
+    csr_data: &[T],
+    p_vec: &[usize],
+    p_inv: &[usize],
+) -> CscMatrix<T>
+where
+    T: Scalar + Clone + Default,
+{
+    let nnz = csr_data.len();
+    
+    // Step 1: Count non-zeros per new column to pre-allocate CSC indptr
+    let mut nnz_per_new_col = vec![0; n];
+    for &old_col in csr_indices.iter() {
+        let new_col = p_inv[old_col];
+        nnz_per_new_col[new_col] += 1;
+    }
+
+    // Step 2: Build CSC col_offsets (indptr)
+    let mut csc_indptr = vec![0; n + 1];
+    for i in 0..n {
+        csc_indptr[i + 1] = csc_indptr[i] + nnz_per_new_col[i];
+    }
+
+    // Step 3: Scatter data (Magically Sorted by design)
+    let mut current_col_head = csc_indptr.clone();
+    let mut csc_indices = vec![0; nnz];
+    let mut csc_data = vec![T::default(); nnz];
+
+    // The outer loop guarantees ascending `new_row` insertion!
+    for new_row in 0..n {
+        let old_row = p_vec[new_row];
+        let start = csr_indptr[old_row];
+        let end = csr_indptr[old_row + 1];
+        
+        for idx in start..end {
+            let old_col = csr_indices[idx];
+            let val = csr_data[idx].clone();
+            let new_col = p_inv[old_col];
+            
+            let insert_idx = current_col_head[new_col];
+            csc_indices[insert_idx] = new_row;
+            csc_data[insert_idx] = val;
+            current_col_head[new_col] += 1;
+        }
+    }
+
+    CscMatrix::try_from_csc_data(n, n, csc_indptr, csc_indices, csc_data)
+        .expect("Sort-free scatter produced invalid CSC matrix")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,5 +152,46 @@ mod tests {
         let v_perm = &p_mat * &v;
 
         assert_eq!(v, v_perm);
+    }
+
+    #[test]
+    fn test_permute_csr_to_csc_sort_free() {
+        let n = 3;
+        // Y_old CSR matrix:
+        // [1.0, 2.0, 0.0]
+        // [0.0, 3.0, 4.0]
+        // [5.0, 0.0, 6.0]
+        let csr_indptr = vec![0, 2, 4, 6];
+        let csr_indices = vec![0, 1, 1, 2, 0, 2];
+        let csr_data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+
+        // Permutation: swap row 0 and row 2
+        // p_vec maps new_row to old_row: [2, 1, 0]
+        // p_inv maps old_col to new_col: [2, 1, 0]
+        let p_vec = vec![2, 1, 0];
+        let p_inv = vec![2, 1, 0];
+
+        // Expected Y_new = P * Y_old * P^T
+        // P swaps rows 0 and 2. P^T swaps cols 0 and 2.
+        // Y_new:
+        // [6.0, 0.0, 5.0]
+        // [4.0, 3.0, 0.0]
+        // [0.0, 2.0, 1.0]
+        
+        let y_new_csc = permute_csr_to_csc_sort_free(
+            n, &csr_indptr, &csr_indices, &csr_data, &p_vec, &p_inv
+        );
+
+        // CSC representation of Y_new:
+        // col 0: [6.0, 4.0] at rows [0, 1]
+        // col 1: [3.0, 2.0] at rows [1, 2]
+        // col 2: [5.0, 1.0] at rows [0, 2]
+        let expected_indptr = vec![0, 2, 4, 6];
+        let expected_indices = vec![0, 1, 1, 2, 0, 2];
+        let expected_data = vec![6.0, 4.0, 3.0, 2.0, 5.0, 1.0];
+
+        assert_eq!(y_new_csc.col_offsets(), expected_indptr.as_slice());
+        assert_eq!(y_new_csc.row_indices(), expected_indices.as_slice());
+        assert_eq!(y_new_csc.values(), expected_data.as_slice());
     }
 }
