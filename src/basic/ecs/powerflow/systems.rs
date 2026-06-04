@@ -71,8 +71,7 @@ impl PowerFlowMat {
 /// # Panics
 ///
 /// This function will panic if the indices provided in `pv`, `pq`, or `ext` are out of bounds.
-///
-
+/// Creates a permutation matrix based on PV, PQ, and EXT nodes.
 pub(crate) fn create_permutation_matrix(
     pq: &[i64],
     pv: &[i64],

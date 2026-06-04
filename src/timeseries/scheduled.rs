@@ -92,7 +92,6 @@ where
 /// - If the current time >= `execute_at`, performs the associated [`ScheduledActionKind`].
 /// - Applies changes via deferred `commands.queue(...)`.
 /// - Logs all executed actions in [`ScheduledLog`] for traceability.
-
 fn scheduled_action_system(
     time: Res<Time>,
     common: Res<PFCommonData>,
