@@ -66,7 +66,7 @@ pub mod shunt_systems {
         let y = s / (item.vn_kv * item.vn_kv);
         AdmittanceBranch {
             y: Admittance(y),
-            port: Port2(vector![bus.0 as i64, GND.into()]),
+            port: Port2(vector![bus.0, GND]),
             v_base: VBase(item.vn_kv),
         }
     }

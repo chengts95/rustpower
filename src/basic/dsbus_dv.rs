@@ -24,10 +24,10 @@ use nalgebra_sparse::CscMatrix;
 /// * This function assumes that `Ybus`, `v`, and `Vnorm` have compatible dimensions.
 /// * The Jacobian matrices are computed using the formulae for power injections in a power system.
 /// * This method is from MatPower:
-///  R. D. Zimmerman, "AC Power Flows, Generalized OPF Costs and
-///  their Derivatives using Complex Matrix Notation", MATPOWER
-///  Technical Note 2, February 2010.U{http://www.pserc.cornell.edu/matpower/TN2-OPF-Derivatives.pdf}
-///  @author: Ray Zimmerman (PSERC Cornell)
+///   R. D. Zimmerman, "AC Power Flows, Generalized OPF Costs and
+///   their Derivatives using Complex Matrix Notation", MATPOWER
+///   Technical Note 2, February 2010.U{http://www.pserc.cornell.edu/matpower/TN2-OPF-Derivatives.pdf}
+///   @author: Ray Zimmerman (PSERC Cornell)
 ///
 #[allow(non_snake_case, dead_code)]
 pub fn dSbus_dV_old(
@@ -79,11 +79,11 @@ pub fn dSbus_dV(
 
     // 核心：单趟 O(NNZ) 连续内存遍历，打爆缓存命中率
     for j in 0..n {
-        let start = col_offsets[j] as usize;
-        let end = col_offsets[j + 1] as usize;
+        let start = col_offsets[j];
+        let end = col_offsets[j + 1];
 
         for idx in start..end {
-            let i = row_indices[idx] as usize;
+            let i = row_indices[idx];
             let y_ij = y_vals[idx];
 
             // MatPower 元素级硬解推导：
