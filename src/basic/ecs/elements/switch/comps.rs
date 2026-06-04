@@ -22,7 +22,9 @@ pub struct Switch {
 )]
 pub struct SwitchState(pub bool);
 
-#[derive(Default, Debug, Clone)]
+use rustpower_proc_marco::DeferBundle;
+
+#[derive(DeferBundle, Default, Debug, Clone)]
 pub struct SwitchBundle {
     pub switch: Switch,
     pub state: SwitchState,
