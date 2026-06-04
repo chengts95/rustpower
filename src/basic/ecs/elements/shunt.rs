@@ -1,8 +1,6 @@
 use crate::io::pandapower::Shunt;
-use crate::prelude::ecs::defer_builder::*;
 use bevy_archive::prelude::SnapshotRegistry;
-use bevy_ecs::component::Component;
-use rustpower_proc_marco::DeferBundle;
+use bevy_ecs::prelude::*;
 
 use super::{
     bus::{OutOfService, SnaptShotRegGroup},
@@ -33,7 +31,7 @@ pub struct ShuntDevice {
 ///
 /// Includes target bus reference, fixed parameter device model,
 /// and optional out-of-service flag.
-#[derive(DeferBundle, Clone)]
+#[derive(Clone)]
 pub struct ShuntBundle {
     /// Target bus entity ID (as i64) for the shunt connection
     pub target_bus: TargetBus,
