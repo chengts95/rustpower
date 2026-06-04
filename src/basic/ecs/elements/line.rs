@@ -156,12 +156,12 @@ pub mod line_systems {
                 if g != 0.0 || b != 0.0 {
                     p.spawn(AdmittanceBranch {
                         y: Admittance(y_shunt),
-                        port: Port2(vector![from.0, GND.into()]),
+                        port: Port2(vector![from.0, GND]),
                         v_base: VBase(vbase), // 1.0 per unit unless otherwise specified
                     });
                     p.spawn(AdmittanceBranch {
                         y: Admittance(y_shunt),
-                        port: Port2(vector![to.0, GND.into()]),
+                        port: Port2(vector![to.0, GND]),
                         v_base: VBase(vbase),
                     });
                 }

@@ -39,25 +39,25 @@ pub struct LineResultData {
     pub va_to_degree: f64,    // Voltage angle at the 'to' bus (degrees)
     pub loading_percent: f64, // Line loading percentage (%)
 }
-impl Into<LineResTable> for &LineResultData {
-    fn into(self) -> LineResTable {
+impl From<&LineResultData> for LineResTable {
+    fn from(val: &LineResultData) -> Self {
         LineResTable {
             from: 0,
             to: 0,
-            p_from_mw: FloatWrapper::new(self.p_from_mw, 3),
-            q_from_mvar: FloatWrapper::new(self.q_from_mvar, 3),
-            p_to_mw: FloatWrapper::new(self.p_to_mw, 3),
-            q_to_mvar: FloatWrapper::new(self.q_to_mvar, 3),
-            pl_mw: FloatWrapper::new(self.pl_mw, 3),
-            ql_mvar: FloatWrapper::new(self.ql_mvar, 3),
-            i_from_ka: FloatWrapper::new(self.i_from_ka, 3),
-            i_to_ka: FloatWrapper::new(self.i_to_ka, 3),
-            i_ka: FloatWrapper::new(self.i_ka, 3),
-            vm_from_pu: FloatWrapper::new(self.vm_from_pu, 2),
-            va_from_degree: FloatWrapper::new(self.va_from_degree, 2),
-            vm_to_pu: FloatWrapper::new(self.vm_to_pu, 2),
-            va_to_degree: FloatWrapper::new(self.va_to_degree, 2),
-            loading_percent: FloatWrapper::new(self.loading_percent, 1),
+            p_from_mw: FloatWrapper::new(val.p_from_mw, 3),
+            q_from_mvar: FloatWrapper::new(val.q_from_mvar, 3),
+            p_to_mw: FloatWrapper::new(val.p_to_mw, 3),
+            q_to_mvar: FloatWrapper::new(val.q_to_mvar, 3),
+            pl_mw: FloatWrapper::new(val.pl_mw, 3),
+            ql_mvar: FloatWrapper::new(val.ql_mvar, 3),
+            i_from_ka: FloatWrapper::new(val.i_from_ka, 3),
+            i_to_ka: FloatWrapper::new(val.i_to_ka, 3),
+            i_ka: FloatWrapper::new(val.i_ka, 3),
+            vm_from_pu: FloatWrapper::new(val.vm_from_pu, 2),
+            va_from_degree: FloatWrapper::new(val.va_from_degree, 2),
+            vm_to_pu: FloatWrapper::new(val.vm_to_pu, 2),
+            va_to_degree: FloatWrapper::new(val.va_to_degree, 2),
+            loading_percent: FloatWrapper::new(val.loading_percent, 1),
         }
     }
 }
@@ -107,7 +107,7 @@ fn extract_res_bus(
 fn print_res_bus(q: Query<(&BusID, &VBusResult, &SBusResult)>) {
     let bus_res_table = q
         .iter()
-        .sort_by::<&BusID>(|value_1, value_2| value_1.cmp(&value_2))
+        .sort_by::<&BusID>(|value_1, value_2| value_1.cmp(value_2))
         .map(|(node, v, s)| {
             let vm = v.0.modulus();
             let angle = v.0.argument().to_degrees();
@@ -146,7 +146,6 @@ fn determine_branch(parent: &Port2, child: &Port2) -> AdmittanceType {
 }
 
 /// Extracts line results after power flow calculation.
-
 #[allow(unused_assignments)]
 fn extract_res_line(
     mut cmd: Commands,

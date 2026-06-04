@@ -118,6 +118,9 @@ impl NodeLookup {
     pub fn len(&self) -> usize {
         self.reverse.len()
     }
+    pub fn is_empty(&self) -> bool {
+        self.reverse.is_empty()
+    }
     pub fn iter(&self) -> impl Iterator<Item = (i64, Entity)> + '_ {
         self.forward
             .iter()
@@ -130,23 +133,21 @@ impl NodeLookup {
             self.forward.resize_with(idx + 1, || None);
         }
 
-        if let Some(old_id) = self.reverse.insert(entity, bus_id) {
-            if let Some(e) = self.forward.get_mut(old_id as usize) {
-                if *e == Some(entity) {
-                    *e = None;
-                }
-            }
+        if let Some(old_id) = self.reverse.insert(entity, bus_id)
+            && let Some(e) = self.forward.get_mut(old_id as usize)
+            && *e == Some(entity)
+        {
+            *e = None;
         }
 
         self.forward[idx] = Some(entity);
     }
     pub fn remove_entity(&mut self, entity: Entity) {
-        if let Some(id) = self.reverse.remove(&entity) {
-            if let Some(slot) = self.forward.get_mut(id as usize) {
-                if *slot == Some(entity) {
-                    *slot = None;
-                }
-            }
+        if let Some(id) = self.reverse.remove(&entity)
+            && let Some(slot) = self.forward.get_mut(id as usize)
+            && *slot == Some(entity)
+        {
+            *slot = None;
         }
     }
 
@@ -167,7 +168,7 @@ impl NodeLookup {
     pub fn contains_id(&self, bus_id: i64) -> bool {
         self.forward
             .get(bus_id as usize)
-            .map_or(false, |e| e.is_some())
+            .is_some_and(|e| e.is_some())
     }
 
     pub fn contains_entity(&self, entity: Entity) -> bool {
