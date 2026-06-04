@@ -47,6 +47,7 @@ pub(crate) fn assemble_f(
 ///
 /// `npq`: number of PQ buses (Vm update range `0..npq`, angles `0..n_bus`).
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 fn update_v(
     v_a: &mut DVector<f64>,
     dx: &DVector<f64>,
@@ -186,7 +187,7 @@ pub(crate) struct JacobianCache {
 /// V1 Newton-PF: single-pass `dSbus_dV` + `build_jacobian_cached` under
 /// `[PQ | PV | slack]` ordering.  Kept as the "semi-optimised" baseline for
 /// the assembly benchmark.
-#[allow(non_snake_case, dead_code)]
+#[allow(non_snake_case, dead_code, clippy::too_many_arguments)]
 pub fn newton_pf_old<Solver: Solve>(
     Ybus: &CscMatrix<Complex64>,
     Sbus: &DVector<Complex64>,
@@ -251,7 +252,7 @@ pub fn newton_pf_old<Solver: Solve>(
 /// V0 Newton-PF: literal MATPOWER port — `dSbus_dV_old` (diagonal-matrix
 /// SpGEMM) + uncached `build_jacobian`.  Un-optimised baseline for the
 /// assembly benchmark.
-#[allow(non_snake_case, dead_code)]
+#[allow(non_snake_case, dead_code, clippy::too_many_arguments)]
 pub fn newton_pf_v0<Solver: Solve>(
     Ybus: &CscMatrix<Complex64>,
     Sbus: &DVector<Complex64>,

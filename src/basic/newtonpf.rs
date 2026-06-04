@@ -45,7 +45,7 @@ impl<T: Clone + Zero + Scalar + ClosedAddAssign> Slice for CscMatrix<T> {
 ///
 /// Requires `Ybus`, `Sbus`, `v_init` already permuted into `[PQ | PV | slack]`:
 /// PQ buses at indices `0..npq`, PV at `npq..npq+npv`, slack at `npq+npv..`.
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 pub fn newton_pf<Solver: Solve>(
     Ybus: &CscMatrix<Complex64>,
     Sbus: &DVector<Complex64>,

@@ -98,7 +98,7 @@ impl GridFactory for PowerGrid {
     }
 
     fn add_bus(&mut self, buffer: &mut HarvardCommandBuffer, id: i64, vn_kv: f64, name: Option<String>, vm_min: f64, vm_max: f64, zone: i64) -> Entity {
-        let mut world = self.world_mut();
+        let world = self.world_mut();
         let entity = world.spawn_empty().id();
         buffer.insert_bundle(world, entity, (
             BusID(id),
@@ -128,7 +128,7 @@ impl GridFactory for PowerGrid {
             params.expect("Either std_type or params must be provided")
         };
 
-        let mut world = self.world_mut();
+        let world = self.world_mut();
         let entity = world.spawn_empty().id();
         buffer.insert_bundle(world, entity, (
             Line,
@@ -142,7 +142,7 @@ impl GridFactory for PowerGrid {
     }
 
     fn add_load(&mut self, buffer: &mut HarvardCommandBuffer, bus: i64, p_mw: f64, q_mvar: f64, name: Option<String>) -> Entity {
-        let mut world = self.world_mut();
+        let world = self.world_mut();
         let entity = world.spawn_empty().id();
         buffer.insert_bundle(world, entity, (
             TargetBus(bus),
@@ -159,7 +159,7 @@ impl GridFactory for PowerGrid {
     }
 
     fn add_gen(&mut self, buffer: &mut HarvardCommandBuffer, bus: i64, p_mw: f64, vm_pu: f64, p_min: f64, p_max: f64, q_min: f64, q_max: f64, name: Option<String>) -> Entity {
-        let mut world = self.world_mut();
+        let world = self.world_mut();
         let entity = world.spawn_empty().id();
         buffer.insert_bundle(world, entity, (
             TargetBus(bus),
@@ -173,7 +173,7 @@ impl GridFactory for PowerGrid {
     }
 
     fn add_ext_grid(&mut self, buffer: &mut HarvardCommandBuffer, bus: i64, vm_pu: f64, va_degree: f64, name: Option<String>) -> Entity {
-        let mut world = self.world_mut();
+        let world = self.world_mut();
         let entity = world.spawn_empty().id();
         buffer.insert_bundle(world, entity, (
             TargetBus(bus),
@@ -218,7 +218,7 @@ impl GridFactory for PowerGrid {
             params.expect("Either std_type or params must be provided")
         };
 
-        let mut world = self.world_mut();
+        let world = self.world_mut();
         let entity = world.spawn_empty().id();
         buffer.insert_bundle(world, entity, (
             final_dev,
@@ -231,7 +231,7 @@ impl GridFactory for PowerGrid {
     }
 
     fn add_shunt(&mut self, buffer: &mut HarvardCommandBuffer, bus: i64, p_mw: f64, q_mvar: f64, vn_kv: f64, step: i32, name: Option<String>) -> Entity {
-        let mut world = self.world_mut();
+        let world = self.world_mut();
         let entity = world.spawn_empty().id();
         buffer.insert_bundle(world, entity, (
             TargetBus(bus),
@@ -242,7 +242,7 @@ impl GridFactory for PowerGrid {
     }
 
     fn add_sgen(&mut self, buffer: &mut HarvardCommandBuffer, bus: i64, p_mw: f64, q_mvar: f64, name: Option<String>) -> Entity {
-        let mut world = self.world_mut();
+        let world = self.world_mut();
         let entity = world.spawn_empty().id();
         buffer.insert_bundle(world, entity, (
             TargetBus(bus),
@@ -262,7 +262,7 @@ impl GridFactory for PowerGrid {
             "b" => SwitchType::SwitchTwoBuses,
             _ => SwitchType::Unknown,
         };
-        let mut world = self.world_mut();
+        let world = self.world_mut();
         let entity = world.spawn_empty().id();
         buffer.insert_bundle(world, entity, (
             Switch { bus, element, et, z_ohm },

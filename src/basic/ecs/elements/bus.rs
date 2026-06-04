@@ -47,7 +47,7 @@ impl Default for VmLimit<PerUnit> {
 
 impl<T: UnitTrait> VmLimit<T> {
     pub fn new(min: f64, max: f64) -> Self {
-        VmLimit(Pair(Limit { min, max }, PhantomData::default()))
+        VmLimit(Pair(Limit { min, max }, PhantomData))
     }
     pub fn max(&self) -> f64 {
         self.max
@@ -60,7 +60,7 @@ impl<T: UnitTrait> VmLimit<T> {
 pub struct VNominal(pub Pair<f64, KV>);
 impl Default for VNominal {
     fn default() -> Self {
-        VNominal(Pair(110.0, PhantomData::default()))
+        VNominal(Pair(110.0, PhantomData))
     }
 }
 
@@ -88,8 +88,7 @@ impl From<&Bus> for BusBundle {
         Self {
             name: Name::new(
                 bus.name
-                    .as_ref()
-                    .map(|x| x.clone())
+                    .clone()
                     .unwrap_or_else(|| format!("bus_{}", bus.index)),
             ),
             bus_id: BusID(bus.index),
@@ -141,7 +140,6 @@ pub mod bus_systems {
     /// Initializes the [`NodeLookup`] resource from all existing [`BusID`] components.
     ///
     /// Also inserts default values for [`SBusInjPu`] and [`VBusPu`] into each bus entity.
-
     pub fn init_node_lookup(mut cmd: Commands, bus_ids: Query<(Entity, &BusID)>) {
         let mut node_lookup = NodeLookup::default();
         bus_ids.iter().for_each(|(entity, bus_id)| {
@@ -154,7 +152,6 @@ pub mod bus_systems {
     /// Updates the [`NodeLookup`] in response to changes in [`BusID`] components.
     ///
     /// Handles both changes and removals, ensuring consistent ID ↔ entity mapping.
-
     pub fn update_node_lookup(
         mut lookup: ResMut<NodeLookup>,
         changed: Query<(Entity, &BusID), Changed<BusID>>,
