@@ -274,7 +274,7 @@ pub fn fill_jacobian_v2(
         #[allow(clippy::needless_range_loop)]
         for offset in pq_end..active_end {
             let y_ptr = y_start + offset;
-            let i = y_row_indices[y_ptr];
+            let i = y_row_indices[y_ptr] as usize;
             let Y_ik = y_vals[y_ptr];
 
             let Va_re = Y_ik.re * ek - Y_ik.im * fk;
