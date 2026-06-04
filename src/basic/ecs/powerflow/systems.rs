@@ -77,24 +77,20 @@ pub(crate) fn create_permutation_matrix(
     pv: &[i64],
     ext: &[i64],
     nodes: usize,
-) -> CooMatrix<i64> {
-    let row_indices: Vec<usize> = (0..nodes).collect();
-    let mut col_indices: Vec<usize> = (0..nodes).collect();
-    let values = vec![1; nodes];
-
+) -> CsrMatrix<Complex64> {
+    let mut p = vec![0; nodes];
     let n_bus = pq.len() + pv.len();
     for i in 0..pq.len() {
-        col_indices[i] = pq[i] as usize;
+        p[i] = pq[i] as usize;
     }
     for i in pq.len()..n_bus {
-        col_indices[i] = pv[i - pq.len()] as usize;
+        p[i] = pv[i - pq.len()] as usize;
     }
     for i in n_bus..nodes {
-        col_indices[i] = ext[i - n_bus] as usize;
+        p[i] = ext[i - n_bus] as usize;
     }
 
-    CooMatrix::try_from_triplets(nodes, nodes, row_indices, col_indices, values)
-        .expect("Failed to create permutation matrix")
+    crate::basic::sparse::utils::csr_permutation(nodes, &p)
 }
 
 /// Creates the Y-bus matrix for the power flow network.
@@ -273,22 +269,12 @@ pub(crate) fn init_bus_status(
     exts.sort_unstable();
 
     // Create permutation matrix for bus reordering
-    let reorder_coo = create_permutation_matrix(
+    let reorder = create_permutation_matrix(
         pq_only.as_slice(),
         pv_only.as_slice(),
         exts.as_slice(),
         nodes,
     );
-    let reorder_csr = CsrMatrix::from(&reorder_coo);
-    let reorder: CsrMatrix<Complex64> = CsrMatrix::try_from_pattern_and_values(
-        reorder_csr.pattern().clone(),
-        reorder_csr
-            .values()
-            .iter()
-            .map(|&x| Complex64::new(x as f64, 0.0))
-            .collect(),
-    )
-    .expect("Failed to create complex permutation matrix");
 
     SystemBusStatus {
         reorder,
