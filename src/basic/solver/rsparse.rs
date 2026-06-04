@@ -39,7 +39,7 @@ impl Solve for RSparseSolver {
         let p: Vec<isize> = Ap.iter().map(|&v| v as isize).collect();
         let mut a = data::Sprs {
             m: n,
-            n: n,
+            n,
             i: Ai.to_vec(),
             p,
             x: Ax.to_vec(),
@@ -51,11 +51,11 @@ impl Solve for RSparseSolver {
         }
         let mut x = self.x.as_mut().unwrap();
         let mut s = self.symbolic.as_mut().unwrap();
-        let n = lu(&a, &mut s, 1e-6).map_err(|_| "LU factorization failed")?; // numeric LU factorization
-        ipvec(&n.pinv, b, &mut x[..]); // x = P*b
-        lsolve(&n.l, &mut x); // x = L\x
-        usolve(&n.u, &mut x); // x = U\x
-        ipvec(&s.q, &x, &mut b[..]); // b = Q*x
+        let n_lu = lu(&a, s, 1e-6).map_err(|_| "LU factorization failed")?; // numeric LU factorization
+        ipvec(&n_lu.pinv, b, &mut x[..]); // x = P*b
+        lsolve(&n_lu.l, x); // x = L\x
+        usolve(&n_lu.u, x); // x = U\x
+        ipvec(&s.q, x, &mut b[..]); // b = Q*x
 
         Ok(())
     }

@@ -8,7 +8,6 @@ use serde_json;
 use serde_json::{Map, Value};
 
 /// This module is used to parse pandapower network parameters
-
 /// Deserializes a number from JSON format.
 fn from_number<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
 where

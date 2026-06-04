@@ -221,8 +221,7 @@ fn major_dim_stack<MT: SpMat<DT = T>, T: Clone>(
 
     let mut data: Vec<T> = Vec::with_capacity(nnz);
     let mut indices: Vec<usize> = Vec::with_capacity(nnz);
-    let mut indptr: Vec<usize> = Vec::new();
-    indptr.resize(major_dim + 1, 0);
+    let mut indptr: Vec<usize> = vec![0; major_dim + 1];
 
     for i in 0..major_dim {
         let mut offset = 0;
@@ -337,12 +336,12 @@ fn vstack<T: Clone + Scalar, U: SpMat<DT = T> + SpConvert<DT = T, S = U>>(
     match U::format() {
         Format::Csr => {
             let mats: Vec<_> = matrices.iter().map(|x| x.to_csr()).collect();
-            let matsref: Vec<_> = mats.iter().map(|x| x).collect();
+            let matsref: Vec<_> = mats.iter().collect();
             U::from_csr(&csr_vstack(matsref.as_slice()))
         }
         Format::Csc => {
             let mats: Vec<_> = matrices.iter().map(|x| x.to_csc()).collect();
-            let matsref: Vec<_> = mats.iter().map(|x| x).collect();
+            let matsref: Vec<_> = mats.iter().collect();
             U::from_csc(&csc_vstack(matsref.as_slice()))
         }
     }

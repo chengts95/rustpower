@@ -84,11 +84,10 @@ where
             Matrix::from_data_statically_unchecked(data)
         };
         let v = values.map(|e| e.simd_real());
-        let real_mat = unsafe {
+        unsafe {
             CscMatrix::try_from_pattern_and_values(self.pattern().clone(), v.as_slice().to_vec())
                 .unwrap_unchecked()
-        };
-        real_mat
+        }
     }
 
     fn imag(&self) -> Self::Mat {
@@ -101,11 +100,10 @@ where
             Matrix::from_data_statically_unchecked(data)
         };
         let v = values.map(|e| e.simd_imaginary());
-        let imag_mat = unsafe {
+        unsafe {
             CscMatrix::try_from_pattern_and_values(self.pattern().clone(), v.as_slice().to_vec())
                 .unwrap_unchecked()
-        };
-        imag_mat
+        }
     }
 
     fn real_imag(&self) -> (Self::Mat, Self::Mat) {
@@ -148,11 +146,10 @@ where
             Matrix::from_data_statically_unchecked(data)
         };
         let v = values.map(|e| e.simd_real());
-        let real_mat = unsafe {
+        unsafe {
             CsrMatrix::try_from_pattern_and_values(self.pattern().clone(), v.as_slice().to_vec())
                 .unwrap_unchecked()
-        };
-        real_mat
+        }
     }
 
     fn imag(&self) -> Self::Mat {
@@ -165,11 +162,10 @@ where
             Matrix::from_data_statically_unchecked(data)
         };
         let v = values.map(|e| e.simd_imaginary());
-        let imag_mat = unsafe {
+        unsafe {
             CsrMatrix::try_from_pattern_and_values(self.pattern().clone(), v.as_slice().to_vec())
                 .unwrap_unchecked()
-        };
-        imag_mat
+        }
     }
 
     fn real_imag(&self) -> (Self::Mat, Self::Mat) {
