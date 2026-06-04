@@ -148,8 +148,8 @@ impl HarvardCommandBuffer {
         }
     }
 
-    pub fn insert_generic<T: Component>(&mut self, world: &World, entity: Entity, component: T) {
-        let comp_id = world.component_id::<T>().expect("Component not registered");
+    pub fn insert_generic<T: Component>(&mut self, world: &mut World, entity: Entity, component: T) {
+        let comp_id = world.register_component::<T>();
         let ptr = self.data_bump.alloc(component) as *mut T;
         let payload_ptr = unsafe { NonNull::new_unchecked(ptr as *mut u8) };
         let drop_fn: DropFn = |ptr| unsafe { ptr.drop_as::<T>() };
@@ -157,22 +157,22 @@ impl HarvardCommandBuffer {
         self.insert_raw(entity, comp_id, payload_ptr, Some(drop_fn));
     }
 
-    pub fn insert<T: Component>(&mut self, world: &World, entity: Entity, component: T) {
+    pub fn insert<T: Component>(&mut self, world: &mut World, entity: Entity, component: T) {
         self.insert_generic::<T>(world, entity, component);
     }
 
-    pub fn remove<T: Component>(&mut self, world: &World, entity: Entity) {
-        let comp_id = world.component_id::<T>().expect("Component not registered");
+    pub fn remove<T: Component>(&mut self, world: &mut World, entity: Entity) {
+        let comp_id = world.register_component::<T>();
         self.remove_raw(entity, &[comp_id]);
     }
 
-    pub fn insert_batch<T: Component, I>(&mut self, world: &World, entities: &[Entity], components: I)
+    pub fn insert_batch<T: Component, I>(&mut self, world: &mut World, entities: &[Entity], components: I)
     where
         I: IntoIterator<Item = T>,
         I::IntoIter: ExactSizeIterator,
     {
         self.flush();
-        let comp_id = world.component_id::<T>().expect("Component not registered");
+        let comp_id = world.register_component::<T>();
         let components_iter = components.into_iter();
         let slice = self.data_bump.alloc_slice_fill_iter(components_iter);
         let count = slice.len();
@@ -306,20 +306,20 @@ impl HarvardCommandBuffer {
         self.data_bump.reset();
     }
 
-    pub fn insert_bundle<B: BundleInserter>(&mut self, world: &World, entity: Entity, bundle: B) {
+    pub fn insert_bundle<B: BundleInserter>(&mut self, world: &mut World, entity: Entity, bundle: B) {
         bundle.insert_into(self, world, entity);
     }
 }
 
 pub trait BundleInserter {
-    fn insert_into(self, buffer: &mut HarvardCommandBuffer, world: &World, entity: Entity);
+    fn insert_into(self, buffer: &mut HarvardCommandBuffer, world: &mut World, entity: Entity);
 }
 
 macro_rules! impl_bundle_inserter {
     ($($name:ident),*) => {
         impl<$($name: Component),*> BundleInserter for ($($name,)*) {
             #[allow(non_snake_case)]
-            fn insert_into(self, buffer: &mut HarvardCommandBuffer, world: &World, entity: Entity) {
+            fn insert_into(self, buffer: &mut HarvardCommandBuffer, world: &mut World, entity: Entity) {
                 let ($($name,)*) = self;
                 $(buffer.insert(world, entity, $name);)*
             }

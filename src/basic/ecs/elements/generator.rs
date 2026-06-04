@@ -8,12 +8,8 @@
 use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
 use derive_more::From;
-use rustpower_proc_marco::DeferBundle;
 
-use crate::{
-    basic::ecs::defer_builder::*,
-    io::pandapower::{ExtGrid, Gen},
-};
+use crate::io::pandapower::{ExtGrid, Gen};
 
 use super::{bus::SnaptShotRegGroup, units::*};
 
@@ -148,7 +144,7 @@ impl Default for GeneratorCfg {
 /// This bundle supports optional fields (slack, name, scaling)
 /// and can represent both PQ and PV generators.
 
-#[derive(DeferBundle, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct GeneratorBundle {
     pub target_bus: TargetBus,
     pub target_vm: TargetVmPu,
@@ -163,7 +159,6 @@ pub struct GeneratorBundle {
 
 /// ECS bundle for generator initialization from Pandapower `ExtGrid`.
 
-#[derive(Bundle, DeferBundle)]
 pub struct ExtGridBundle {
     pub target_bus: TargetBus,
     pub target_vm: TargetVmPu,

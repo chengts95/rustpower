@@ -1,9 +1,8 @@
 use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::{component::Component, name::Name};
-use rustpower_proc_marco::DeferBundle;
 use serde::{Deserialize, Serialize};
 
-use crate::{basic::ecs::defer_builder::*, io::pandapower::Load};
+use crate::io::pandapower::Load;
 
 use super::{bus::SnaptShotRegGroup, generator::*};
 
@@ -27,7 +26,7 @@ pub struct LoadModelType {
     pub const_z_percent: f64,
 }
 
-#[derive(DeferBundle, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct LoadBundle {
     pub target_bus: TargetBus,
     pub target_p: TargetPMW,

@@ -1,8 +1,6 @@
 use crate::io::pandapower::SGen;
-use crate::prelude::ecs::defer_builder::*;
 use bevy_archive::prelude::SnapshotRegistry;
-use bevy_ecs::{component::Component, name::Name};
-use rustpower_proc_marco::DeferBundle;
+use bevy_ecs::prelude::*;
 
 use super::{
     TargetPMW, TargetQMVar,
@@ -43,7 +41,7 @@ pub struct SGenDevice {
 /// While SGen always carries `TargetPMW` / `TargetQMVar` components,
 /// the presence of `Uncontrollable` marks it as **not dispatchable**.
 /// This means the targets will be used **as-is**, not updated by optimization or control systems.
-#[derive(DeferBundle, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct SGenBundle {
     /// Target bus to which the SGen is connected
     pub target_bus: TargetBus,
