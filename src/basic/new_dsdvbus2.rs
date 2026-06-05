@@ -134,7 +134,7 @@ impl JacobianPattern2 {
 
 /// Numeric fill under `[PQ | PV | slack]` ordering. Branch-free: the outer
 /// column loop splits at `npq`, the inner row loop splits at `pq_ends[k]`.
-#[allow(non_snake_case, clippy::too_many_arguments)]
+#[allow(non_snake_case, dead_code, clippy::too_many_arguments)]
 #[inline(always)]
 pub fn fill_jacobian_v2(
     Ybus: &CscMatrix<Complex64>,

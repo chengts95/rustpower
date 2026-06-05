@@ -10,7 +10,7 @@ use bevy_ecs::prelude::*;
 use rustpower_proc_marco::DeferBundle;
 use derive_more::From;
 
-use crate::io::pandapower::{ExtGrid, Gen};
+use crate::io::pandapower::{ExtGrid, Gen, PolyCostRow};
 
 use super::{bus::SnaptShotRegGroup, units::*};
 
@@ -112,6 +112,41 @@ impl From<PQLim> for PQRangeProxy {
 #[derive(Component, Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 #[component(storage = "SparseSet")]
 pub struct Slack;
+
+/// Polynomial cost component for OPF: f(P) = cp2·P² + cp1·P + cp0 (P in MW, f in EUR).
+///
+/// Optional — only present on entities that have a `poly_cost` entry.
+/// Patch onto generator entities via `patch_gen_cost`.
+#[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GenCost {
+    pub cp2_eur_per_mw2: f64,
+    pub cp1_eur_per_mw: f64,
+    pub cp0_eur: f64,
+}
+
+impl From<&PolyCostRow> for GenCost {
+    fn from(r: &PolyCostRow) -> Self {
+        Self {
+            cp2_eur_per_mw2: r.cp2_eur_per_mw2,
+            cp1_eur_per_mw: r.cp1_eur_per_mw,
+            cp0_eur: r.cp0_eur,
+        }
+    }
+}
+
+/// Records the Vec-position of each pandapower element to its spawned ECS entity.
+///
+/// Stored as a resource after `load_pandapower_net`. Used by OPF translation systems
+/// (e.g. `patch_gen_cost`, `attach_line_flow_limits`) to attach optional OPF components
+/// to the right entities. Once translation is done, downstream computation should not
+/// need to consult pandapower types again — the components on entities are the truth.
+#[derive(bevy_ecs::prelude::Resource, Default, Debug)]
+pub struct PandapowerEntityMap {
+    pub gen_entities: Vec<bevy_ecs::prelude::Entity>,
+    pub ext_grid_entities: Vec<bevy_ecs::prelude::Entity>,
+    pub line_entities: Vec<bevy_ecs::prelude::Entity>,
+    pub trafo_entities: Vec<bevy_ecs::prelude::Entity>,
+}
 
 /// Marker for uncontrollable entity (for opf which is not implemented yet).
 
