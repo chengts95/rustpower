@@ -1,4 +1,4 @@
- [package]
+[package]
 name = "rustpower"
 version = "0.5.0-rc.2"
 edition = "2024"
@@ -17,6 +17,7 @@ default-members = [
 ]
 
 [lib]
+name = "rustpower"
 crate-type = ["rlib", "cdylib"]
 
 [features]
