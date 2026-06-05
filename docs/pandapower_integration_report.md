@@ -18,23 +18,25 @@ This means Python users only need to "pour" their matrices once during setup, an
 
 ---
 
-## 2. Benchmark Results
+## 2. Benchmark Results (Steady-State / Warm)
 
-The following benchmarks compare the native `pp.runpp(algorithm='nr')` against the `rustpower` plugin executing the exact same mathematical problem on an **AMD Ryzen AI 9 HX 370 (32GB DDR5)**.
+The following benchmarks compare the native `pp.runpp(algorithm='nr')` against the `rustpower` plugin executing the exact same mathematical problem on an **AMD Ryzen AI 9 HX 370 (32GB DDR5)**. Both solvers were warmed up prior to measurement to eliminate JIT compilation (Numba) and OS caching overhead.
 
 ### Case 1: IEEE 118 (Medium Grid, 118 nodes)
-| Metric | Time |
-| :--- | :--- |
-| **Native Pandapower (SciPy NR)** | ~23.14 ms |
-| **RustPower Plugin (Solve Only)** | **0.064 ms** (64 µs) |
-| **Speedup** | **~361x** |
+| Metric | Time | Notes |
+| :--- | :--- | :--- |
+| **Native Pandapower (`runpp`)** | 18.58 ms | Total time |
+| ├─ Data Prep & I/O | 12.50 ms | 67.2% of total time |
+| └─ Pure SciPy NR | 6.09 ms | The actual math |
+| **RustPower Plugin (Solve Only)** | **0.07 ms** (70 µs) | **~85x Faster than SciPy NR** |
 
 ### Case 2: PEGASE 9241 (Ultra-Large Grid, 9241 nodes)
-| Metric | Time |
-| :--- | :--- |
-| **Native Pandapower (SciPy NR)** | ~301.64 ms |
-| **RustPower Plugin (Solve Only)** | **~32.02 ms** |
-| **Speedup** | **~9.4x** |
+| Metric | Time | Notes |
+| :--- | :--- | :--- |
+| **Native Pandapower (`runpp`)** | 269.71 ms | Total time |
+| ├─ Data Prep & I/O | 28.58 ms | 10.6% of total time |
+| └─ Pure SciPy NR | 241.13 ms | The actual math |
+| **RustPower Plugin (Solve Only)** | **29.70 ms** | **~8.1x Faster than SciPy NR** |
 
 ---
 
