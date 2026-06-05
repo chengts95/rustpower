@@ -152,7 +152,9 @@ impl Gen {
 #[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 pub struct Load {
     pub bus: i64,
+    #[serde(default)]
     pub const_i_percent: f64,
+    #[serde(default)]
     pub const_z_percent: f64,
     pub controllable: Option<bool>,
     pub in_service: bool,

@@ -1,6 +1,9 @@
 pub mod branch;
 pub mod dcpf;
 pub(crate) mod dsbus_dv;
+pub(crate) mod dsbr_dv;
+pub(crate) mod d2sbus_dv2;
+pub(crate) mod d2sbr_dv2;
 pub mod iwamoto;
 #[cfg(test)]
 pub(crate) mod new_dsdvbus; // kept only for test_jacobian_pattern

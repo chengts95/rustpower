@@ -44,23 +44,29 @@ impl LoadPandapowerNet for World {
 
         // Transformers
         let ts: Vec<TransformerBundle> = net.trafo.clone().to_bundle_vec();
+        let mut trafo_entities = Vec::with_capacity(ts.len());
         for t in ts {
             let e = world.spawn_empty().id();
             buffer.insert_bundle(world, e, t);
+            trafo_entities.push(e);
         }
 
         // Lines
         let lines: Vec<LineBundle> = net.line.clone().to_bundle_vec();
+        let mut line_entities = Vec::with_capacity(lines.len());
         for l in lines {
             let e = world.spawn_empty().id();
             buffer.insert_bundle(world, e, l);
+            line_entities.push(e);
         }
 
         // Generators
         let gens: Vec<GeneratorBundle> = net.r#gen.clone().to_bundle_vec();
+        let mut gen_entities = Vec::with_capacity(gens.len());
         for g in gens {
             let e = world.spawn_empty().id();
             buffer.insert_bundle(world, e, g);
+            gen_entities.push(e);
         }
 
         // Loads
@@ -72,9 +78,11 @@ impl LoadPandapowerNet for World {
 
         // Ext Grid
         let ext_grid: Vec<ExtGridBundle> = net.ext_grid.clone().to_bundle_vec();
+        let mut ext_grid_entities = Vec::with_capacity(ext_grid.len());
         for g in ext_grid {
             let e = world.spawn_empty().id();
             buffer.insert_bundle(world, e, g);
+            ext_grid_entities.push(e);
         }
 
         // Shunts
@@ -100,6 +108,12 @@ impl LoadPandapowerNet for World {
 
         buffer.apply(world);
 
+        world.insert_resource(PandapowerEntityMap {
+            gen_entities,
+            ext_grid_entities,
+            line_entities,
+            trafo_entities,
+        });
         world.insert_resource(PFCommonData {
             wbase: net.f_hz * 2.0 * std::f64::consts::PI,
             f_hz: net.f_hz,
