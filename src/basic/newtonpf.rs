@@ -1,3 +1,4 @@
+#![allow(unused)]
 use std::f64::consts::PI;
 
 use super::new_dsdvbus2::{fill_jacobian_v2, JacobianPattern2};
