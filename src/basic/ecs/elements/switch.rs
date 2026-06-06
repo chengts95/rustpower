@@ -8,7 +8,7 @@ use crate::{
 use bevy_ecs::prelude::*;
 use derive_more::{Deref, DerefMut};
 use nalgebra::{Complex, DVector, vector};
-use nalgebra_sparse::{CooMatrix, CscMatrix, CsrMatrix};
+use nalgebra_sparse::{CooMatrix, CscMatrix};
 use std::collections::{HashMap, HashSet};
 
 use self::sparse::conj::RealImage;
