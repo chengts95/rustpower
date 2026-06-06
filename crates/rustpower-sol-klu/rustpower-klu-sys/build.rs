@@ -10,15 +10,25 @@ fn main() {
     }
     println!("cargo:rustc-link-search={}/lib", suitesparse_dir);
 
-    // Tell cargo to tell rustc to link the klu
-    // library.
-    println!("cargo:rustc-link-lib=suitesparseconfig_static");
-    println!("cargo:rustc-link-lib=camd_static");
-    println!("cargo:rustc-link-lib=amd_static");
-    println!("cargo:rustc-link-lib=btf_static");
-    println!("cargo:rustc-link-lib=ccolamd_static");
-    println!("cargo:rustc-link-lib=colamd_static");
-    println!("cargo:rustc-link-lib=klu_static");
+    let is_static = env::var("CARGO_FEATURE_STATIC").is_ok();
+
+    if is_static {
+        println!("cargo:rustc-link-lib=suitesparseconfig_static");
+        println!("cargo:rustc-link-lib=camd_static");
+        println!("cargo:rustc-link-lib=amd_static");
+        println!("cargo:rustc-link-lib=btf_static");
+        println!("cargo:rustc-link-lib=ccolamd_static");
+        println!("cargo:rustc-link-lib=colamd_static");
+        println!("cargo:rustc-link-lib=klu_static");
+    } else {
+        println!("cargo:rustc-link-lib=suitesparseconfig");
+        println!("cargo:rustc-link-lib=camd");
+        println!("cargo:rustc-link-lib=amd");
+        println!("cargo:rustc-link-lib=btf");
+        println!("cargo:rustc-link-lib=ccolamd");
+        println!("cargo:rustc-link-lib=colamd");
+        println!("cargo:rustc-link-lib=klu");
+    }
     println!("cargo:rustc-link-lib=vcomp");
     // Tell cargo to invalidate the built crate whenever the wrapper changes
     println!("cargo:rerun-if-changed=wrapper.h");
@@ -59,15 +69,18 @@ fn main() {
 
     println!("cargo:rustc-link-search=C:/Program Files (x86)/SuiteSparse/lib");
 
+    let is_static = env::var("CARGO_FEATURE_STATIC").is_ok();
+    let link_type = if is_static { "static=" } else { "" };
+
     // Tell cargo to tell rustc to link the klu
     // library.
-    println!("cargo:rustc-link-lib=static=klu");
-    println!("cargo:rustc-link-lib=static=camd");
-    println!("cargo:rustc-link-lib=static=amd");
-    println!("cargo:rustc-link-lib=static=btf");
-    println!("cargo:rustc-link-lib=static=ccolamd");
-    println!("cargo:rustc-link-lib=static=colamd");
-    println!("cargo:rustc-link-lib=static=suitesparseconfig");
+    println!("cargo:rustc-link-lib={}klu", link_type);
+    println!("cargo:rustc-link-lib={}camd", link_type);
+    println!("cargo:rustc-link-lib={}amd", link_type);
+    println!("cargo:rustc-link-lib={}btf", link_type);
+    println!("cargo:rustc-link-lib={}ccolamd", link_type);
+    println!("cargo:rustc-link-lib={}colamd", link_type);
+    println!("cargo:rustc-link-lib={}suitesparseconfig", link_type);
 
     // Tell cargo to invalidate the built crate whenever the wrapper changes
     println!("cargo:rerun-if-changed=wrapper.h");
@@ -102,15 +115,18 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 fn main() {
+    let is_static = env::var("CARGO_FEATURE_STATIC").is_ok();
+    let link_type = if is_static { "static=" } else { "" };
+
     // Tell cargo to tell rustc to link the klu
     // library.
-    println!("cargo:rustc-link-lib=static=klu");
-    println!("cargo:rustc-link-lib=static=camd");
-    println!("cargo:rustc-link-lib=static=amd");
-    println!("cargo:rustc-link-lib=static=btf");
-    println!("cargo:rustc-link-lib=static=ccolamd");
-    println!("cargo:rustc-link-lib=static=colamd");
-    println!("cargo:rustc-link-lib=static=suitesparseconfig");
+    println!("cargo:rustc-link-lib={}klu", link_type);
+    println!("cargo:rustc-link-lib={}camd", link_type);
+    println!("cargo:rustc-link-lib={}amd", link_type);
+    println!("cargo:rustc-link-lib={}btf", link_type);
+    println!("cargo:rustc-link-lib={}ccolamd", link_type);
+    println!("cargo:rustc-link-lib={}colamd", link_type);
+    println!("cargo:rustc-link-lib={}suitesparseconfig", link_type);
     println!("cargo:rustc-link-lib=omp");
 
     println!("cargo:rustc-link-search=/usr/local/lib");
