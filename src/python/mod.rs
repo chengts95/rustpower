@@ -1,5 +1,8 @@
+#[cfg(feature = "python")]
 pub mod handles;
+#[cfg(feature = "python")]
 pub mod grid;
+#[cfg(feature = "python")]
 pub mod solver;
 
 #[cfg(feature = "python")]
@@ -31,6 +34,7 @@ pub fn rustpower(m: &Bound<'_, PyModule>) -> PyResult<()> {
     
     // High-level API classes in root module
     m.add_class::<grid::PowerGrid>()?;
+    m.add_class::<grid::GridBuilder>()?;
     
     // Elemental Handles in root module
     m.add_class::<handles::BusHandle>()?;
