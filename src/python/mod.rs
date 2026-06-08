@@ -1,20 +1,16 @@
-#[cfg(feature = "python")]
+#![cfg(feature = "python")]
+
 pub mod handles;
-#[cfg(feature = "python")]
 pub mod grid;
-#[cfg(feature = "python")]
 pub mod solver;
 
-#[cfg(feature = "python")]
 use pyo3::prelude::*;
 
-#[cfg(feature = "python")]
 #[pyfunction]
 pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-#[cfg(feature = "python")]
 #[pyfunction]
 pub fn features() -> Vec<&'static str> {
     let mut f = Vec::new();
@@ -27,7 +23,6 @@ pub fn features() -> Vec<&'static str> {
     f
 }
 
-#[cfg(feature = "python")]
 #[pymodule]
 pub fn rustpower(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
