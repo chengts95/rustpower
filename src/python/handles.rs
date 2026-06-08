@@ -1,116 +1,165 @@
-#[cfg(feature = "python")]
 use pyo3::prelude::*;
-#[cfg(feature = "python")]
 use bevy_ecs::prelude::Entity;
 
-#[cfg(feature = "python")]
-#[pyclass]
-#[derive(Clone, Copy)]
-pub struct SwitchHandle(u64);
+use crate::basic::ecs::elements::BusID;
+use crate::basic::ecs::elements::generator::{TargetPMW, TargetQMVar, TargetVmPu};
+use crate::basic::ecs::network::DataOps;
+use super::grid::PowerGrid;
 
-#[cfg(feature = "python")]
-impl From<Entity> for SwitchHandle { fn from(e: Entity) -> Self { Self(e.to_bits()) } }
-#[cfg(feature = "python")]
-impl SwitchHandle { pub fn entity(&self) -> Entity { Entity::from_bits(self.0) } }
-#[cfg(feature = "python")]
+macro_rules! define_handle {
+    ($name:ident) => {
+        #[pyclass]
+        pub struct $name {
+            pub(crate) entity: u64,
+            pub(crate) grid: Py<PowerGrid>,
+        }
+
+        impl Clone for $name {
+            fn clone(&self) -> Self {
+                Python::with_gil(|py| {
+                    Self {
+                        entity: self.entity,
+                        grid: self.grid.clone_ref(py),
+                    }
+                })
+            }
+        }
+
+        impl $name {
+            pub fn new(entity: Entity, grid: Py<PowerGrid>) -> Self {
+                Self { entity: entity.to_bits(), grid }
+            }
+            pub fn entity(&self) -> Entity {
+                Entity::from_bits(self.entity)
+            }
+        }
+    };
+}
+
+define_handle!(BusHandle);
+define_handle!(LineHandle);
+define_handle!(TrafoHandle);
+define_handle!(LoadHandle);
+define_handle!(GenHandle);
+define_handle!(ExtGridHandle);
+define_handle!(ShuntHandle);
+define_handle!(SGenHandle);
+define_handle!(SwitchHandle);
+
 #[pymethods]
-impl SwitchHandle { fn __repr__(&self) -> String { format!("SwitchHandle({})", self.0) } }
+impl BusHandle { 
+    fn __repr__(&self) -> String { format!("BusHandle({})", self.entity) } 
+    
+    /// Update all loads attached to this bus.
+    ///
+    /// p_mw: Total active power consumption (positive for consumption).
+    /// q_mvar: Total reactive power consumption (positive for consumption).
+    fn set_load(&self, py: Python<'_>, p_mw: f64, q_mvar: f64) -> PyResult<()> {
+        let mut grid_py = self.grid.borrow_mut(py);
+        let bus_id = {
+            let world = grid_py.inner.world();
+            world.get::<BusID>(self.entity()).ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Not a bus entity"))?.0
+        };
+        
+        let PowerGrid { inner, bus_to_elements, .. } = &mut *grid_py;
+        if let Some(entities) = bus_to_elements.get(&bus_id) {
+            let world = inner.world_mut();
+            for &e in entities {
+                if let Some(mut p) = world.get_mut::<TargetPMW>(e) { p.0 = -p_mw; }
+                if let Some(mut q) = world.get_mut::<TargetQMVar>(e) { q.0 = -q_mvar; }
+            }
+            Ok(())
+        } else {
+            Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("No loads found at bus {}", bus_id)))
+        }
+    }
 
-#[cfg(feature = "python")]
-#[pyclass]
-#[derive(Clone, Copy)]
-pub struct BusHandle(u64);
+    /// Update all generators attached to this bus.
+    ///
+    /// p_mw: Total active power production.
+    /// vm_pu: Voltage magnitude setpoint (p.u.).
+    fn set_gen(&self, py: Python<'_>, p_mw: f64, vm_pu: f64) -> PyResult<()> {
+        let mut grid_py = self.grid.borrow_mut(py);
+        let bus_id = {
+            let world = grid_py.inner.world();
+            world.get::<BusID>(self.entity()).ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Not a bus entity"))?.0
+        };
 
-#[cfg(feature = "python")]
-#[pyclass]
-#[derive(Clone, Copy)]
-pub struct LineHandle(u64);
+        let PowerGrid { inner, bus_to_elements, .. } = &mut *grid_py;
+        if let Some(entities) = bus_to_elements.get(&bus_id) {
+            let world = inner.world_mut();
+            for &e in entities {
+                if let Some(mut p) = world.get_mut::<TargetPMW>(e) { p.0 = p_mw; }
+                if let Some(mut vm) = world.get_mut::<TargetVmPu>(e) { vm.0 = vm_pu; }
+            }
+            Ok(())
+        } else {
+            Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("No generators found at bus {}", bus_id)))
+        }
+    }
+}
 
-#[cfg(feature = "python")]
-#[pyclass]
-#[derive(Clone, Copy)]
-pub struct TrafoHandle(u64);
-
-#[cfg(feature = "python")]
-#[pyclass]
-#[derive(Clone, Copy)]
-pub struct LoadHandle(u64);
-
-#[cfg(feature = "python")]
-#[pyclass]
-#[derive(Clone, Copy)]
-pub struct GenHandle(u64);
-
-#[cfg(feature = "python")]
-#[pyclass]
-#[derive(Clone, Copy)]
-pub struct ExtGridHandle(u64);
-
-#[cfg(feature = "python")]
-#[pyclass]
-#[derive(Clone, Copy)]
-pub struct ShuntHandle(u64);
-
-#[cfg(feature = "python")]
-#[pyclass]
-#[derive(Clone, Copy)]
-pub struct SGenHandle(u64);
-
-#[cfg(feature = "python")]
-impl From<Entity> for BusHandle { fn from(e: Entity) -> Self { Self(e.to_bits()) } }
-#[cfg(feature = "python")]
-impl From<Entity> for LineHandle { fn from(e: Entity) -> Self { Self(e.to_bits()) } }
-#[cfg(feature = "python")]
-impl From<Entity> for TrafoHandle { fn from(e: Entity) -> Self { Self(e.to_bits()) } }
-#[cfg(feature = "python")]
-impl From<Entity> for LoadHandle { fn from(e: Entity) -> Self { Self(e.to_bits()) } }
-#[cfg(feature = "python")]
-impl From<Entity> for GenHandle { fn from(e: Entity) -> Self { Self(e.to_bits()) } }
-#[cfg(feature = "python")]
-impl From<Entity> for ExtGridHandle { fn from(e: Entity) -> Self { Self(e.to_bits()) } }
-#[cfg(feature = "python")]
-impl From<Entity> for ShuntHandle { fn from(e: Entity) -> Self { Self(e.to_bits()) } }
-#[cfg(feature = "python")]
-impl From<Entity> for SGenHandle { fn from(e: Entity) -> Self { Self(e.to_bits()) } }
-
-#[cfg(feature = "python")]
-impl BusHandle { pub fn entity(&self) -> Entity { Entity::from_bits(self.0) } }
-#[cfg(feature = "python")]
-impl LineHandle { pub fn entity(&self) -> Entity { Entity::from_bits(self.0) } }
-#[cfg(feature = "python")]
-impl TrafoHandle { pub fn entity(&self) -> Entity { Entity::from_bits(self.0) } }
-#[cfg(feature = "python")]
-impl LoadHandle { pub fn entity(&self) -> Entity { Entity::from_bits(self.0) } }
-#[cfg(feature = "python")]
-impl GenHandle { pub fn entity(&self) -> Entity { Entity::from_bits(self.0) } }
-#[cfg(feature = "python")]
-impl ExtGridHandle { pub fn entity(&self) -> Entity { Entity::from_bits(self.0) } }
-#[cfg(feature = "python")]
-impl ShuntHandle { pub fn entity(&self) -> Entity { Entity::from_bits(self.0) } }
-#[cfg(feature = "python")]
-impl SGenHandle { pub fn entity(&self) -> Entity { Entity::from_bits(self.0) } }
-
-#[cfg(feature = "python")]
 #[pymethods]
-impl BusHandle { fn __repr__(&self) -> String { format!("BusHandle({})", self.0) } }
-#[cfg(feature = "python")]
+impl LoadHandle { 
+    fn __repr__(&self) -> String { format!("LoadHandle({})", self.entity) } 
+    
+    /// Set the active power consumption (MW).
+    /// Positive value means the bus consumes power.
+    fn set_p(&self, py: Python<'_>, value: f64) -> PyResult<()> {
+        let mut grid_py = self.grid.borrow_mut(py);
+        let world = grid_py.inner.world_mut();
+        let entity = self.entity();
+        
+        if let Some(mut p) = world.get_mut::<TargetPMW>(entity) {
+            p.0 = -value; Ok(()) 
+        } else { 
+            Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Entity {:?} missing TargetPMW component", entity)))
+        }
+    }
+    
+    /// Set the reactive power consumption (MVar).
+    /// Positive value means the bus consumes reactive power.
+    fn set_q(&self, py: Python<'_>, value: f64) -> PyResult<()> {
+        let mut grid_py = self.grid.borrow_mut(py);
+        let world = grid_py.inner.world_mut();
+        if let Some(mut q) = world.get_mut::<TargetQMVar>(self.entity()) {
+            q.0 = -value; Ok(())
+        } else { Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("Not a Load entity (missing TargetQMVar)")) }
+    }
+}
+
 #[pymethods]
-impl LineHandle { fn __repr__(&self) -> String { format!("LineHandle({})", self.0) } }
-#[cfg(feature = "python")]
+impl GenHandle { 
+    fn __repr__(&self) -> String { format!("GenHandle({})", self.entity) } 
+    
+    /// Set the active power production (MW).
+    fn set_p(&self, py: Python<'_>, value: f64) -> PyResult<()> {
+        let mut grid_py = self.grid.borrow_mut(py);
+        let world = grid_py.inner.world_mut();
+        if let Some(mut p) = world.get_mut::<TargetPMW>(self.entity()) {
+            p.0 = value; Ok(())
+        } else { Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("Not a Generator entity")) }
+    }
+    
+    /// Set the voltage magnitude setpoint (p.u.).
+    fn set_vm(&self, py: Python<'_>, value: f64) -> PyResult<()> {
+        let mut grid_py = self.grid.borrow_mut(py);
+        let world = grid_py.inner.world_mut();
+        if let Some(mut vm) = world.get_mut::<TargetVmPu>(self.entity()) {
+            vm.0 = value; Ok(())
+        } else { Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("Not a Generator entity")) }
+    }
+}
+
 #[pymethods]
-impl TrafoHandle { fn __repr__(&self) -> String { format!("TrafoHandle({})", self.0) } }
-#[cfg(feature = "python")]
+impl LineHandle { fn __repr__(&self) -> String { format!("LineHandle({})", self.entity) } }
 #[pymethods]
-impl LoadHandle { fn __repr__(&self) -> String { format!("LoadHandle({})", self.0) } }
-#[cfg(feature = "python")]
+impl TrafoHandle { fn __repr__(&self) -> String { format!("TrafoHandle({})", self.entity) } }
 #[pymethods]
-impl GenHandle { fn __repr__(&self) -> String { format!("GenHandle({})", self.0) } }
-#[cfg(feature = "python")]
+impl ExtGridHandle { fn __repr__(&self) -> String { format!("ExtGridHandle({})", self.entity) } }
 #[pymethods]
-impl ExtGridHandle { fn __repr__(&self) -> String { format!("ExtGridHandle({})", self.0) } }
-#[cfg(feature = "python")]
+impl ShuntHandle { fn __repr__(&self) -> String { format!("ShuntHandle({})", self.entity) } }
 #[pymethods]
-impl ShuntHandle { fn __repr__(&self) -> String { format!("ShuntHandle({})", self.0) } }
-#[cfg(feature = "python")]
+impl SGenHandle { fn __repr__(&self) -> String { format!("SGenHandle({})", self.entity) } }
 #[pymethods]
-impl SGenHandle { fn __repr__(&self) -> String { format!("SGenHandle({})", self.0) } }
+impl SwitchHandle { fn __repr__(&self) -> String { format!("SwitchHandle({})", self.entity) } }
