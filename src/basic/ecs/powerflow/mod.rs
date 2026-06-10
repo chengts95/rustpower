@@ -7,6 +7,8 @@
 /// This module is a key part of the simulation backend, handling the Newton-Raphson iteration
 /// and constraint scheduling mechanisms in coordination with ECS world data.
 pub mod init; // System and resource initialization logic
+pub mod mutation; // Standardized parameter-mutation pipeline (message bus + consumer)
+pub mod pf_init; // Re-runnable full-initialization schedule (PFInit)
 pub mod nonlinear_schedule;
 pub mod qlim; // Generator reactive power limit handling
 pub mod branch_data; // Incremental branch analysis data

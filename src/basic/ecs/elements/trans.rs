@@ -201,7 +201,18 @@ pub mod trans_systems {
     use nalgebra::{Complex, ComplexField};
 
     use super::*;
-    pub fn setup_transformer(mut commands: Commands, q: Query<(Entity, &TransformerDevice)>) {
+    use crate::basic::ecs::elements::OutOfService;
+    pub fn setup_transformer(
+        mut commands: Commands,
+        q: Query<(Entity, &TransformerDevice), Without<OutOfService>>,
+        oos: Query<Entity, (With<TransformerDevice>, With<OutOfService>)>,
+    ) {
+        // Out-of-service transformers contribute nothing to the Y-bus:
+        // drop their admittance children and matrix patch.
+        for entity in &oos {
+            commands.entity(entity).despawn_related::<Children>();
+            commands.entity(entity).remove::<Port4MatPatch>();
+        }
         q.iter().for_each(|(entity, transformer)| {
             setup_transformer_admittance(&mut commands, entity, transformer);
         });

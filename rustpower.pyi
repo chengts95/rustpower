@@ -1,163 +1,227 @@
+"""Type stubs for the rustpower Python API v2.
+
+Contract: docs/design/python_api_v2.md.
+Core promise: solve() is always correct — topology changes (editor commits,
+in_service toggles) trigger an automatic full rebuild; parameter changes via
+element properties take the incremental path with warm starts.
+"""
 import numpy as np
-from typing import Dict, List, Optional, Tuple, Union, Any
+import pandas as pd
+from typing import Any, List, Optional, Tuple
+
+# ---------------------------------------------------------------------------
+# Element proxies (live views over ECS entities; hold no data themselves)
+# ---------------------------------------------------------------------------
 
 class BusHandle:
-    """Internal entity handle representing a Bus in the grid."""
+    """Bus proxy. Result properties are valid after solve()."""
+    @property
+    def id(self) -> int: ...
+    @property
+    def vn_kv(self) -> float: ...
+    @property
+    def vm_pu(self) -> float:
+        """Voltage magnitude (p.u.) from the last solve."""
+        ...
+    @property
+    def va_degree(self) -> float: ...
+    @property
+    def p_mw(self) -> float:
+        """Net injected active power (MW) from the last solve."""
+        ...
+    @property
+    def q_mvar(self) -> float: ...
     def set_load(self, p_mw: float, q_mvar: float) -> None:
         """Update all loads attached to this bus."""
         ...
     def set_gen(self, p_mw: float, vm_pu: float) -> None:
-        """Update all generators attached to this bus."""
+        """Update all PV generators attached to this bus (slack excluded)."""
         ...
-
-class LineHandle:
-    """Internal entity handle representing a Transmission Line."""
-    ...
-
-class TrafoHandle:
-    """Internal entity handle representing a Transformer."""
-    ...
 
 class LoadHandle:
-    """Internal entity handle representing a Load device."""
-    def set_p(self, value: float) -> None:
-        """Set active power consumption (MW)."""
-        ...
-    def set_q(self, value: float) -> None:
-        """Set reactive power consumption (MVar)."""
-        ...
+    """Load proxy. Property assignment = immediate-mode command."""
+    @property
+    def bus(self) -> int: ...
+    p_mw: float
+    """Active power consumption (MW). Assignment takes effect at next solve()."""
+    q_mvar: float
+    in_service: bool
+    """Topology-class: assignment triggers a full rebuild at the next solve."""
 
 class GenHandle:
-    """Internal entity handle representing a Generator device."""
-    def set_p(self, value: float) -> None:
-        """Set active power production (MW)."""
-        ...
-    def set_vm(self, value: float) -> None:
-        """Set voltage magnitude setpoint (p.u.)."""
-        ...
+    """PV generator proxy. Property assignment = immediate-mode command."""
+    @property
+    def bus(self) -> int: ...
+    p_mw: float
+    """Active power production (MW)."""
+    vm_pu: float
+    """Voltage magnitude setpoint (p.u.)."""
+    in_service: bool
 
-class ExtGridHandle:
-    """Internal entity handle representing an External Grid (Slack) device."""
-    ...
+class LineHandle:
+    """Line proxy. Flow properties are valid after solve()."""
+    @property
+    def from_bus(self) -> int: ...
+    @property
+    def to_bus(self) -> int: ...
+    in_service: bool
+    """Topology-class: assignment triggers a full rebuild at the next solve."""
+    @property
+    def p_from_mw(self) -> float: ...
+    @property
+    def q_from_mvar(self) -> float: ...
+    @property
+    def i_ka(self) -> float: ...
 
-class GridBuilder:
+class TrafoHandle: ...
+class ExtGridHandle: ...
+class ShuntHandle: ...
+class SGenHandle: ...
+class SwitchHandle: ...
+
+# ---------------------------------------------------------------------------
+# Solve report
+# ---------------------------------------------------------------------------
+
+class SolveReport:
+    """Returned by PowerGrid.solve(). Truthy iff converged."""
+    @property
+    def converged(self) -> bool: ...
+    @property
+    def iterations(self) -> int: ...
+    @property
+    def runtime_ms(self) -> float: ...
+    @property
+    def rebuild(self) -> str:
+        """Rebuild level this solve triggered: 'full' | 'incremental'."""
+        ...
+    def __bool__(self) -> bool: ...
+
+# ---------------------------------------------------------------------------
+# Transactional editor (Unit of Work)
+# ---------------------------------------------------------------------------
+
+class GridEditor:
     """
-    Deferred grid builder for high-performance batch construction.
-    Commands are buffered until commit() is called.
-    Supports context management: `with grid.defer() as b:`.
+    All topology mutations go through the editor. Commands are buffered
+    (fused insert) and applied once on commit; an exception inside the
+    `with` block aborts the transaction and leaves the grid unchanged.
+
+        with grid.edit() as e:
+            b, _ = e.add_bus(110.0)
+            e.add_line(b0, b, 12.0)
+        grid.solve()   # automatic full rebuild
     """
-    def __enter__(self) -> 'GridBuilder': ...
+    def __enter__(self) -> "GridEditor": ...
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None: ...
-    
-    def add_bus(self, vn_kv: float, name: Optional[str] = None, 
-                vm_min: float = 0.9, vm_max: float = 1.1, zone: int = 0) -> Tuple[int, BusHandle]:
-        """Add a bus to the command buffer."""
-        ...
 
-    def add_line(self, from_bus: int, to_bus: int, length_km: float, 
-                 std_type: Optional[str] = None, r_ohm_per_km: float = 0.1, 
-                 x_ohm_per_km: float = 0.1, c_nf_per_km: float = 0.0, 
-                 g_us_per_km: float = 0.0, parallel: int = 1, 
-                 max_i_ka: float = 0.0, name: Optional[str] = None) -> LineHandle:
-        """Add a transmission line to the command buffer."""
+    def add_bus(self, vn_kv: float, name: Optional[str] = None,
+                vm_min: float = 0.9, vm_max: float = 1.1,
+                zone: int = 0) -> Tuple[int, BusHandle]: ...
+    def add_line(self, from_bus: int, to_bus: int, length_km: float,
+                 std_type: Optional[str] = None, r_ohm_per_km: float = 0.1,
+                 x_ohm_per_km: float = 0.1, c_nf_per_km: float = 0.0,
+                 g_us_per_km: float = 0.0, parallel: int = 1,
+                 max_i_ka: float = 0.0, name: Optional[str] = None) -> LineHandle: ...
+    def add_load(self, bus: int, p_mw: float, q_mvar: float,
+                 name: Optional[str] = None) -> LoadHandle:
+        """p_mw > 0 indicates consumption."""
         ...
+    def add_gen(self, bus: int, p_mw: float, vm_pu: float = 1.0,
+                p_min: float = -1000.0, p_max: float = 1000.0,
+                q_min: float = -1000.0, q_max: float = 1000.0,
+                name: Optional[str] = None) -> GenHandle: ...
+    def add_ext_grid(self, bus: int, vm_pu: float = 1.0, va_degree: float = 0.0,
+                     name: Optional[str] = None) -> ExtGridHandle: ...
+    def add_trafo(self, hv_bus: int, lv_bus: int, sn_mva: float = 1.0,
+                  vn_hv_kv: float = 110.0, vn_lv_kv: float = 10.0,
+                  vk_percent: float = 10.0, vkr_percent: float = 0.1,
+                  pfe_kw: float = 0.0, i0_percent: float = 0.0,
+                  shift_degree: float = 0.0, tap_pos: float = 0.0,
+                  tap_neutral: float = 0.0, tap_step_percent: float = 1.25,
+                  name: Optional[str] = None) -> TrafoHandle: ...
+    def add_shunt(self, bus: int, q_mvar: float, p_mw: float = 0.0,
+                  vn_kv: float = 110.0, step: int = 1,
+                  name: Optional[str] = None) -> ShuntHandle: ...
+    def remove(self, element: Any) -> None:
+        """Remove an element by handle. Removing a bus removes attached
+        elements. Phase 1: not rolled back by abort."""
+        ...
+    def commit(self) -> None: ...
+    def abort(self) -> None: ...
 
-    def commit(self) -> None:
-        """Apply all buffered changes to the PowerGrid."""
-        ...
+# ---------------------------------------------------------------------------
+# PowerGrid facade
+# ---------------------------------------------------------------------------
 
 class PowerGrid:
     """
-    Core PowerGrid object managing topology, parameters, and simulation orchestration.
+    Core grid object. Three workflows:
+
+    A. Batch:      PowerGrid("case.zip").solve(); grid.res_bus
+    B. Parameter:  load.p_mw = p; grid.solve()        # incremental, warm start
+    C. Topology:   with grid.edit() as e: ...; grid.solve()  # auto rebuild
     """
-    def __init__(self, case_path: Optional[str] = None, _qlim: bool = False, **kwargs: Any):
-        """
-        Initialize the power grid.
-        """
+    def __init__(self, case_path: Optional[str] = None, _qlim: bool = False,
+                 **kwargs: Any): ...
+    @classmethod
+    def from_pandapower(cls, net: Any) -> "PowerGrid":
+        """Build from a live pandapower net. The pandapower data model is
+        discarded after ingestion."""
+        ...
+    def load_network(self, net: "Network") -> None:
+        """Replace the grid contents: clears all entities, re-ingests, and
+        rebuilds. Existing handles become invalid."""
         ...
 
-    def builder(self) -> GridBuilder:
-        """Return a GridBuilder for deferred operations."""
+    # -- element access (query-backed; returns None when not found) --------
+    def bus(self, id: int) -> Optional[BusHandle]: ...
+    def load(self, bus: Optional[int] = None,
+             name: Optional[str] = None) -> Optional[LoadHandle]: ...
+    def loads(self, bus: Optional[int] = None) -> List[LoadHandle]: ...
+    def gen(self, bus: Optional[int] = None,
+            name: Optional[str] = None) -> Optional[GenHandle]: ...
+    def line(self, from_bus: int, to_bus: int) -> Optional[LineHandle]: ...
+
+    # -- mutation gateway ---------------------------------------------------
+    def edit(self) -> GridEditor: ...
+    def set_base(self, f_hz: float = 50.0, sn_mva: float = 100.0) -> None: ...
+
+    # -- solve ---------------------------------------------------------------
+    def solve(self) -> SolveReport:
+        """Run the power flow. Raises RuntimeError only on validation errors
+        (empty grid, no slack); divergence is reported via a falsy report."""
         ...
 
-    def defer(self) -> GridBuilder:
-        """Alias for builder(), recommended for use with 'with' statements."""
-        ...
-
-    def bus(self, id: int) -> Optional[BusHandle]:
-        """Retrieve a handle for a specific Bus ID. Returns None if not found."""
-        ...
-
-    def load(self, id: int) -> Optional[LoadHandle]:
-        """Retrieve a handle for the first load at a specific Bus ID. Returns None if not found."""
-        ...
-
-    def set_base(self, f_hz: float = 50.0, sn_mva: float = 100.0) -> None:
-        """Set system base frequency (Hz) and base power (MVA)."""
-        ...
-
-    def add_bus(self, vn_kv: float, name: Optional[str] = None, 
-                vm_min: float = 0.9, vm_max: float = 1.1, zone: int = 0) -> Tuple[int, BusHandle]:
-        """Synchronously add a bus to the grid."""
-        ...
-
-    def add_line(self, from_bus: int, to_bus: int, length_km: float, 
-                 std_type: Optional[str] = None, r_ohm_per_km: float = 0.1, 
-                 x_ohm_per_km: float = 0.1, c_nf_per_km: float = 0.0, 
-                 g_us_per_km: float = 0.0, parallel: int = 1, 
-                 max_i_ka: float = 0.0, name: Optional[str] = None) -> LineHandle:
-        """Synchronously add a transmission line."""
-        ...
-
-    def add_load(self, bus: int, p_mw: float, q_mvar: float, name: Optional[str] = None) -> LoadHandle:
-        """Add a static load. p_mw > 0 indicates consumption."""
-        ...
-
-    def add_gen(self, bus: int, p_mw: float, vm_pu: float = 1.0, 
-                p_min: float = -1000.0, p_max: float = 1000.0, 
-                q_min: float = -1000.0, q_max: float = 1000.0, 
-                name: Optional[str] = None) -> GenHandle:
-        """Add a generator."""
-        ...
-
-    def add_ext_grid(self, bus: int, vm_pu: float = 1.0, va_degree: float = 0.0, 
-                    name: Optional[str] = None) -> ExtGridHandle:
-        """Add an external grid (Slack)."""
-        ...
-
-    def from_pp_net(self, net: Any) -> None:
-        """Load grid from a pandapower net object."""
-        ...
-
-    def init_pf(self) -> None:
-        """
-        Initialize/Rebuild the power flow matrices. 
-        MUST be called after adding elements or modifying source components (Load, Gen, etc.).
-        """
-        ...
-
-    def solve(self) -> None:
-        """Run power flow calculation."""
-        ...
-
+    # -- results (read-only projections) -------------------------------------
     @property
-    def n_bus(self) -> int: ...
+    def res_bus(self) -> pd.DataFrame: ...
     @property
-    def n_line(self) -> int: ...
+    def res_line(self) -> pd.DataFrame: ...
+    @property
+    def v(self) -> np.ndarray:
+        """Complex bus voltages (p.u.) of the last solve, original bus order."""
+        ...
     @property
     def converged(self) -> bool: ...
     @property
     def iterations(self) -> int: ...
 
-    def display_case_buses(self) -> 'pd.DataFrame': ...
-    def display_case_lines(self) -> 'pd.DataFrame': ...
-    def display_case_loads(self) -> 'pd.DataFrame': ...
-    def display_buses(self) -> 'pd.DataFrame': ...
-    def display_lines(self) -> 'pd.DataFrame': ...
+    # -- overview -------------------------------------------------------------
+    @property
+    def n_bus(self) -> int: ...
+    @property
+    def n_line(self) -> int: ...
+    def describe(self) -> pd.DataFrame: ...
+    def display_case_buses(self) -> pd.DataFrame: ...
+    def display_case_loads(self) -> pd.DataFrame: ...
 
-    def get_bus_results(self) -> Dict[str, np.ndarray]: ...
-    def get_line_results(self) -> Dict[str, np.ndarray]: ...
+# ---------------------------------------------------------------------------
+# IO (DTOs at the ingestion boundary; will move to rustpower.io in Phase 2)
+# ---------------------------------------------------------------------------
 
-def version() -> str:
-    """Return the RustPower version string."""
-    ...
+class Network: ...
+
+def load_csv_zip(path: str) -> Network: ...
+def version() -> str: ...
+def features() -> List[str]: ...

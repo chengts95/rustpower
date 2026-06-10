@@ -66,7 +66,7 @@ impl<'w, 's, T: Component, T1: Component<Mutability = Mutable>> NodeOp<'w, 's, T
 
 /// Labels all non-out-of-service, untagged buses as PQ buses by default.
 /// Excludes PV, Slack, and out-of-service nodes.
-fn label_pq_nodes(
+pub fn label_pq_nodes(
     mut cmd: Commands,
     query: Query<
         Entity,
@@ -85,7 +85,7 @@ fn label_pq_nodes(
 }
 
 /// Labels PV nodes (voltage-controlled generator nodes) based on available voltage and active power targets.
-fn label_pv_nodes(
+pub fn label_pv_nodes(
     mut cmd: Commands,
     nodes: Res<NodeLookup>,
     query: Query<&TargetBus, (With<TargetPMW>, With<TargetVmPu>, Without<OutOfService>)>,
@@ -99,7 +99,7 @@ fn label_pv_nodes(
 
 /// Labels Slack nodes based on angle and voltage specification.
 /// These nodes serve as the phase and magnitude reference for all others.
-fn label_slack_nodes(
+pub fn label_slack_nodes(
     mut cmd: Commands,
     nodes: Res<NodeLookup>,
     query: Query<&TargetBus, (With<TargetVaDeg>, With<TargetVmPu>, Without<OutOfService>)>,
