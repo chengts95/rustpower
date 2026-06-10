@@ -20,6 +20,10 @@ pub fn extract_powerflow_results(
     node_agg: Option<Res<NodeAggRes>>,
     mut event: MessageWriter<VoltageChangeEvent>,
 ) {
+    // A diverged voltage vector would poison the warm start of the next solve.
+    if !res.converged {
+        return;
+    }
     let v = &mat.reorder.transpose() * &res.v;
     let v = match &node_agg {
         Some(node_agg) => &node_agg.expand_mat_v.cast() * &v,

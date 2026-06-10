@@ -23,13 +23,31 @@ pub fn features() -> Vec<&'static str> {
     f
 }
 
+#[pyfunction]
+pub fn load_csv_zip(path: String) -> PyResult<crate::io::pandapower::Network> {
+    crate::io::pandapower::load_csv_zip(&path).map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{}", e)))
+}
+
 #[pymodule]
 pub fn rustpower(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
     
     // High-level API classes in root module
     m.add_class::<grid::PowerGrid>()?;
-    m.add_class::<grid::GridBuilder>()?;
+    m.add_class::<grid::GridEditor>()?;
+    m.add_class::<grid::SolveReport>()?;
+    
+    // IO classes
+    m.add_class::<crate::io::pandapower::Network>()?;
+    m.add_class::<crate::io::pandapower::Bus>()?;
+    m.add_class::<crate::io::pandapower::Line>()?;
+    m.add_class::<crate::io::pandapower::Transformer>()?;
+    m.add_class::<crate::io::pandapower::Load>()?;
+    m.add_class::<crate::io::pandapower::Gen>()?;
+    m.add_class::<crate::io::pandapower::ExtGrid>()?;
+    m.add_class::<crate::io::pandapower::Shunt>()?;
+    m.add_class::<crate::io::pandapower::SGen>()?;
+    m.add_class::<crate::io::pandapower::Switch>()?;
     
     // Elemental Handles in root module
     m.add_class::<handles::BusHandle>()?;
@@ -54,5 +72,6 @@ pub fn rustpower(m: &Bound<'_, PyModule>) -> PyResult<()> {
     
     m.add_function(wrap_pyfunction!(version, m)?)?;
     m.add_function(wrap_pyfunction!(features, m)?)?;
+    m.add_function(wrap_pyfunction!(load_csv_zip, m)?)?;
     Ok(())
 }

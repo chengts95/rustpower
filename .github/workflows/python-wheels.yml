@@ -1,0 +1,87 @@
+name: Python Wheels
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name for the release'
+        required: false
+        default: 'latest'
+
+permissions:
+  contents: write
+
+jobs:
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }} (${{ matrix.target || 'x86_64' }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64
+          - os: windows-latest
+            target: x86_64
+          - os: macos-13
+            target: x86_64
+          # Add ARM cases later when ready
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SuiteSparse (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsuitesparse-dev
+
+      - name: Install SuiteSparse (MacOS)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          brew install suite-sparse
+
+      - name: Install SuiteSparse (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          vcpkg install suitesparse:x64-windows
+          # Find where vcpkg installed it
+          echo "SUITESPARSE_DIR=$VCPKG_INSTALLATION_ROOT/installed/x64-windows" >> $GITHUB_ENV
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --features "python archive klu arrow"
+          sccache: 'true'
+          manylinux: auto
+          before-script-linux: |
+            # This runs inside the manylinux container
+            yum install -y suitesparse-devel || apk add suitesparse-dev || (apt-get update && apt-get install -y libsuitesparse-dev)
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.target }}
+          path: dist
+
+  publish:
+    name: Publish to GitHub Release
+    needs: [build_wheels]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: wheels-*
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag_name }}
+          files: dist/*
+          draft: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

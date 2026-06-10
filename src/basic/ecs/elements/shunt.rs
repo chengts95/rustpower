@@ -74,7 +74,13 @@ pub mod shunt_systems {
     pub fn setup_shunt_systems(
         mut commands: Commands,
         q: Query<(&TargetBus, &ShuntDevice), Without<OutOfService>>,
+        existing: Query<Entity, With<EShunt>>,
     ) {
+        // Rebuild shunt admittance entities from scratch so re-running setup
+        // (e.g. a second init_pf) does not duplicate them.
+        for e in &existing {
+            commands.entity(e).despawn();
+        }
         q.iter().for_each(|(target_bus, device)| {
             commands.spawn((EShunt, shunt_internal(device, target_bus)));
         });
