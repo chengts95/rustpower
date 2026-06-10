@@ -4,6 +4,6 @@ authors:
 - family-names: "Cheng"
   given-names: "Tianshi" 
 title: "RustPower: An ECS-based High-Performance Power System Analysis Package in Rust"
-version: "0.5.0-rc.3"
+version: "0.5.0"
 date-released: 2026-06-09
 url: "https://github.com/chengts95/rustpower"
