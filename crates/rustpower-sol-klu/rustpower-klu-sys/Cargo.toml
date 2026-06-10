@@ -1,6 +1,6 @@
 [package]
 name = "rustpower-klu-sys"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "Auto generated bindings for the klu library."
 license = "MPL-2.0"
