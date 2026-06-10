@@ -146,8 +146,8 @@ pub mod line_systems {
             let g = 1e-6 * params.g_us_per_km * length * parallel;
             let y_shunt = 0.5 * Complex::new(g, b);
 
-            let rl = params.r_ohm_per_km * length * parallel;
-            let xl = params.x_ohm_per_km * length * parallel;
+            let rl = params.r_ohm_per_km * length / parallel;
+            let xl = params.x_ohm_per_km * length / parallel;
             let y_series = 1.0 / Complex::new(rl, xl);
             let vbase = lut.get_entity(from.0).unwrap();
             let vbase = buses.get(vbase).unwrap().0.0;
