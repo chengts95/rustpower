@@ -74,7 +74,7 @@ impl PowerFlow for PowerGrid {
         s.run(world);
 
         //let mut schedules = world.get_resource_mut::<Schedules>().unwrap();
-        //.schedules.insert(s); termporarily removed to avoid double insertion
+        //.schedules.insert(s
     }
 
     fn run_pf(&mut self) {
@@ -126,6 +126,18 @@ pub fn ecs_run_pf(
     cfg: Res<PowerFlowConfig>,
     mut solver: ResMut<PowerFlowSolver>,
 ) {
+    // A grid without buses, or without a slack bus (npv + npq == n), has no
+    // valid power flow problem; report non-convergence instead of letting the
+    // solver kernel panic on an empty/degenerate partition.
+    if mat.npv + mat.npq >= mat.v_bus_init.len() {
+        cmd.insert_resource(PowerFlowResult {
+            v: mat.v_bus_init.clone_owned(),
+            iterations: 0,
+            converged: false,
+        });
+        return;
+    }
+
     let v_init = &mat.v_bus_init;
     let max_it = cfg.max_it;
     let tol = cfg.tol;

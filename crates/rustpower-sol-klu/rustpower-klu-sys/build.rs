@@ -113,7 +113,7 @@ fn main() {
         .expect("Couldn't write bindings!");
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() {
     let is_static = env::var("CARGO_FEATURE_STATIC").is_ok();
     let link_type = if is_static { "static=" } else { "" };
@@ -127,9 +127,15 @@ fn main() {
     println!("cargo:rustc-link-lib={}ccolamd", link_type);
     println!("cargo:rustc-link-lib={}colamd", link_type);
     println!("cargo:rustc-link-lib={}suitesparseconfig", link_type);
-    println!("cargo:rustc-link-lib=omp");
 
-    println!("cargo:rustc-link-search=/usr/local/lib");
+    if cfg!(target_os = "linux") {
+        println!("cargo:rustc-link-lib=omp");
+        println!("cargo:rustc-link-search=/usr/local/lib");
+    } else if cfg!(target_os = "macos") {
+        // Search Homebrew paths
+        println!("cargo:rustc-link-search=/usr/local/lib");
+        println!("cargo:rustc-link-search=/opt/homebrew/lib");
+    }
 
     // Tell cargo to invalidate the built crate whenever the wrapper changes
     println!("cargo:rerun-if-changed=wrapper.h");
@@ -137,23 +143,24 @@ fn main() {
     // The bindgen::Builder is the main entry point
     // to bindgen, and lets you build up options for
     // the resulting bindings.
-    let bindings = bindgen::Builder::default()
-        // The input header we would like to generate
-        // bindings for.
+    let mut builder = bindgen::Builder::default()
         .header("wrapper.h")
         .derive_default(true)
-        .clang_arg("-I/usr/local/include/suitesparse")
         .blocklist_item("FP_NORMAL")
         .blocklist_item("FP_SUBNORMAL")
         .blocklist_item("FP_ZERO")
         .blocklist_item("FP_INFINITE")
         .blocklist_item("FP_NAN")
-        // Tell cargo to invalidate the built crate whenever any of the
-        // included header files changed.
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
-        // Finish the builder and generate the bindings.
-        .generate()
-        // Unwrap the Result and panic on failure.
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()));
+
+    if cfg!(target_os = "linux") {
+        builder = builder.clang_arg("-I/usr/local/include/suitesparse");
+    } else if cfg!(target_os = "macos") {
+        builder = builder.clang_arg("-I/usr/local/include")
+                         .clang_arg("-I/opt/homebrew/include");
+    }
+
+    let bindings = builder.generate()
         .expect("Unable to generate bindings");
 
     // Write the bindings to the $OUT_DIR/bindings.rs file.

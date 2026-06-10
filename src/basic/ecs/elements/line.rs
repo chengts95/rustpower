@@ -132,11 +132,16 @@ pub mod line_systems {
     use super::*;
     pub fn setup_line_systems(
         mut commands: Commands,
-        q: Query<(Entity, &LineParams, &FromBus, &ToBus)>,
+        q: Query<(Entity, &LineParams, &FromBus, &ToBus), Without<OutOfService>>,
+        oos: Query<Entity, (With<LineParams>, With<OutOfService>)>,
         buses: Query<&VNominal>,
         lut: Res<NodeLookup>,
         common: Res<PFCommonData>,
     ) {
+        // Out-of-service lines contribute nothing to the Y-bus.
+        for entity in &oos {
+            commands.entity(entity).despawn_related::<Children>();
+        }
         for (entity, params, from, to) in &q {
             let length = params.length_km;
             let parallel = params.parallel as f64;
@@ -151,6 +156,9 @@ pub mod line_systems {
             let y_series = 1.0 / Complex::new(rl, xl);
             let vbase = lut.get_entity(from.0).unwrap();
             let vbase = buses.get(vbase).unwrap().0.0;
+            // Rebuild admittance children from scratch so re-running setup
+            // (e.g. a second init_pf) does not duplicate branches.
+            commands.entity(entity).despawn_related::<Children>();
             // Shunt: from and to → GND
             commands.entity(entity).insert(Line).with_children(|p| {
                 if g != 0.0 || b != 0.0 {
