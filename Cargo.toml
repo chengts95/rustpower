@@ -61,12 +61,12 @@ tabled = "^0.16.0"
 bevy_archive = { version = "0.4.0-rc.1", optional=true } 
 const_format = {version = "^0.2.34"}
 faer = {version = "^0.24", optional = true}
-rustpower_proc_marco = {path = "crates/rustpower_proc_marco", version = "0.3.0"}
+rustpower_proc_marco = {path = "crates/rustpower_proc_marco", version = "0.4.0"}
 bumpalo = "^3.20.0"
 pyo3 = { version = "0.23", features = ["extension-module", "abi3-py310"], optional = true }
 numpy = { version = "0.23", optional = true }
 
 [dependencies.rustpower-sol-klu]
 path = "./crates/rustpower-sol-klu"
-version = "0.1.3"
+version = "0.1.4"
 optional = true
