@@ -11,7 +11,7 @@ def test_full_archive_integration():
     print("--- RustPower 0.5.0: Full Case + Results Integration via DuckDB ---")
     grid = rustpower.PowerGrid(case_path='cases/IEEE118/data.zip')
     grid.init_pf()
-    grid.run_pf()
+    grid.solve()
     grid.post_process()
     
     # 1. Get both archives
