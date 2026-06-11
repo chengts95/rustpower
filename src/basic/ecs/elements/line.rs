@@ -106,7 +106,7 @@ impl From<&Line> for LineBundle {
                 df: line.df,
                 length_km: line.length_km,
                 parallel: line.parallel,
-                max_i_ka: line.max_i_ka,
+                max_i_ka: line.max_i_ka.unwrap_or(0.0),
             },
             name: line.name.clone().map(Name::new),
             std_spec: line.std_type.clone().map(StandardModelType),

@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 pub struct JacobianPattern {
     pub nnz_j: usize,
     pub j_col_ptrs: Vec<usize>,    // 长度: n_active + npq + 1
