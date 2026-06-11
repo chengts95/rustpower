@@ -79,7 +79,7 @@ grid.solve()
 
 ### `PowerGrid`
 The main entry point.
-- `__init__(case_path=None, qlim=False)`: Initialize a grid. `qlim=True` enables reactive power limit enforcement.
+- `__init__(case_path=None, qlim=False, **kwargs)`: Initialize a grid. `qlim=True` enables reactive power limit enforcement. Keyword arguments like `branch_analysis=True` can be passed to enable extra features (like branch loading calculations).
 - `solve(v_init=None)`: Execute power flow. Returns a `SolveReport`.
   `v_init` is an optional complex warm-start vector in **bus-id order** (same
   layout as `v`). PV/slack setpoints are re-pinned after the override, so
@@ -91,6 +91,18 @@ The main entry point.
   bus `i`). Readable after `solve()`; assignable as a warm-start vector.
   The internal PQ/PV/Slack solver permutation is applied automatically in
   both directions — users never see permuted data.
+- `converged`: (Property) Boolean indicating if the last solve converged.
+- `iterations`: (Property) Number of iterations taken by the last solve.
+- `post_process()`: Run post-processing explicitly (not usually needed, as `res_bus` and `res_line` trigger it lazily, but useful before snapshot/archive exports).
+- `get_parquet_case()`: Serialize the case grid topology and parameters to an in-memory ZIP archive of Parquet files (returns raw `bytes`).
+- `get_parquet_results()`: Serialize the simulation results (voltages, branch flows) to an in-memory ZIP archive of Parquet files (returns raw `bytes`).
+
+### `SolveReport`
+Returned by `PowerGrid.solve()`.
+- `converged`: Boolean indicating convergence.
+- `iterations`: Number of iterations taken.
+- `runtime_ms`: Solve execution time in milliseconds.
+- `rebuild`: Level of rebuild triggered ("full" | "incremental").
 
 ### `GridEditor`
 - `add_bus(...)`, `add_line(...)`, `add_load(...)`, `add_gen(...)`, `add_trafo(...)`: Add elements.

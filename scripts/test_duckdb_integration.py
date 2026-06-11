@@ -16,7 +16,7 @@ def test_duckdb_integration():
     print("--- RustPower 0.5.0: DuckDB Integration (Zero Annoyance Mode) ---")
     grid = rustpower.PowerGrid(case_path='cases/IEEE118/data.zip', branch_analysis=True)
     grid.init_pf()
-    grid.run_pf()
+    grid.solve()
     grid.post_process()
     
     # 1. Get the raw archive bytes
