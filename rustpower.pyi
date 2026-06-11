@@ -169,12 +169,15 @@ class PowerGrid:
         ...
     @classmethod
     def from_pandapower(cls, net: Any) -> "PowerGrid":
-        """Build from a live pandapower net. The pandapower data model is
-        discarded after ingestion."""
+        """Build a PowerGrid directly from a live Python `pandapowerNet` object (from the Python `pandapower` library).
+        
+        The Python pandapower data model is discarded after ingestion."""
         ...
     def load_network(self, net: "Network") -> None:
-        """Replace the grid contents: clears all entities, re-ingests, and
-        rebuilds. Existing handles become invalid."""
+        """Load a `rustpower.Network` object (the Rust-native parsed grid representation) into the grid.
+        
+        This clears all existing entities, re-ingests the network components,
+        and rebuilds the grid. Existing element handles become invalid."""
         ...
 
     # -- element access (query-backed; returns None when not found) --------

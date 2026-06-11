@@ -31,6 +31,7 @@ pub struct NewtonSolver {
 #[cfg(feature = "python")]
 #[pymethods]
 impl NewtonSolver {
+    /// Create a new NewtonSolver instance with default config.
     #[new]
     fn new() -> Self {
         let mut app = App::new();
