@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#[allow(dead_code)] 
 
 pub struct JacobianPattern {
     pub nnz_j: usize,

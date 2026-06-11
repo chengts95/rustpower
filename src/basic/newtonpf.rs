@@ -1,3 +1,4 @@
+#![allow(unused)]
 use std::f64::consts::PI;
 
 use super::new_dsdvbus2::JacobianPattern2;
@@ -56,7 +57,7 @@ pub fn newton_pf<Solver: Solve>(
     tolerance: Option<f64>,
     max_iter: Option<usize>,
     solver: &mut Solver,
-) -> Result<(DVector<Complex64>, usize), (String, DVector<Complex64>)> {
+) -> Result<(DVector<Complex64>, usize), (String, DVector<Complex64>, usize)> {
     let mut v = v_init.clone();
     let max_iter = max_iter.unwrap_or(100);
     let tol = tolerance.unwrap_or(1e-6);
@@ -142,7 +143,7 @@ pub fn newton_pf<Solver: Solve>(
         }
     }
 
-    Err((String::from("Did not converge!"), v))
+    Err((String::from("Did not converge!"), v, max_iter))
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

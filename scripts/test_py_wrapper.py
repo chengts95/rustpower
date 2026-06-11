@@ -6,7 +6,7 @@ def test():
     print("Testing without plugin...")
     grid = rustpower.PowerGrid(case_path='cases/IEEE118/data.zip')
     grid.init_pf()
-    grid.run_pf()
+    grid.solve()
     try:
         inc = grid.get_incidence()
     except Exception as e:
@@ -15,7 +15,7 @@ def test():
     print("\nTesting full result extraction with Pandas...")
     grid = rustpower.PowerGrid(case_path='cases/IEEE118/data.zip', branch_analysis=True)
     grid.init_pf()
-    grid.run_pf()
+    grid.solve()
     grid.post_process()
     
     bus_res = grid.get_bus_results()

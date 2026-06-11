@@ -7,6 +7,9 @@ use std::{io::Read, option::Option};
 use serde_json;
 use serde_json::{Map, Value};
 
+#[cfg(feature = "python")]
+use pyo3::prelude::*;
+
 /// This module is used to parse pandapower network parameters
 /// Deserializes a number from JSON format.
 fn from_number<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
@@ -38,6 +41,7 @@ where
 
 /// Represents a bus in the network.
 #[derive(Default, Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 pub struct Bus {
     pub index: i64,
     pub in_service: bool,
@@ -51,8 +55,19 @@ pub struct Bus {
     pub zone: Option<i64>,
 }
 
+#[cfg(feature = "python")]
+#[pymethods]
+impl Bus {
+    #[new]
+    #[pyo3(signature = (index=0, in_service=true, max_vm_pu=None, min_vm_pu=None, name=None, r#type=None, vn_kv=110.0, zone=None))]
+    fn new(index: i64, in_service: bool, max_vm_pu: Option<f64>, min_vm_pu: Option<f64>, name: Option<String>, r#type: Option<String>, vn_kv: f64, zone: Option<i64>) -> Self {
+        Self { index, in_service, max_vm_pu, min_vm_pu, name, r#type, vn_kv, zone }
+    }
+}
+
 /// Represents a generator in the network.
 #[derive(Default, Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 pub struct Gen {
     pub bus: i64,
     pub controllable: Option<bool>,
@@ -72,8 +87,19 @@ pub struct Gen {
     pub slack_weight: f64,
 }
 
+#[cfg(feature = "python")]
+#[pymethods]
+impl Gen {
+    #[new]
+    #[pyo3(signature = (bus=0, controllable=None, in_service=true, name=None, p_mw=0.0, scaling=1.0, sn_mva=None, type_=None, vm_pu=1.0, slack=false, max_p_mw=0.0, min_p_mw=0.0, max_q_mvar=0.0, min_q_mvar=0.0, slack_weight=0.0))]
+    pub fn new(bus: i64, controllable: Option<bool>, in_service: bool, name: Option<String>, p_mw: f64, scaling: f64, sn_mva: Option<f64>, type_: Option<String>, vm_pu: f64, slack: bool, max_p_mw: f64, min_p_mw: f64, max_q_mvar: f64, min_q_mvar: f64, slack_weight: f64) -> Self {
+        Self { bus, controllable, in_service, name, p_mw, scaling, sn_mva, type_: type_, vm_pu, slack, max_p_mw, min_p_mw, max_q_mvar, min_q_mvar, slack_weight }
+    }
+}
+
 /// Represents a load in the network.
 #[derive(Default, Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 pub struct Load {
     pub bus: i64,
     #[serde(default)]
@@ -91,8 +117,19 @@ pub struct Load {
     pub type_: Option<String>, // Added underscore to avoid conflict with Rust keyword
 }
 
+#[cfg(feature = "python")]
+#[pymethods]
+impl Load {
+    #[new]
+    #[pyo3(signature = (bus=0, const_i_percent=0.0, const_z_percent=0.0, controllable=None, in_service=true, name=None, p_mw=0.0, q_mvar=0.0, scaling=1.0, sn_mva=None, type_=None))]
+    pub fn new(bus: i64, const_i_percent: f64, const_z_percent: f64, controllable: Option<bool>, in_service: bool, name: Option<String>, p_mw: f64, q_mvar: f64, scaling: f64, sn_mva: Option<f64>, type_: Option<String>) -> Self {
+        Self { bus, const_i_percent, const_z_percent, controllable, in_service, name, p_mw, q_mvar, scaling, sn_mva, type_: type_ }
+    }
+}
+
 /// Represents a line in the network.
 #[derive(Default, Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 pub struct Line {
     pub c_nf_per_km: f64,
     pub df: f64,
@@ -101,7 +138,7 @@ pub struct Line {
     pub g_us_per_km: f64,
     pub in_service: bool,
     pub length_km: f64,
-    pub max_i_ka: f64,
+    pub max_i_ka: Option<f64>,
     pub max_loading_percent: Option<f64>,
     pub parallel: i32,
     pub r_ohm_per_km: f64,
@@ -112,8 +149,19 @@ pub struct Line {
     pub std_type: Option<String>,
 }
 
+#[cfg(feature = "python")]
+#[pymethods]
+impl Line {
+    #[new]
+    #[pyo3(signature = (from_bus=0, to_bus=0, length_km=1.0, r_ohm_per_km=0.1, x_ohm_per_km=0.1, c_nf_per_km=0.0, g_us_per_km=0.0, in_service=true, parallel=1, max_i_ka=None, max_loading_percent=None, type_=None, name=None, std_type=None))]
+    fn new(from_bus: i64, to_bus: i64, length_km: f64, r_ohm_per_km: f64, x_ohm_per_km: f64, c_nf_per_km: f64, g_us_per_km: f64, in_service: bool, parallel: i32, max_i_ka: Option<f64>, max_loading_percent: Option<f64>, type_: Option<String>, name: Option<String>, std_type: Option<String>) -> Self {
+        Self { from_bus, to_bus, length_km, r_ohm_per_km, x_ohm_per_km, c_nf_per_km, g_us_per_km, in_service, parallel, max_i_ka, max_loading_percent, type_: type_, name, std_type, df: 1.0 }
+    }
+}
+
 /// Represents a transformer in the network.
 #[derive(Default, Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 pub struct Transformer {
     pub df: f64,
     pub hv_bus: i32,
@@ -141,8 +189,19 @@ pub struct Transformer {
     pub tap_step_percent: Option<f64>,
 }
 
+#[cfg(feature = "python")]
+#[pymethods]
+impl Transformer {
+    #[new]
+    #[pyo3(signature = (hv_bus=0, lv_bus=0, sn_mva=1.0, vn_hv_kv=110.0, vn_lv_kv=10.0, vk_percent=10.0, vkr_percent=0.1, pfe_kw=0.0, i0_percent=0.0, shift_degree=0.0, in_service=true, parallel=1, tap_side=None, tap_pos=None, tap_neutral=None, tap_max=None, tap_min=None, tap_step_percent=None, tap_step_degree=None, tap_phase_shifter=false, name=None, std_type=None))]
+    fn new(hv_bus: i32, lv_bus: i32, sn_mva: f64, vn_hv_kv: f64, vn_lv_kv: f64, vk_percent: f64, vkr_percent: f64, pfe_kw: f64, i0_percent: f64, shift_degree: f64, in_service: bool, parallel: i32, tap_side: Option<String>, tap_pos: Option<f64>, tap_neutral: Option<f64>, tap_max: Option<f64>, tap_min: Option<f64>, tap_step_percent: Option<f64>, tap_step_degree: Option<f64>, tap_phase_shifter: bool, name: Option<String>, std_type: Option<String>) -> Self {
+        Self { hv_bus, lv_bus, sn_mva, vn_hv_kv, vn_lv_kv, vk_percent, vkr_percent, pfe_kw, i0_percent, shift_degree, in_service, parallel, tap_side, tap_pos, tap_neutral, tap_max, tap_min, tap_step_percent, tap_step_degree, tap_phase_shifter, name, std_type, df: 1.0, max_loading_percent: None }
+    }
+}
+
 /// Represents an external grid in the network.
 #[derive(Default, Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 pub struct ExtGrid {
     pub bus: i64,
     pub in_service: bool,
@@ -156,8 +215,19 @@ pub struct ExtGrid {
     pub name: Option<String>,
 }
 
+#[cfg(feature = "python")]
+#[pymethods]
+impl ExtGrid {
+    #[new]
+    #[pyo3(signature = (bus=0, vm_pu=1.0, va_degree=0.0, in_service=true, slack_weight=1.0, name=None))]
+    fn new(bus: i64, vm_pu: f64, va_degree: f64, in_service: bool, slack_weight: f64, name: Option<String>) -> Self {
+        Self { bus, vm_pu, va_degree, in_service, slack_weight, name, max_p_mw: None, min_p_mw: None, max_q_mvar: None, min_q_mvar: None }
+    }
+}
+
 /// Represents the data from the sgen.
 #[derive(Default, Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 pub struct SGen {
     pub name: Option<String>,
     pub bus: i64,
@@ -172,8 +242,19 @@ pub struct SGen {
     pub controllable: Option<bool>,
 }
 
+#[cfg(feature = "python")]
+#[pymethods]
+impl SGen {
+    #[new]
+    #[pyo3(signature = (bus=0, p_mw=0.0, q_mvar=0.0, in_service=true, scaling=1.0, name=None, type_=None))]
+    fn new(bus: i64, p_mw: f64, q_mvar: f64, in_service: bool, scaling: f64, name: Option<String>, type_: Option<String>) -> Self {
+        Self { bus, p_mw, q_mvar, in_service, scaling, name, type_: type_, sn_mva: None, current_source: false, controllable: None }
+    }
+}
+
 /// Represents a shunt in the network.
 #[derive(Default, Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 pub struct Shunt {
     pub bus: i64,
     pub q_mvar: f64,
@@ -184,7 +265,19 @@ pub struct Shunt {
     pub in_service: bool,
     pub name: Option<String>,
 }
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl Shunt {
+    #[new]
+    #[pyo3(signature = (bus=0, p_mw=0.0, q_mvar=0.0, vn_kv=110.0, in_service=true, name=None))]
+    fn new(bus: i64, p_mw: f64, q_mvar: f64, vn_kv: f64, in_service: bool, name: Option<String>) -> Self {
+        Self { bus, p_mw, q_mvar, vn_kv, in_service, name, step: 1, max_step: 1 }
+    }
+}
+
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "python", pyclass(eq, eq_int))]
 pub enum SwitchType {
     #[serde(rename = "l")]
     SwitchBusLine,
@@ -200,6 +293,7 @@ pub enum SwitchType {
 
 /// Represents a switch in the network.
 #[derive(Default, Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 pub struct Switch {
     pub bus: i64,
     pub element: i64,
@@ -209,6 +303,16 @@ pub struct Switch {
     pub closed: bool,
     pub name: Option<String>,
     pub z_ohm: f64,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl Switch {
+    #[new]
+    #[pyo3(signature = (bus=0, element=0, et=SwitchType::SwitchTwoBuses, closed=true, name=None))]
+    fn new(bus: i64, element: i64, et: SwitchType, closed: bool, name: Option<String>) -> Self {
+        Self { bus, element, et, closed, name, type_: None, z_ohm: 0.0 }
+    }
 }
 
 impl From<&str> for SwitchType {
@@ -225,6 +329,7 @@ impl From<&str> for SwitchType {
 
 /// Represents a network.
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 pub struct Network {
     pub r#gen: Option<Vec<Gen>>,
     pub bus: Vec<Bus>,
@@ -239,7 +344,7 @@ pub struct Network {
     pub sn_mva: f64,
 }
 
-/// Trait for saving a network to CSV files.
+
 pub trait ToCSV {
     fn save_csv(&self) -> Result<(), &'static str>;
 }

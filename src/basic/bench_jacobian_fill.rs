@@ -498,7 +498,7 @@ fn bench_jacobian_fill() {
         }
 
         // ── CSV export for per-solve breakdown figure ──────────────────────
-        let csv = format!("{}/paper/solve_breakdown.csv", dir);
+        let csv = format!("{}/solve_breakdown.csv", dir);
         {
             use std::io::Write as _;
             let mut f = std::fs::File::create(&csv).expect("cannot create solve_breakdown.csv");

@@ -15,6 +15,11 @@ use nalgebra::DVector;
 #[cfg(feature = "python")]
 use nalgebra_sparse::{CscMatrix, CooMatrix, CsrMatrix};
 
+/// Low-level Newton-Raphson power flow solver.
+///
+/// This class provides direct access to the underlying solver logic, bypassing
+/// the PowerGrid high-level abstraction. It expects pre-built Y-bus matrices
+/// and handles permutations manually.
 #[cfg(feature = "python")]
 #[pyclass(unsendable)]
 pub struct NewtonSolver {
@@ -26,6 +31,7 @@ pub struct NewtonSolver {
 #[cfg(feature = "python")]
 #[pymethods]
 impl NewtonSolver {
+    /// Create a new NewtonSolver instance with default config.
     #[new]
     fn new() -> Self {
         let mut app = App::new();
@@ -49,6 +55,12 @@ impl NewtonSolver {
 
     /// Optimized context setup using the Double-Transpose trick.
     /// Maps Y_csc -> Y_t_csr, permutes in CSR, then swaps back to CSC for KLU.
+    ///
+    /// y_indptr, y_indices, y_data: CSC representation of the Y-bus matrix.
+    /// s_bus: Complex power injections.
+    /// v_init: Initial voltage guess.
+    /// p_vec, p_inv: Permutation vectors.
+    /// npv, npq: Number of PV and PQ buses.
     #[pyo3(signature = (y_indptr, y_indices, y_data, s_bus, v_init, p_vec, p_inv, npv, npq))]
     fn setup_context(
         &mut self,
@@ -105,6 +117,7 @@ impl NewtonSolver {
         Ok(())
     }
 
+    /// Run the solver. Returns True if converged.
     fn solve(&mut self) -> PyResult<bool> {
         let world = self.app.world_mut();
         let (max_it, tol) = {
@@ -130,7 +143,7 @@ impl NewtonSolver {
         
         let (converged, its, v_final) = match result {
             Ok((v, i)) => (true, i, v),
-            Err((_err, v)) => (false, 0, v),
+            Err((_err, v, i)) => (false, i, v),
         };
 
         world.insert_resource(mat);
@@ -144,6 +157,7 @@ impl NewtonSolver {
         Ok(converged)
     }
 
+    /// Get the final complex bus voltages in original order.
     fn get_voltage<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
         let world = self.app.world();
         let res = world.get_resource::<PowerFlowResult>()

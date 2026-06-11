@@ -8,7 +8,7 @@ def test_parquet_virtual_fs():
     print("--- Testing Python-side Virtual FS for Parquet ---")
     grid = rustpower.PowerGrid(case_path='cases/IEEE118/data.zip')
     grid.init_pf()
-    grid.run_pf()
+    grid.solve()
     grid.post_process()
     
     # Get the raw ZIP bytes

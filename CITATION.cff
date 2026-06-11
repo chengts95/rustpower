@@ -1,0 +1,21 @@
+﻿cff-version: 1.2.0
+title: RustPower
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Tianshi
+    family-names: Cheng
+    email: tcheng1@ualberta.ca
+    name-particle: Tianshi
+repository-code: 'https://github.com/chengts95/rustpower'
+keywords:
+  - power system analysis
+  - entity-component-system
+  - rust
+  - data-oriented programming
+  - high-performance computing
+license: MPL-2.0
+version: 0.5.0-rc.3
+date-released: '2026-06-09'

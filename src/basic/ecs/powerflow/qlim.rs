@@ -91,15 +91,20 @@ fn modify_qlim_system(
             let mut q_target = pf_bus.get_mut(e).unwrap();
             let q_mvar = (sbus_res[bus as usize].im - q_target.0.im) * common.sbase;
             let qlim = &lim.q;
+            // SBusInjPu at a PV bus holds the NON-generator injection (e.g.
+            // -Q_load); the generator's Q is a free variable and not part of
+            // it (which is exactly why `q_mvar` above equals the gen output).
+            // Clamping must therefore ADD the limited gen output on top of
+            // the existing injection — overwriting it would erase the load.
             if q_mvar < qlim.min {
                 structure_change = true;
                 cmd.entity(e).remove::<PVBus>().insert(PQBus);
-                q_target.deref_mut().0.im = qlim.min / common.sbase;
+                q_target.deref_mut().0.im += qlim.min / common.sbase;
             }
             if q_mvar > qlim.max {
                 structure_change = true;
                 cmd.entity(e).remove::<PVBus>().insert(PQBus);
-                q_target.deref_mut().0.im = qlim.max / common.sbase;
+                q_target.deref_mut().0.im += qlim.max / common.sbase;
             }
         });
     if structure_change {
@@ -138,5 +143,73 @@ impl Plugin for QLimPlugin {
             app.add_plugins(NonLinearSchedulePlugin);
         }
         app.add_systems(Update, modify_qlim_system.in_set(AfterSolve));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::basic::ecs::plugin::default_app;
+    use crate::basic::ecs::post_processing::PostProcessing;
+    use crate::io::pandapower::load_csv_zip;
+    use crate::prelude::PPNetwork;
+    use std::env;
+
+    #[test]
+    fn test_qlim_118_outer_iteration() {
+        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let name = format!("{}/cases/IEEE118/data.zip", dir);
+        let net = load_csv_zip(&name).unwrap();
+
+        let mut app = default_app();
+        app.add_plugins(QLimPlugin);
+        app.world_mut().insert_resource(PPNetwork(net));
+        app.update();
+
+        let res = app
+            .world()
+            .get_resource::<super::super::systems::PowerFlowResult>()
+            .unwrap();
+        assert!(res.converged, "qlim outer iteration must converge");
+        app.post_process();
+        app.print_res_bus();
+    }
+}
+
+#[cfg(test)]
+mod tests_python_composition {
+    use super::*;
+    use crate::basic::ecs::plugin::BasePFPlugin;
+    use crate::basic::ecs::powerflow::pf_init::PFInit;
+    use crate::basic::ecs::powerflow::result_extract::VBusUpdatePlugin;
+    use crate::io::pandapower::load_csv_zip;
+    use crate::prelude::PPNetwork;
+    use std::env;
+
+    /// Mirrors the plugin set and init flow of the Python PowerGrid.
+    #[test]
+    fn test_qlim_118_python_plugin_set() {
+        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let name = format!("{}/cases/IEEE118/data.zip", dir);
+        let net = load_csv_zip(&name).unwrap();
+
+        let mut app = App::new();
+        app.world_mut().insert_resource(PFCommonData {
+            sbase: 100.0,
+            f_hz: 50.0,
+            wbase: 2.0 * std::f64::consts::PI * 50.0,
+        });
+        app.add_plugins((BasePFPlugin, StructureUpdatePlugin, VBusUpdatePlugin));
+        app.add_plugins(QLimPlugin);
+
+        app.world_mut().insert_resource(PPNetwork(net));
+        let _ = app.world_mut().try_run_schedule(PFInit); // python init_pf()
+        app.update();                                     // python solve()
+
+        let res = app
+            .world()
+            .get_resource::<super::super::systems::PowerFlowResult>()
+            .unwrap();
+        assert!(res.converged, "qlim with the python plugin set must converge");
     }
 }

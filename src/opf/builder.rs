@@ -240,7 +240,7 @@ pub fn line_admittances(
     let yc = y_shunt_phys * scale;
 
     // Flow limit [p.u.]: sqrt(3) factor already implicit in apparent power
-    let smax_pu = line.max_i_ka * vbase_kv * (3.0f64).sqrt() / base_mva;
+    let smax_pu = line.max_i_ka.unwrap_or(0.0) * vbase_kv * (3.0f64).sqrt() / base_mva;
 
     (ys + yc, -ys, -ys, ys + yc, smax_pu)
 }

@@ -51,6 +51,9 @@ pub struct LineParams {
     /// Indicates how many identical lines are in parallel between the buses.
     pub parallel: i32,
     /// Maximum current (kA)
+    ///
+    /// 0.0 means no rating; defaulted so pre-0.5 snapshots still load.
+    #[serde(default)]
     pub max_i_ka: f64,
 }
 
@@ -103,7 +106,7 @@ impl From<&Line> for LineBundle {
                 df: line.df,
                 length_km: line.length_km,
                 parallel: line.parallel,
-                max_i_ka: line.max_i_ka,
+                max_i_ka: line.max_i_ka.unwrap_or(0.0),
             },
             name: line.name.clone().map(Name::new),
             std_spec: line.std_type.clone().map(StandardModelType),
@@ -132,11 +135,16 @@ pub mod line_systems {
     use super::*;
     pub fn setup_line_systems(
         mut commands: Commands,
-        q: Query<(Entity, &LineParams, &FromBus, &ToBus)>,
+        q: Query<(Entity, &LineParams, &FromBus, &ToBus), Without<OutOfService>>,
+        oos: Query<Entity, (With<LineParams>, With<OutOfService>)>,
         buses: Query<&VNominal>,
         lut: Res<NodeLookup>,
         common: Res<PFCommonData>,
     ) {
+        // Out-of-service lines contribute nothing to the Y-bus.
+        for entity in &oos {
+            commands.entity(entity).despawn_related::<Children>();
+        }
         for (entity, params, from, to) in &q {
             let length = params.length_km;
             let parallel = params.parallel as f64;
@@ -146,11 +154,14 @@ pub mod line_systems {
             let g = 1e-6 * params.g_us_per_km * length * parallel;
             let y_shunt = 0.5 * Complex::new(g, b);
 
-            let rl = params.r_ohm_per_km * length * parallel;
-            let xl = params.x_ohm_per_km * length * parallel;
+            let rl = params.r_ohm_per_km * length / parallel;
+            let xl = params.x_ohm_per_km * length / parallel;
             let y_series = 1.0 / Complex::new(rl, xl);
             let vbase = lut.get_entity(from.0).unwrap();
             let vbase = buses.get(vbase).unwrap().0.0;
+            // Rebuild admittance children from scratch so re-running setup
+            // (e.g. a second init_pf) does not duplicate branches.
+            commands.entity(entity).despawn_related::<Children>();
             // Shunt: from and to → GND
             commands.entity(entity).insert(Line).with_children(|p| {
                 if g != 0.0 || b != 0.0 {

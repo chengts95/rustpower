@@ -38,6 +38,18 @@ pub struct SwitchPluginTypeA;
 #[derive(Default)]
 pub struct SwitchPluginTypeB;
 
+/// System set for the default solver system.
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+pub struct DefaultSolverSet;
+
+/// System set for the active power flow solver.
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+pub struct PowerFlowSolverSet;
+
+/// Marker resource to flag that a custom solver is active and the default one should be bypassed.
+#[derive(Resource, Default)]
+pub struct CustomSolverActive;
+
 impl Plugin for BasePFPlugin {
     /// Builds the base power flow plugin by setting up essential resources and systems.
     ///
@@ -59,7 +71,13 @@ impl Plugin for BasePFPlugin {
                 .into_configs()
                 .chain(),
         );
-        app.add_systems(Update, ecs_run_pf.in_set(SolverStage::Solve));
+        app.add_systems(
+            Update,
+            ecs_run_pf
+                .in_set(SolverStage::Solve)
+                .in_set(DefaultSolverSet)
+                .in_set(PowerFlowSolverSet),
+        );
     }
 }
 
@@ -240,6 +258,25 @@ mod test {
         pf_net.update();
 
         pf_net.post_process();
-        pf_net.print_res_bus();
+    }
+}
+
+/// Plugin for running power flow calculations with Iwamoto optimal multiplier method.
+#[derive(Default)]
+pub struct IwamotoPlugin;
+
+impl Plugin for IwamotoPlugin {
+    fn build(&self, app: &mut bevy_app::App) {
+        app.configure_sets(
+            Update,
+            DefaultSolverSet.run_if(not(resource_exists::<CustomSolverActive>)),
+        );
+        app.add_systems(
+            Update,
+            iwamoto_run_pf
+                .in_set(SolverStage::Solve)
+                .in_set(PowerFlowSolverSet)
+                .run_if(resource_exists::<CustomSolverActive>),
+        );
     }
 }

@@ -8,11 +8,13 @@ pub(crate) mod new_dsdvbus2;
 pub(crate) mod new_dsdvbus3;
 pub(crate) mod pf_old_impl;
 pub mod newtonpf;
+pub mod iwamoto;
 
 pub mod ecs;
 pub mod solver;
 pub(crate) mod sparse;
 pub use newtonpf::newton_pf;
+pub use iwamoto::newton_pf_iwamoto;
 
 #[cfg(test)]
 mod test_jacobian_pattern;

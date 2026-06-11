@@ -33,7 +33,12 @@ pub struct NodeTypeChangeEvent;
 /// Set by [`event_update`] and consumed by [`structure_update`] to determine minimal work needed.
 #[derive(Default, Debug, Clone, Copy)]
 pub struct SimStateFlags {
-    /// Rebuild entire structure including topology, bus types, admittance matrix.
+    /// Run the full PFInit schedule (topology changed: ingestion, element
+    /// setup, re-labeling, matrices). Triggered by [`FullRebuildEvent`].
+    pub full_dirty: bool,
+    /// Re-derive matrices from the CURRENT node tags (no relabeling — this
+    /// must preserve e.g. qlim's PV->PQ demotions). Triggered by
+    /// [`NodeTypeChangeEvent`].
     pub structure_dirty: bool,
     /// Rebuild admittance (YBus) matrix only.
     pub admit_dirty: bool,
@@ -41,6 +46,13 @@ pub struct SimStateFlags {
     pub injection_dirty: bool,
     /// Update VBus voltage vector.
     pub voltage_dirty: bool,
+}
+
+/// What the last `structure_update` invocation actually did. Read by callers
+/// (e.g. the Python SolveReport) for observability.
+#[derive(Resource, Default, Clone, Copy)]
+pub struct LastStructureAction {
+    pub full_rebuild: bool,
 }
 
 /// Aggregates all recent event types into a unified [`SimStateFlags`] structure.
@@ -54,20 +66,16 @@ pub fn event_update(
     let mut flags = SimStateFlags::default();
 
     if !e_full.is_empty() {
+        flags.full_dirty = true;
+    }
+    if !e_node_type.is_empty() {
         flags.structure_dirty = true;
-        flags.admit_dirty = true;
+    }
+    if !e_sbus.is_empty() {
         flags.injection_dirty = true;
+    }
+    if !e_vbus.is_empty() {
         flags.voltage_dirty = true;
-    } else {
-        if !e_node_type.is_empty() {
-            flags.structure_dirty = true;
-        }
-        if !e_sbus.is_empty() {
-            flags.injection_dirty = true;
-        }
-        if !e_vbus.is_empty() {
-            flags.voltage_dirty = true;
-        }
     }
 
     e_full.clear();
@@ -85,30 +93,41 @@ pub fn reset_solvers(world: &mut World) {
         solver.solver.reset();
     }
 }
-/// Updates the `s_bus` vector in [`PowerFlowMat`] when [`SBusInjPu`] values have changed.
-pub fn sbus_pu_update(
-    mut pfmat: ResMut<PowerFlowMat>,
-    sbus: Query<(&BusID, &SBusInjPu), Changed<SBusInjPu>>,
-) {
+/// Re-syncs the full `s_bus` vector in [`PowerFlowMat`] from the `SBusInjPu`
+/// components. Triggered by the coarse [`SBusChangeEvent`] (native writers,
+/// e.g. time series, update the components themselves and fire the event).
+/// Deliberately tick-free: a full O(n) copy is cheap and always correct,
+/// whereas `Changed<T>` semantics depend on observer tick bookkeeping.
+pub fn sbus_pu_update(mut pfmat: ResMut<PowerFlowMat>, sbus: Query<(&BusID, &SBusInjPu)>) {
     for (bus_id, s) in sbus {
         let idx = pfmat.reorder_index(bus_id.0 as usize);
         pfmat.s_bus[idx] = s.0;
     }
 }
-// Updates the `v_bus` vector in [`PowerFlowMat`] when [`VBusPu`] values have changed.
-/// Note: this assumes target voltage values are directly applied as injected power.
-pub fn vbus_pu_update(
-    mut pfmat: ResMut<PowerFlowMat>,
-    sbus: Query<(&TargetBus, &VBusPu), Changed<VBusPu>>,
-) {
-    for (bus_id, s) in sbus {
+/// Re-syncs the full `v_bus` vector in [`PowerFlowMat`] from the `VBusPu`
+/// components. Triggered by the coarse [`VoltageChangeEvent`]. Tick-free for
+/// the same reason as [`sbus_pu_update`].
+pub fn vbus_pu_update(mut pfmat: ResMut<PowerFlowMat>, vbus: Query<(&BusID, &VBusPu)>) {
+    for (bus_id, s) in vbus {
         let idx = pfmat.reorder_index(bus_id.0 as usize);
-        pfmat.s_bus[idx] = s.0;
+        pfmat.v_bus_init[idx] = s.0;
     }
 }
 
 pub fn structure_update(world: &mut World) {
     let flags = world.run_system_cached(event_update).unwrap();
+    world.insert_resource(LastStructureAction { full_rebuild: flags.full_dirty });
+
+    // Topology changed: run the single full-rebuild pipeline.
+    if flags.full_dirty {
+        let _ = world.try_run_schedule(super::pf_init::PFInit);
+        return;
+    }
+    // Until init has produced the solver matrices there is nothing to patch;
+    // the pending changes are captured by the full rebuild instead.
+    if !world.contains_resource::<PowerFlowMat>() {
+        return;
+    }
     if flags.structure_dirty || flags.admit_dirty {
         //TODO: this should only update ybus or node structure
         world.run_system_cached(reset_solvers).unwrap();
@@ -149,6 +168,18 @@ impl Plugin for StructureUpdatePlugin {
         app.add_message::<SBusChangeEvent>();
         app.add_message::<FullRebuildEvent>();
         app.add_message::<NodeTypeChangeEvent>();
+        app.add_message::<super::mutation::ParamDiff>();
+        app.init_resource::<LastStructureAction>();
+        // The single definition of "full rebuild", runnable on demand.
+        app.add_schedule(super::pf_init::build_pf_init_schedule());
+        // The mutation-bus consumer runs as an ordinary system right before
+        // structure_update, so the change events it emits are seen this frame.
+        app.add_systems(
+            Update,
+            super::mutation::consume_param_diffs
+                .after(BeforeSolve)
+                .before(structure_update),
+        );
         app.add_systems(Update, structure_update.after(BeforeSolve).before(Solve));
     }
 }
