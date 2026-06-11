@@ -96,6 +96,7 @@ The main entry point.
 - `post_process()`: Run post-processing explicitly (not usually needed, as `res_bus` and `res_line` trigger it lazily, but useful before snapshot/archive exports).
 - `get_parquet_case()`: Serialize the case grid topology and parameters to an in-memory ZIP archive of Parquet files (returns raw `bytes`).
 - `get_parquet_results()`: Serialize the simulation results (voltages, branch flows) to an in-memory ZIP archive of Parquet files (returns raw `bytes`).
+- `load_parquet_case(zip_bytes)`: Load a case-file ECS state from a ZIP archive of Parquet files (restores topology and parameters). Clears any existing entities first.
 
 ### `SolveReport`
 Returned by `PowerGrid.solve()`.
