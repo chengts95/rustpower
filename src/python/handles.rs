@@ -176,6 +176,7 @@ impl BusHandle {
 impl LoadHandle {
     fn __repr__(&self) -> String { format!("LoadHandle({})", self.entity) }
 
+    /// Bus ID where the load is attached.
     #[getter]
     fn bus(&self, py: Python<'_>) -> PyResult<i64> {
         let grid_py = self.grid.borrow(py);
@@ -191,6 +192,7 @@ impl LoadHandle {
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Not a Load entity"))
     }
 
+    /// Set the active power consumption (MW).
     #[setter]
     fn set_p_mw(&self, py: Python<'_>, value: f64) -> PyResult<()> { self.set_p(py, value) }
 
@@ -202,9 +204,11 @@ impl LoadHandle {
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Not a Load entity"))
     }
 
+    /// Set the reactive power consumption (MVar).
     #[setter]
     fn set_q_mvar(&self, py: Python<'_>, value: f64) -> PyResult<()> { self.set_q(py, value) }
 
+    /// Whether the load is in service.
     #[getter]
     fn in_service(&self, py: Python<'_>) -> bool {
         let grid_py = self.grid.borrow(py);
@@ -245,6 +249,7 @@ impl LoadHandle {
 impl GenHandle {
     fn __repr__(&self) -> String { format!("GenHandle({})", self.entity) }
 
+    /// Bus ID where the generator is attached.
     #[getter]
     fn bus(&self, py: Python<'_>) -> PyResult<i64> {
         let grid_py = self.grid.borrow(py);
@@ -260,6 +265,7 @@ impl GenHandle {
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Not a Generator entity"))
     }
 
+    /// Set the active power production (MW).
     #[setter]
     fn set_p_mw(&self, py: Python<'_>, value: f64) -> PyResult<()> { self.set_p(py, value) }
 
@@ -271,9 +277,11 @@ impl GenHandle {
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Not a Generator entity"))
     }
 
+    /// Set the voltage magnitude setpoint (p.u.).
     #[setter]
     fn set_vm_pu(&self, py: Python<'_>, value: f64) -> PyResult<()> { self.set_vm(py, value) }
 
+    /// Whether the generator is in service.
     #[getter]
     fn in_service(&self, py: Python<'_>) -> bool {
         let grid_py = self.grid.borrow(py);
@@ -312,6 +320,7 @@ impl GenHandle {
 impl LineHandle {
     fn __repr__(&self) -> String { format!("LineHandle({})", self.entity) }
 
+    /// Bus ID at the from-side.
     #[getter]
     fn from_bus(&self, py: Python<'_>) -> PyResult<i64> {
         let grid_py = self.grid.borrow(py);
@@ -319,6 +328,7 @@ impl LineHandle {
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Not a Line entity"))
     }
 
+    /// Bus ID at the to-side.
     #[getter]
     fn to_bus(&self, py: Python<'_>) -> PyResult<i64> {
         let grid_py = self.grid.borrow(py);
@@ -326,6 +336,7 @@ impl LineHandle {
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Not a Line entity"))
     }
 
+    /// Whether the line is in service.
     #[getter]
     fn in_service(&self, py: Python<'_>) -> bool {
         let grid_py = self.grid.borrow(py);
