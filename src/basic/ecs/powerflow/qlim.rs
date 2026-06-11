@@ -77,12 +77,6 @@ fn modify_qlim_system(
         None => sbus_res,
     };
     let mut structure_change = false;
-    eprintln!(
-        "[qlim] tick: {} gens, {} PV buses, res.converged={}",
-        generators.iter().count(),
-        pf_bus.iter().count(),
-        res.converged
-    );
     generators
         .iter()
         .map(|d| {
@@ -105,13 +99,11 @@ fn modify_qlim_system(
             if q_mvar < qlim.min {
                 structure_change = true;
                 cmd.entity(e).remove::<PVBus>().insert(PQBus);
-                eprintln!("[qlim] bus {bus}: q={q_mvar:.3} < qmin={:.3}, inj.im {:.5} -> {:.5}", qlim.min, q_target.0.im, q_target.0.im + qlim.min / common.sbase);
                 q_target.deref_mut().0.im += qlim.min / common.sbase;
             }
             if q_mvar > qlim.max {
                 structure_change = true;
                 cmd.entity(e).remove::<PVBus>().insert(PQBus);
-                eprintln!("[qlim] bus {bus}: q={q_mvar:.3} > qmax={:.3}, inj.im {:.5} -> {:.5}", qlim.max, q_target.0.im, q_target.0.im + qlim.max / common.sbase);
                 q_target.deref_mut().0.im += qlim.max / common.sbase;
             }
         });

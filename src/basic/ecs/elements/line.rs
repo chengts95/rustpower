@@ -51,6 +51,9 @@ pub struct LineParams {
     /// Indicates how many identical lines are in parallel between the buses.
     pub parallel: i32,
     /// Maximum current (kA)
+    ///
+    /// 0.0 means no rating; defaulted so pre-0.5 snapshots still load.
+    #[serde(default)]
     pub max_i_ka: f64,
 }
 
