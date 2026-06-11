@@ -1,5 +1,5 @@
 use pyo3::prelude::*;
-use numpy::IntoPyArray;
+use numpy::{IntoPyArray, PyArrayMethods};
 use crate::prelude::*;
 use crate::basic::ecs::elements::*;
 use crate::basic::ecs::elements::generator::*;
@@ -219,8 +219,8 @@ fn make_trafo_device(sn_mva: f64, vn_hv_kv: f64, vn_lv_kv: f64, vk_percent: f64,
 #[pymethods]
 impl PowerGrid {
     #[new]
-    #[pyo3(signature = (case_path=None, _qlim=false, **kwargs))]
-    fn new(case_path: Option<String>, _qlim: bool, kwargs: Option<Bound<'_, pyo3::types::PyDict>>) -> PyResult<Self> {
+    #[pyo3(signature = (case_path=None, qlim=false, **kwargs))]
+    fn new(case_path: Option<String>, qlim: bool, kwargs: Option<Bound<'_, pyo3::types::PyDict>>) -> PyResult<Self> {
         let mut inner = crate::prelude::PowerGrid::default();
         let buffer = crate::bevy_cmdbuffer::buffer::HarvardCommandBuffer::new();
         inner.world_mut().insert_resource(crate::basic::ecs::factory::StdTypeLibrary::default());
@@ -240,6 +240,13 @@ impl PowerGrid {
             crate::basic::ecs::powerflow::structure_update::StructureUpdatePlugin,
             crate::basic::ecs::powerflow::result_extract::VBusUpdatePlugin,
         ));
+
+        // Generator reactive limit enforcement: PV->PQ demotion via the
+        // NodeTypeChangeEvent path (re-derives matrices from current tags,
+        // never relabels) inside an outer iteration loop.
+        if qlim {
+            inner.app_mut().add_plugins(crate::basic::ecs::powerflow::qlim::QLimPlugin);
+        }
 
         if let Some(args) = kwargs {
             if let Ok(Some(branch_analysis)) = args.get_item("branch_analysis") {
@@ -286,6 +293,12 @@ impl PowerGrid {
             .inner
             .world_mut()
             .try_run_schedule(crate::basic::ecs::powerflow::pf_init::PFInit);
+        // This synchronous rebuild supersedes any pending rebuild request;
+        // leaving the event in the bus would trigger a redundant second
+        // rebuild inside the next update (wiping e.g. a user-set v_init).
+        if let Some(mut msgs) = self.inner.world_mut().get_resource_mut::<bevy_ecs::message::Messages<crate::basic::ecs::powerflow::structure_update::FullRebuildEvent>>() {
+            msgs.clear();
+        }
         self.sync_next_bus_id();
         self.sync_bus_to_elements();
     }
@@ -296,23 +309,47 @@ impl PowerGrid {
     /// through the ParamDiff bus. Raises only on validation errors (empty
     /// grid, no slack); divergence is a legal result reported through the
     /// (falsy) SolveReport.
-    fn solve(&mut self) -> PyResult<SolveReport> {
+    ///
+    /// v_init: optional complex voltage start vector (p.u.), indexed by bus
+    /// id. Pure warm start — PV/slack setpoints are re-pinned afterwards, so
+    /// it never alters the physics. The bus-id → solver-ordering permutation
+    /// is applied internally.
+    #[pyo3(signature = (v_init=None))]
+    fn solve(&mut self, py: Python<'_>, v_init: Option<Bound<'_, numpy::PyArray1<num_complex::Complex64>>>) -> PyResult<SolveReport> {
         use crate::basic::ecs::powerflow::structure_update::{FullRebuildEvent, LastStructureAction};
         let t0 = std::time::Instant::now();
 
-        // First-ever build: nothing has posted a rebuild event yet.
-        if !self.inner.world().contains_resource::<PowerFlowMat>() {
+        let mut sync_full = false;
+        if let Some(v) = v_init {
+            // A rebuild pending inside run_pf() would zero VBusPu AFTER we
+            // write the start vector; perform it synchronously first
+            // (init_pf also clears the now-superseded rebuild event).
+            let rebuild_pending = !self.inner.world().contains_resource::<PowerFlowMat>()
+                || self
+                    .inner
+                    .world()
+                    .get_resource::<bevy_ecs::message::Messages<FullRebuildEvent>>()
+                    .map(|m| !m.is_empty())
+                    .unwrap_or(false);
+            if rebuild_pending {
+                self.init_pf();
+                sync_full = true;
+            }
+            self.set_v(py, v)?;
+        } else if !self.inner.world().contains_resource::<PowerFlowMat>() {
+            // First-ever build: nothing has posted a rebuild event yet.
             let _ = self.inner.world_mut().write_message(FullRebuildEvent);
         }
 
         self.inner.run_pf();
 
-        let full_rebuild = self
-            .inner
-            .world()
-            .get_resource::<LastStructureAction>()
-            .map(|a| a.full_rebuild)
-            .unwrap_or(false);
+        let full_rebuild = sync_full
+            || self
+                .inner
+                .world()
+                .get_resource::<LastStructureAction>()
+                .map(|a| a.full_rebuild)
+                .unwrap_or(false);
         if full_rebuild {
             self.sync_next_bus_id();
             self.sync_bus_to_elements();
@@ -378,6 +415,47 @@ impl PowerGrid {
             out[mat.from_perm[i]] = val;
         }
         Ok(out.into_pyarray(py))
+    }
+
+    /// Set the voltage start vector (p.u. complex), indexed by bus id.
+    /// Writes VBusPu on each bus, re-pins PV/slack setpoints (v_inj) so this
+    /// is a pure warm start, and fires VoltageChangeEvent; the sync into the
+    /// solver vector applies the bus-id → solver-ordering permutation
+    /// internally (reorder_index in vbus_pu_update).
+    #[setter]
+    fn set_v(&mut self, _py: Python<'_>, v: Bound<'_, numpy::PyArray1<num_complex::Complex64>>) -> PyResult<()> {
+        if !self.inner.world().contains_resource::<PowerFlowMat>() {
+            self.init_pf();
+        }
+        let v_ro = v.readonly();
+        let v_arr = v_ro.as_slice()?;
+        let world = self.inner.world_mut();
+        let n = world.resource::<PowerFlowMat>().v_bus_init.len();
+        if v_arr.len() != n {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "v has length {}, expected {} (one entry per bus id)",
+                v_arr.len(),
+                n
+            )));
+        }
+        // Resolve bus id -> entity up front so the NodeLookup borrow ends
+        // before the component writes.
+        let entities: Vec<Option<Entity>> = {
+            let lookup = world.resource::<NodeLookup>();
+            (0..n).map(|i| lookup.get_entity(i as i64)).collect()
+        };
+        for (i, e) in entities.into_iter().enumerate() {
+            if let Some(e) = e {
+                if let Some(mut bus_v) = world.get_mut::<VBusPu>(e) {
+                    bus_v.0 = v_arr[i];
+                }
+            }
+        }
+        // Re-pin PV/slack magnitude and slack angle targets: v overrides the
+        // start point, never the setpoints.
+        let _ = world.run_system_once(crate::basic::ecs::powerflow::init::v_inj);
+        let _ = world.write_message(crate::basic::ecs::powerflow::structure_update::VoltageChangeEvent);
+        Ok(())
     }
 
     #[getter]

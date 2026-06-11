@@ -493,9 +493,26 @@ impl Network {
         let in_service = Self::get_bool_vec(&df, "in_service")?;
         let slack = if df.hasattr("slack")? { Self::get_bool_vec(&df, "slack")? } else { vec![false; bus.len()] };
         let names = if df.hasattr("name")? { Self::get_opt_str_vec(py, &df, "name")? } else { vec![None; bus.len()] };
+        // P/Q limits: a missing column or NaN entry means "unlimited" in
+        // pandapower — NOT zero (a [0, 0] Q band would make qlim demote
+        // every PV bus and clamp all gen Q to zero).
+        let opt_limit = |col: &str, unlimited: f64| -> PyResult<Vec<f64>> {
+            if df.hasattr(col)? {
+                Ok(Self::get_opt_float_vec(py, &df, col)?
+                    .into_iter()
+                    .map(|v| v.unwrap_or(unlimited))
+                    .collect())
+            } else {
+                Ok(vec![unlimited; bus.len()])
+            }
+        };
+        let max_q = opt_limit("max_q_mvar", 1e9)?;
+        let min_q = opt_limit("min_q_mvar", -1e9)?;
+        let max_p = opt_limit("max_p_mw", 1e9)?;
+        let min_p = opt_limit("min_p_mw", -1e9)?;
 
         Ok((0..bus.len()).map(|i| Gen {
-            bus: bus[i], p_mw: p_mw[i], vm_pu: vm_pu[i], in_service: in_service[i], slack: slack[i], scaling: 1.0, max_p_mw: 0.0, min_p_mw: 0.0, max_q_mvar: 0.0, min_q_mvar: 0.0, slack_weight: 0.0, controllable: None, name: names[i].clone(), sn_mva: None, type_: None,
+            bus: bus[i], p_mw: p_mw[i], vm_pu: vm_pu[i], in_service: in_service[i], slack: slack[i], scaling: 1.0, max_p_mw: max_p[i], min_p_mw: min_p[i], max_q_mvar: max_q[i], min_q_mvar: min_q[i], slack_weight: 0.0, controllable: None, name: names[i].clone(), sn_mva: None, type_: None,
         }).collect())
     }
 
