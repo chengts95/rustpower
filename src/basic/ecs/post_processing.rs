@@ -91,7 +91,9 @@ fn extract_res_bus(
     shunts.iter().for_each(|(a, b, vb)| {
         let node = b.0[0] as usize;
         let z_base = vb.0 * vb.0 / common.sbase;
-        let s_shunt = res.v[node] * (a.0 * z_base * res.v[node]).conjugate();
+        // `node` is an original bus id, so index the un-permuted, expanded `v`
+        // (res.v is in solver ordering and, under aggregation, a different space).
+        let s_shunt = v[node] * (a.0 * z_base * v[node]).conjugate();
         sbus_res[node] += s_shunt;
     });
 
