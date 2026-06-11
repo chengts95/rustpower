@@ -199,6 +199,12 @@ class PowerGrid:
         (empty grid, no slack); divergence is reported via a falsy report.
         v_init: Optional initial voltage guess (p.u. complex) for all buses."""
         ...
+    def reset_state(self) -> None:
+        """Reset the power flow solver state, clearing result vectors and resetting bus injections."""
+        ...
+    def enable_iwamoto(self, enable: bool) -> None:
+        """Enable or disable the Iwamoto optimal multiplier solver dynamically at runtime."""
+        ...
 
     # -- results -------------------------------------------------------------
     @property

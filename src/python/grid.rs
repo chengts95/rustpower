@@ -324,11 +324,6 @@ impl PowerGrid {
         }
 
         if let Some(args) = kwargs {
-            if let Ok(Some(iwamoto)) = args.get_item("iwamoto") {
-                if iwamoto.extract::<bool>()? {
-                    inner.app_mut().add_plugins(crate::basic::ecs::plugin::IwamotoPlugin);
-                }
-            }
             if let Ok(Some(branch_analysis)) = args.get_item("branch_analysis") {
                 if branch_analysis.extract::<bool>()? { inner.app_mut().add_plugins(crate::basic::ecs::powerflow::branch_data::BranchAnalysisPlugin); }
             }
@@ -477,6 +472,19 @@ impl PowerGrid {
 
     /// Reset the power flow solver state, clearing result vectors and resetting bus injections.
     fn reset_state(&mut self) { self.reset_state_impl(); }
+
+    /// Enable or disable the Iwamoto optimal multiplier solver dynamically at runtime.
+    fn enable_iwamoto(&mut self, enable: bool) {
+        if enable {
+            let app = self.inner.app_mut();
+            if !app.is_plugin_added::<crate::basic::ecs::plugin::IwamotoPlugin>() {
+                app.add_plugins(crate::basic::ecs::plugin::IwamotoPlugin);
+            }
+            self.inner.world_mut().insert_resource(crate::basic::ecs::plugin::CustomSolverActive);
+        } else {
+            self.inner.world_mut().remove_resource::<crate::basic::ecs::plugin::CustomSolverActive>();
+        }
+    }
 
     /// Whether the last power flow solve converged.
     #[getter]
