@@ -15,6 +15,12 @@ use crate::basic::ecs::network::{PowerFlowSolver, DataOps};
 
 use super::handles::*;
 
+/// Core power grid object.
+///
+/// Supports three primary workflows:
+/// A. Batch:      PowerGrid("case.zip").solve(); grid.res_bus
+/// B. Parameter:  load.p_mw = p; grid.solve()        # incremental, warm start
+/// C. Topology:   with grid.edit() as e: ...; grid.solve()  # auto rebuild
 #[pyclass(unsendable)]
 pub struct PowerGrid {
     pub(crate) inner: crate::prelude::PowerGrid,
@@ -69,6 +75,13 @@ impl GridEditor {
         if exc_type.is_none(py) { self.commit(py) } else { self.abort(py) }
     }
 
+    /// Add a bus to the grid transaction.
+    ///
+    /// vn_kv: Nominal voltage in kV.
+    /// name: Optional name of the bus.
+    /// vm_min: Minimum voltage limit in p.u. (default: 0.9).
+    /// vm_max: Maximum voltage limit in p.u. (default: 1.1).
+    /// zone: Optional zone identifier.
     #[pyo3(signature = (vn_kv, name=None, vm_min=0.9, vm_max=1.1, zone=0))]
     fn add_bus(&mut self, py: Python<'_>, vn_kv: f64, name: Option<String>, vm_min: f64, vm_max: f64, zone: i64) -> PyResult<(i64, BusHandle)> {
         let mut parent = self.parent.borrow_mut(py);
@@ -80,6 +93,19 @@ impl GridEditor {
         Ok((id, BusHandle::new(entity, self.parent.clone_ref(py))))
     }
 
+    /// Add a line between two buses to the grid transaction.
+    ///
+    /// from_bus: The source bus ID.
+    /// to_bus: The destination bus ID.
+    /// length_km: Line length in km.
+    /// std_type: Optional standard type name for looking up parameters.
+    /// r_ohm_per_km: Resistance in Ohm/km (default: 0.1).
+    /// x_ohm_per_km: Reactance in Ohm/km (default: 0.1).
+    /// c_nf_per_km: Capacitance in nF/km (default: 0.0).
+    /// g_us_per_km: Conductance in uS/km (default: 0.0).
+    /// parallel: Number of parallel lines (default: 1).
+    /// max_i_ka: Maximum current capacity in kA (default: 0.0).
+    /// name: Optional name of the line.
     #[pyo3(signature = (from_bus, to_bus, length_km, std_type=None, r_ohm_per_km=0.1, x_ohm_per_km=0.1, c_nf_per_km=0.0, g_us_per_km=0.0, parallel=1, max_i_ka=0.0, name=None))]
     fn add_line(&mut self, py: Python<'_>, from_bus: i64, to_bus: i64, length_km: f64, std_type: Option<String>, r_ohm_per_km: f64, x_ohm_per_km: f64, c_nf_per_km: f64, g_us_per_km: f64, parallel: i32, max_i_ka: f64, name: Option<String>) -> PyResult<LineHandle> {
         let mut parent = self.parent.borrow_mut(py);
@@ -90,6 +116,12 @@ impl GridEditor {
         Ok(LineHandle::new(entity, self.parent.clone_ref(py)))
     }
 
+    /// Add a load to a bus in the grid transaction.
+    ///
+    /// bus: Bus ID where the load is attached.
+    /// p_mw: Active power consumption (MW, positive for consumption).
+    /// q_mvar: Reactive power consumption (MVar, positive for consumption).
+    /// name: Optional name of the load.
     #[pyo3(signature = (bus, p_mw, q_mvar, name=None))]
     fn add_load(&mut self, py: Python<'_>, bus: i64, p_mw: f64, q_mvar: f64, name: Option<String>) -> PyResult<LoadHandle> {
         let mut parent = self.parent.borrow_mut(py);
@@ -100,6 +132,14 @@ impl GridEditor {
         Ok(LoadHandle::new(entity, self.parent.clone_ref(py)))
     }
 
+    /// Add a PV generator to a bus in the grid transaction.
+    ///
+    /// bus: Bus ID where the generator is attached.
+    /// p_mw: Active power production (MW).
+    /// vm_pu: Target voltage magnitude in p.u. (default: 1.0).
+    /// p_min/p_max: Active power limits in MW.
+    /// q_min/q_max: Reactive power limits in MVar.
+    /// name: Optional name of the generator.
     #[pyo3(signature = (bus, p_mw, vm_pu=1.0, p_min=-1000.0, p_max=1000.0, q_min=-1000.0, q_max=1000.0, name=None))]
     fn add_gen(&mut self, py: Python<'_>, bus: i64, p_mw: f64, vm_pu: f64, p_min: f64, p_max: f64, q_min: f64, q_max: f64, name: Option<String>) -> PyResult<GenHandle> {
         let mut parent = self.parent.borrow_mut(py);
@@ -110,6 +150,12 @@ impl GridEditor {
         Ok(GenHandle::new(entity, self.parent.clone_ref(py)))
     }
 
+    /// Add an external grid connection (Slack bus reference) to a bus in the grid transaction.
+    ///
+    /// bus: Bus ID to connect to.
+    /// vm_pu: Target voltage magnitude in p.u. (default: 1.0).
+    /// va_degree: Reference voltage angle in degrees (default: 0.0).
+    /// name: Optional name of the external grid.
     #[pyo3(signature = (bus, vm_pu=1.0, va_degree=0.0, name=None))]
     fn add_ext_grid(&mut self, py: Python<'_>, bus: i64, vm_pu: f64, va_degree: f64, name: Option<String>) -> PyResult<ExtGridHandle> {
         let mut parent = self.parent.borrow_mut(py);
@@ -119,6 +165,22 @@ impl GridEditor {
         Ok(ExtGridHandle::new(entity, self.parent.clone_ref(py)))
     }
 
+    /// Add a transformer between a high voltage bus and a low voltage bus to the grid transaction.
+    ///
+    /// hv_bus: High voltage bus ID.
+    /// lv_bus: Low voltage bus ID.
+    /// sn_mva: Nominal apparent power in MVA.
+    /// vn_hv_kv: Rated voltage of the HV side in kV.
+    /// vn_lv_kv: Rated voltage of the LV side in kV.
+    /// vk_percent: Short-circuit voltage in percent.
+    /// vkr_percent: Real part of short-circuit voltage in percent.
+    /// pfe_kw: Iron losses in kW.
+    /// i0_percent: Open-loop current in percent.
+    /// shift_degree: Phase shift angle in degrees.
+    /// tap_pos: Current tap position.
+    /// tap_neutral: Neutral tap position.
+    /// tap_step_percent: Tap step size in percent.
+    /// name: Optional name of the transformer.
     #[pyo3(signature = (hv_bus, lv_bus, sn_mva=1.0, vn_hv_kv=110.0, vn_lv_kv=10.0, vk_percent=10.0, vkr_percent=0.1, pfe_kw=0.0, i0_percent=0.0, shift_degree=0.0, tap_pos=0.0, tap_neutral=0.0, tap_step_percent=1.25, name=None))]
     fn add_trafo(&mut self, py: Python<'_>, hv_bus: i64, lv_bus: i64, sn_mva: f64, vn_hv_kv: f64, vn_lv_kv: f64, vk_percent: f64, vkr_percent: f64, pfe_kw: f64, i0_percent: f64, shift_degree: f64, tap_pos: f64, tap_neutral: f64, tap_step_percent: f64, name: Option<String>) -> PyResult<TrafoHandle> {
         let mut parent = self.parent.borrow_mut(py);
@@ -129,6 +191,14 @@ impl GridEditor {
         Ok(TrafoHandle::new(entity, self.parent.clone_ref(py)))
     }
 
+    /// Add a shunt element to a bus in the grid transaction.
+    ///
+    /// bus: Bus ID where the shunt is attached.
+    /// q_mvar: Reactive power consumption of the shunt in MVar at nominal voltage.
+    /// p_mw: Active power consumption of the shunt in MW at nominal voltage (default: 0.0).
+    /// vn_kv: Rated voltage of the shunt in kV.
+    /// step: Number of active steps (default: 1).
+    /// name: Optional name of the shunt.
     #[pyo3(signature = (bus, q_mvar, p_mw=0.0, vn_kv=110.0, step=1, name=None))]
     fn add_shunt(&mut self, py: Python<'_>, bus: i64, q_mvar: f64, p_mw: f64, vn_kv: f64, step: i32, name: Option<String>) -> PyResult<ShuntHandle> {
         let mut parent = self.parent.borrow_mut(py);
@@ -162,6 +232,7 @@ impl GridEditor {
         Ok(())
     }
 
+    /// Commit all buffered topology modifications to the grid.
     fn commit(&mut self, py: Python<'_>) -> PyResult<()> {
         let mut parent = self.parent.borrow_mut(py);
         {
@@ -218,6 +289,11 @@ fn make_trafo_device(sn_mva: f64, vn_hv_kv: f64, vn_lv_kv: f64, vk_percent: f64,
 
 #[pymethods]
 impl PowerGrid {
+    /// Create a new PowerGrid instance.
+    ///
+    /// case_path: Optional path to a pandapower ZIP case file to load.
+    /// qlim: If True, enforces generator reactive power limits by dynamically demoting PV buses to PQ when they saturate.
+    /// kwargs: Additional configuration flags (e.g. branch_analysis=True).
     #[new]
     #[pyo3(signature = (case_path=None, qlim=false, **kwargs))]
     fn new(case_path: Option<String>, qlim: bool, kwargs: Option<Bound<'_, pyo3::types::PyDict>>) -> PyResult<Self> {
@@ -266,6 +342,7 @@ impl PowerGrid {
         Ok(grid)
     }
 
+    /// Load a network from a live Python `pandapowerNet` object (from the Python `pandapower` library).
     fn from_pp_net(slf: Py<Self>, py: Python<'_>, net: Bound<'_, PyAny>) -> PyResult<()> {
         let mut rust_net = crate::io::pandapower::Network::default();
         rust_net.from_pp_net(net)?;
@@ -279,6 +356,10 @@ impl PowerGrid {
         Ok(())
     }
 
+    /// Load a `rustpower.Network` object (the Rust-native parsed grid representation) into the grid.
+    ///
+    /// This clears all existing entities, re-ingests the network components,
+    /// and rebuilds the grid. Existing element handles become invalid.
     fn load_network(&mut self, net: crate::io::pandapower::Network) {
         self.clear_grid_entities();
         self.inner.world_mut().insert_resource(PPNetwork(net));
@@ -390,13 +471,16 @@ impl PowerGrid {
         })
     }
 
+    /// Reset the power flow solver state, clearing result vectors and resetting bus injections.
     fn reset_state(&mut self) { self.reset_state_impl(); }
 
+    /// Whether the last power flow solve converged.
     #[getter]
     fn converged(&self) -> bool {
         self.inner.world().get_resource::<PowerFlowResult>().map(|r| r.converged).unwrap_or(false)
     }
 
+    /// The number of iterations taken by the last power flow solve.
     #[getter]
     fn iterations(&self) -> usize {
         self.inner.world().get_resource::<PowerFlowResult>().map(|r| r.iterations).unwrap_or(0)
@@ -458,6 +542,7 @@ impl PowerGrid {
         Ok(())
     }
 
+    /// Get the number of buses in the grid.
     #[getter]
     fn n_bus(&mut self) -> usize {
         let world = self.inner.world_mut();
@@ -472,8 +557,9 @@ impl PowerGrid {
         GridEditor { parent: slf.clone_ref(py), created: Vec::new(), start_next_bus_id }
     }
 
-    /// Build a PowerGrid directly from a live pandapower net object.
-    /// The pandapower data model is discarded after ingestion.
+    /// Build a PowerGrid directly from a live Python `pandapowerNet` object (from the Python `pandapower` library).
+    ///
+    /// The Python pandapower data model is discarded after ingestion.
     #[classmethod]
     fn from_pandapower(_cls: &Bound<'_, pyo3::types::PyType>, py: Python<'_>, net: Bound<'_, PyAny>) -> PyResult<Py<Self>> {
         let grid = Self::new(None, false, None)?;
@@ -482,11 +568,13 @@ impl PowerGrid {
         Ok(slf)
     }
 
+    /// Set the base frequency (Hz) and system base MVA.
     #[pyo3(signature = (f_hz=50.0, sn_mva=100.0))]
     fn set_base(&mut self, f_hz: f64, sn_mva: f64) {
         GridFactory::set_base(&mut self.inner, f_hz, sn_mva);
     }
 
+    /// Retrieve a BusHandle by its ID. Returns None if not found.
     fn bus(slf: Py<Self>, py: Python<'_>, id: i64) -> Option<BusHandle> {
         let grid = slf.borrow(py);
         let world = grid.inner.world();
@@ -571,6 +659,7 @@ impl PowerGrid {
         py.import("pandas")?.call_method1("DataFrame", (dict,))
     }
 
+    /// Return a pandas DataFrame showing all load parameters in the case.
     fn display_case_loads<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let world = self.inner.world_mut();
         let mut buses = Vec::new(); let mut ps = Vec::new(); let mut qs = Vec::new(); let mut names = Vec::new();
@@ -587,18 +676,22 @@ impl PowerGrid {
         py.import("pandas")?.call_method1("DataFrame", (dict,))
     }
 
+    /// Get the number of lines in the grid.
     #[getter] fn n_line(&mut self) -> usize { let world = self.inner.world_mut(); world.query::<&crate::basic::ecs::elements::Line>().iter(world).count() }
 
+    /// Return the raw bus results as a dictionary.
     fn get_bus_results<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let res = self.get_bus_results_impl(py)?;
         py.import("pandas")?.call_method1("DataFrame", (res,))
     }
 
+    /// Return the raw line results as a dictionary.
     fn get_line_results<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let res = self.get_line_results_impl(py)?;
         py.import("pandas")?.call_method1("DataFrame", (res,))
     }
 
+    /// Return the raw bus parameters as a dictionary.
     fn get_bus_params<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let res = self.get_bus_params_impl(py)?;
         py.import("pandas")?.call_method1("DataFrame", (res,))
@@ -612,6 +705,7 @@ impl PowerGrid {
     #[getter]
     fn res_line<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> { self.get_line_results(py) }
 
+    /// Return a pandas DataFrame showing all bus parameters in the case.
     fn display_case_buses<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> { self.get_bus_params(py) }
 }
 
