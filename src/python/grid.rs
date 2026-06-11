@@ -779,6 +779,37 @@ impl PowerGrid {
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("zip error: {}", e)))?;
         Ok(pyo3::types::PyBytes::new(py, &zip_bytes))
     }
+
+    /// Load a case-file ECS state from a ZIP archive of Parquet files (restores
+    /// topology and parameters). Clears any existing entities first.
+    #[cfg(feature = "arrow")]
+    fn load_parquet_case<'py>(&mut self, _py: Python<'py>, zip_bytes: Bound<'py, pyo3::types::PyBytes>) -> PyResult<()> {
+        use crate::io::archive::aurora_format::ArchiveSnapshotRes;
+        use bevy_archive::binary_archive::WorldArrowSnapshot;
+
+        self.clear_grid_entities();
+
+        let zip_data = zip_bytes.as_bytes();
+        let snapshot = WorldArrowSnapshot::from_zip(zip_data)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("from_zip error: {}", e)))?;
+
+        let world = self.inner.world_mut();
+        let registry = {
+            let reg = world.get_resource::<ArchiveSnapshotRes>()
+                .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    "ArchiveSnapshotRes not available — archive feature may not be initialized"))?;
+            reg.0.case_file_reg.clone()
+        };
+
+        snapshot.to_world_reg(world, &registry)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("to_world error: {}", e)))?;
+
+        self.sync_next_bus_id();
+        self.sync_bus_to_elements();
+        self.init_pf();
+
+        Ok(())
+    }
 }
 
 

@@ -241,6 +241,9 @@ class PowerGrid:
     def get_parquet_results(self) -> bytes:
         """Serialize solved results (voltages, branch loading) to a ZIP archive of Parquet files (returns raw bytes)."""
         ...
+    def load_parquet_case(self, zip_bytes: bytes) -> None:
+        """Load a case-file ECS state from a ZIP archive of Parquet files (restores topology and parameters)."""
+        ...
 
 # ---------------------------------------------------------------------------
 # IO (DTOs at the ingestion boundary; will move to rustpower.io in Phase 2)
