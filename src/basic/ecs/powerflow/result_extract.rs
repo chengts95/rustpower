@@ -2,7 +2,7 @@ use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
 use crate::basic::{
-    ecs::{elements::*, network::ecs_run_pf},
+    ecs::elements::*,
     sparse::cast::Cast,
 };
 
@@ -45,7 +45,7 @@ impl Plugin for VBusUpdatePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            extract_powerflow_results.after(ecs_run_pf).in_set(Solve),
+            extract_powerflow_results.after(crate::basic::ecs::plugin::PowerFlowSolverSet).in_set(Solve),
         );
     }
 }

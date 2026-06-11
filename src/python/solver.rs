@@ -143,7 +143,7 @@ impl NewtonSolver {
         
         let (converged, its, v_final) = match result {
             Ok((v, i)) => (true, i, v),
-            Err((_err, v)) => (false, 0, v),
+            Err((_err, v, i)) => (false, i, v),
         };
 
         world.insert_resource(mat);

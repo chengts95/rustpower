@@ -1,9 +1,10 @@
 //! Python bindings for the RustPower simulation framework.
 #![cfg(feature = "python")]
-
+#![allow(dead_code)]
 pub mod handles;
 pub mod grid;
 pub mod solver;
+pub mod network;
 
 use pyo3::prelude::*;
 
