@@ -9,7 +9,7 @@ import rustpower
 def inspect_columns():
     grid = rustpower.PowerGrid(case_path='cases/IEEE118/data.zip')
     grid.init_pf()
-    grid.run_pf()
+    grid.solve()
     grid.post_process()
     zip_bytes = grid.get_parquet_results()
     

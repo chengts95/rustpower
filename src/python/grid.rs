@@ -27,6 +27,9 @@ pub struct PowerGrid {
     pub(crate) next_bus_id: i64,
     pub(crate) id_map: std::collections::HashMap<i64, i64>,
     pub(crate) bus_to_elements: std::collections::HashMap<i64, Vec<Entity>>,
+    /// Lazy post-processing: set to `true` after a converged solve(),
+    /// cleared when `res_bus` / `res_line` (or any result getter) is accessed.
+    post_process_dirty: bool,
 }
 
 /// Report returned by PowerGrid.solve(). Truthy iff converged.
@@ -316,6 +319,9 @@ impl PowerGrid {
             crate::basic::ecs::powerflow::result_extract::VBusUpdatePlugin,
         ));
 
+        #[cfg(feature = "archive")]
+        inner.app_mut().add_plugins(crate::io::archive::aurora_format::ArchivePlugin);
+
         // Generator reactive limit enforcement: PV->PQ demotion via the
         // NodeTypeChangeEvent path (re-derives matrices from current tags,
         // never relabels) inside an outer iteration loop.
@@ -329,7 +335,7 @@ impl PowerGrid {
             }
         }
 
-        let mut grid = Self { inner, buffer, next_bus_id: 0, id_map: std::collections::HashMap::new(), bus_to_elements: std::collections::HashMap::new() };
+        let mut grid = Self { inner, buffer, next_bus_id: 0, id_map: std::collections::HashMap::new(), bus_to_elements: std::collections::HashMap::new(), post_process_dirty: false };
 
         if let Some(path) = case_path {
             let net = load_csv_zip(&path).map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{}", e)))?;
@@ -459,9 +465,9 @@ impl PowerGrid {
             .get_resource::<PowerFlowResult>()
             .map(|r| (r.converged, r.iterations))
             .unwrap_or((false, 0));
-        if converged {
-            self.inner.post_process();
-        }
+        // Mark dirty for lazy post-processing: actual computation
+        // deferred until res_bus / res_line is accessed.
+        self.post_process_dirty = converged;
         Ok(SolveReport {
             converged,
             iterations,
@@ -694,12 +700,14 @@ impl PowerGrid {
 
     /// Return the raw bus results as a dictionary.
     fn get_bus_results<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.ensure_post_processed();
         let res = self.get_bus_results_impl(py)?;
         py.import("pandas")?.call_method1("DataFrame", (res,))
     }
 
     /// Return the raw line results as a dictionary.
     fn get_line_results<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.ensure_post_processed();
         let res = self.get_line_results_impl(py)?;
         py.import("pandas")?.call_method1("DataFrame", (res,))
     }
@@ -711,18 +719,80 @@ impl PowerGrid {
     }
 
     /// Bus results of the last solve as a DataFrame (pandapower's res_bus).
+    /// Lazy: triggers post-processing on first access after solve().
     #[getter]
     fn res_bus<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> { self.get_bus_results(py) }
 
     /// Line results of the last solve as a DataFrame (pandapower's res_line).
+    /// Lazy: triggers post-processing on first access after solve().
     #[getter]
     fn res_line<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> { self.get_line_results(py) }
 
     /// Return a pandas DataFrame showing all bus parameters in the case.
     fn display_case_buses<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> { self.get_bus_params(py) }
+
+    /// Explicitly run post-processing (extract bus + line results from the
+    /// solver output).  Usually not needed — `res_bus` / `res_line` trigger
+    /// this lazily — but exposed for scripts that need the ECS components
+    /// populated before an archive snapshot.
+    fn post_process(&mut self) {
+        self.ensure_post_processed();
+    }
+
+    /// Serialize the case-file ECS state (grid topology, parameters) to an
+    /// in-memory ZIP archive of Parquet files.  Returns raw `bytes` that can
+    /// be opened with `zipfile.ZipFile(io.BytesIO(data))` or fed to DuckDB
+    /// `read_parquet`.
+    #[cfg(feature = "arrow")]
+    fn get_parquet_case<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
+        use crate::io::archive::aurora_format::ArchiveSnapshotRes;
+        use bevy_archive::binary_archive::WorldArrowSnapshot;
+
+        let world = self.inner.world();
+        let reg = world.get_resource::<ArchiveSnapshotRes>()
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "ArchiveSnapshotRes not available — archive feature may not be initialized"))?;
+        let snapshot = WorldArrowSnapshot::from_world_reg(world, &reg.0.case_file_reg)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("snapshot error: {}", e)))?;
+        let zip_bytes = snapshot.to_zip(None)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("zip error: {}", e)))?;
+        Ok(pyo3::types::PyBytes::new(py, &zip_bytes))
+    }
+
+    /// Serialize the output ECS state (bus voltages, line results) to an
+    /// in-memory ZIP archive of Parquet files.  Triggers lazy post-processing
+    /// if needed.
+    #[cfg(feature = "arrow")]
+    fn get_parquet_results<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
+        use crate::io::archive::aurora_format::ArchiveSnapshotRes;
+        use bevy_archive::binary_archive::WorldArrowSnapshot;
+
+        self.ensure_post_processed();
+
+        let world = self.inner.world();
+        let reg = world.get_resource::<ArchiveSnapshotRes>()
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "ArchiveSnapshotRes not available — archive feature may not be initialized"))?;
+        let snapshot = WorldArrowSnapshot::from_world_reg(world, &reg.0.output_reg)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("snapshot error: {}", e)))?;
+        let zip_bytes = snapshot.to_zip(None)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("zip error: {}", e)))?;
+        Ok(pyo3::types::PyBytes::new(py, &zip_bytes))
+    }
 }
 
+
 impl PowerGrid {
+    /// Run ECS post-processing (bus + line result extraction) only if the
+    /// dirty flag is set.  Called lazily from `res_bus`, `res_line`, and any
+    /// other result getter.
+    fn ensure_post_processed(&mut self) {
+        if self.post_process_dirty {
+            self.inner.post_process();
+            self.post_process_dirty = false;
+        }
+    }
+
     fn bus_exists_in_world(&mut self, bus_id: i64) -> bool {
         let world = self.inner.world_mut();
         if let Some(lookup) = world.get_resource::<NodeLookup>() { lookup.get_entity(bus_id).is_some() } else { bus_id < self.next_bus_id }
@@ -777,6 +847,7 @@ impl PowerGrid {
         let mut query = world.query_filtered::<&mut SBusInjPu, With<BusID>>();
         for mut s in query.iter_mut(world) { s.0 = num_complex::Complex64::new(0.0, 0.0); }
         world.remove_resource::<PowerFlowResult>();
+        self.post_process_dirty = false;
     }
 
     fn get_bus_params_impl<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {

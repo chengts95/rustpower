@@ -23,9 +23,9 @@ def run_hardcore_analysis():
     
     print("⚡ Running Newton-Raphson Power Flow (KLU)...")
     grid.init_pf()
-    grid.run_pf()
+    grid.solve()
     grid.post_process()
-    print(f"✅ Converged in {grid.iterations()} iterations.\n")
+    print(f"✅ Converged in {grid.iterations} iterations.\n")
 
     # 1. Capture the "Case" (Static params) and "Results" (Dynamic data)
     print("📦 Archiving ECS state to memory-only Parquet...")
