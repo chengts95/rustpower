@@ -11,7 +11,7 @@ def test_features():
         print("\n--- Testing Parquet Archival ---")
         grid = rustpower.PowerGrid(case_path='cases/IEEE118/data.zip')
         grid.init_pf()
-        grid.run_pf()
+        grid.solve()
         grid.post_process()
         
         # Save results to parquet
