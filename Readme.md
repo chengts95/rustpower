@@ -107,14 +107,33 @@ Or by adding the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rustpower = "0.5.0-rc.2"
+rustpower = "0.5.0-rc.3"
 ```
 
 ---
 
 ## **Usage Example**
 
-### **Basic ECS Example**
+### **Python API (Recommended for Data Science)**
+
+```python
+import rustpower as rp
+
+# Load a network and solve
+grid = rp.PowerGrid("cases/pegase9241/data.zip")
+report = grid.solve()
+
+if report:
+    print(f"Converged in {report.iterations} iterations")
+    print(grid.res_bus.head())
+
+# Fast parameter updates
+load = grid.load(bus=10)
+load.p_mw = 100.0
+grid.solve() # Runs an incremental solve (fast!)
+```
+
+### **Basic Rust ECS Example**
 
 ```rust
 use rustpower::{io::pandapower::*, prelude::*};

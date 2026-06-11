@@ -96,6 +96,41 @@ vm_res = grid.bus(g.bus).vm_pu
 check("PV bus holds new setpoint", abs(vm_res - vm_target) < 1e-6,
       f"(set {vm_target:.4f}, got {vm_res:.4f})")
 
+# --- 3b. v ordering contract and warm-start API ----------------------------
+# v is indexed by bus id: must agree with res_bus rows keyed by bus_id
+res = grid.res_bus
+vm_by_id = np.abs(grid.v)[res["bus_id"].to_numpy()]
+check("v is bus-id ordered (matches res_bus)",
+      float(np.max(np.abs(vm_by_id - res["vm_pu"].to_numpy()))) < 1e-12)
+b7 = grid.bus(7)
+check("v[7] equals bus(7).vm_pu", abs(abs(grid.v[7]) - b7.vm_pu) < 1e-12)
+
+# warm start: passing the solved vector back converges immediately
+v_prev = grid.v.copy()
+rep = grid.solve(v_init=v_prev)
+check("warm start from solution converges fast",
+      bool(rep) and rep.iterations <= 2, f"(iterations={rep.iterations})")
+check("warm start reproduces solution",
+      np.linalg.norm(grid.v - v_prev) < 1e-8)
+
+# v_init is a pure warm start: a flat (wrong) guess must not move PV setpoints
+g0 = grid.gen()
+vm_set = g0.vm_pu
+rep = grid.solve(v_init=np.full(len(v_prev), 0.95 + 0.0j))
+check("flat-start solve converges", bool(rep), f"(iterations={rep.iterations})")
+vm_after = grid.bus(g0.bus).vm_pu
+check("PV setpoint unaffected by v_init", abs(vm_after - vm_set) < 1e-6,
+      f"(set {vm_set:.4f}, got {vm_after:.4f})")
+check("flat start reaches the same solution",
+      np.linalg.norm(grid.v - v_prev) < 1e-7,
+      f"(diff={np.linalg.norm(grid.v - v_prev):.2e})")
+
+# property-assignment form
+grid.v = v_prev
+rep = grid.solve()
+check("v setter warm start works", bool(rep) and rep.iterations <= 2,
+      f"(iterations={rep.iterations})")
+
 # --- 4. Transactional editor (scenario C) ---------------------------------
 g2 = rp.PowerGrid()
 with g2.edit() as e:
