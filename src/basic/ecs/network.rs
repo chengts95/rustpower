@@ -4,7 +4,7 @@ use std::fmt;
 use bevy_app::prelude::*;
 use bevy_ecs::{component::Mutable, prelude::*, world::error::EntityMutableFetchError};
 
-use crate::basic::{newton_pf, solver::DefaultSolver};
+use crate::basic::{newton_pf, newton_pf_iwamoto, solver::DefaultSolver};
 
 use super::{
     plugin::DefaultPlugins,
@@ -162,11 +162,59 @@ pub fn ecs_run_pf(
                 converged: true,
             });
         }
-        Err((_err, v_err)) => {
+        Err((_err, v_err, its)) => {
             // let v = mat.reorder.transpose() * v_err;
             cmd.insert_resource(PowerFlowResult {
                 v: v_err,
-                iterations: 0,
+                iterations: its,
+                converged: false,
+            });
+        }
+    }
+}
+
+/// ECS system that runs the power flow calculation using the Iwamoto optimal multiplier method.
+pub fn iwamoto_run_pf(
+    mut cmd: Commands,
+    mat: Res<PowerFlowMat>,
+    cfg: Res<PowerFlowConfig>,
+    mut solver: ResMut<PowerFlowSolver>,
+) {
+    if mat.npv + mat.npq >= mat.v_bus_init.len() {
+        cmd.insert_resource(PowerFlowResult {
+            v: mat.v_bus_init.clone_owned(),
+            iterations: 0,
+            converged: false,
+        });
+        return;
+    }
+
+    let v_init = &mat.v_bus_init;
+    let max_it = cfg.max_it;
+    let tol = cfg.tol;
+    let v = newton_pf_iwamoto(
+        &mat.y_bus,
+        &mat.s_bus,
+        v_init,
+        mat.npv,
+        mat.npq,
+        tol,
+        max_it,
+        &mut solver.solver,
+    );
+
+    match v {
+        Ok((v, iterations)) => {
+            cmd.insert_resource(PowerFlowResult {
+                v,
+                iterations,
+                converged: true,
+            });
+        }
+        Err((_err, v_err, its)) => {
+            cmd.insert_resource(PowerFlowResult {
+                v: v_err,
+                iterations: its,
                 converged: false,
             });
         }

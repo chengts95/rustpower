@@ -1,8 +1,7 @@
 use pyo3::prelude::*;
 use numpy::{IntoPyArray, PyArrayMethods};
 use crate::prelude::*;
-use crate::basic::ecs::elements::*;
-use crate::basic::ecs::elements::generator::*;
+use crate::basic::ecs::elements::*; 
 use crate::basic::ecs::powerflow::prelude::*;
 use crate::basic::ecs::post_processing::*;
 use crate::io::pandapower::load_csv_zip;
@@ -11,7 +10,7 @@ use bevy_ecs::prelude::*;
 use bevy_ecs::system::RunSystemOnce;
 
 use crate::basic::ecs::factory::GridFactory;
-use crate::basic::ecs::network::{PowerFlowSolver, DataOps};
+use crate::basic::ecs::network::DataOps;
 
 use super::handles::*;
 
@@ -325,6 +324,11 @@ impl PowerGrid {
         }
 
         if let Some(args) = kwargs {
+            if let Ok(Some(iwamoto)) = args.get_item("iwamoto") {
+                if iwamoto.extract::<bool>()? {
+                    inner.app_mut().add_plugins(crate::basic::ecs::plugin::IwamotoPlugin);
+                }
+            }
             if let Ok(Some(branch_analysis)) = args.get_item("branch_analysis") {
                 if branch_analysis.extract::<bool>()? { inner.app_mut().add_plugins(crate::basic::ecs::powerflow::branch_data::BranchAnalysisPlugin); }
             }
@@ -561,8 +565,9 @@ impl PowerGrid {
     ///
     /// The Python pandapower data model is discarded after ingestion.
     #[classmethod]
-    fn from_pandapower(_cls: &Bound<'_, pyo3::types::PyType>, py: Python<'_>, net: Bound<'_, PyAny>) -> PyResult<Py<Self>> {
-        let grid = Self::new(None, false, None)?;
+    #[pyo3(signature = (net, **kwargs))]
+    fn from_pandapower(_cls: &Bound<'_, pyo3::types::PyType>, py: Python<'_>, net: Bound<'_, PyAny>, kwargs: Option<Bound<'_, pyo3::types::PyDict>>) -> PyResult<Py<Self>> {
+        let grid = Self::new(None, false, kwargs)?;
         let slf = Py::new(py, grid)?;
         Self::from_pp_net(slf.clone_ref(py), py, net)?;
         Ok(slf)
