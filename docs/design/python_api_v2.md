@@ -1,6 +1,7 @@
 # Python API v2 设计：命令网关驱动的电网模型
 
-状态：**已定稿**（2026-06-09，决策点 D1–D6 已落定，见 §5）
+状态：**已定稿**（2026-06-09）
+English Guide: [docs/python_api.md](../python_api.md)
 原则：设计模式 + 自顶而下。先冻结 Python API 契约，再实现，最后把命令网关回移（backport）到 Rust 原生路径。
 
 ## 0. 写入的双模式（定稿补充）
