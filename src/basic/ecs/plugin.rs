@@ -267,7 +267,6 @@ pub struct IwamotoPlugin;
 
 impl Plugin for IwamotoPlugin {
     fn build(&self, app: &mut bevy_app::App) {
-        app.insert_resource(CustomSolverActive);
         app.configure_sets(
             Update,
             DefaultSolverSet.run_if(not(resource_exists::<CustomSolverActive>)),
