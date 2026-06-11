@@ -13,6 +13,9 @@
 - **Native ECS data schema (from 0.3.0)**  
   Since version `0.3.0`, RustPower includes native ECS component definitions under `elements/`, allowing full ECS-native modeling without reliance on external Pandapower imports.
 
+- **High-Performance Python Bindings (from 0.5.0)**
+  A transactional Python API allows seamless integration with the Python data science ecosystem (Pandas, NumPy) while maintaining Rust's performance.
+
 - **Composable file format via `bevy_archive`**  
   RustPower introduces a plugin-based snapshot and archive system built on [`bevy_archive`](https://github.com/chengts95/bevy_archive), enabling modular, component-level persistence and state restoration.
 

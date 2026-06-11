@@ -67,6 +67,7 @@ define_handle!(SwitchHandle);
 impl BusHandle {
     fn __repr__(&self) -> String { format!("BusHandle({})", self.entity) }
 
+    /// Bus ID (from the case data).
     #[getter]
     fn id(&self, py: Python<'_>) -> PyResult<i64> {
         let grid_py = self.grid.borrow(py);
@@ -74,6 +75,7 @@ impl BusHandle {
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Not a bus entity"))
     }
 
+    /// Nominal voltage in kV.
     #[getter]
     fn vn_kv(&self, py: Python<'_>) -> PyResult<f64> {
         let grid_py = self.grid.borrow(py);
@@ -97,7 +99,7 @@ impl BusHandle {
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("No result at this bus: call solve() first"))
     }
 
-    /// Net injected active power (MW) from the last solve.
+    /// Net injected active power (MW) from the last solve. Positive for production.
     #[getter]
     fn p_mw(&self, py: Python<'_>) -> PyResult<f64> {
         let grid_py = self.grid.borrow(py);

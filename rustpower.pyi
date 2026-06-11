@@ -162,8 +162,11 @@ class PowerGrid:
     B. Parameter:  load.p_mw = p; grid.solve()        # incremental, warm start
     C. Topology:   with grid.edit() as e: ...; grid.solve()  # auto rebuild
     """
-    def __init__(self, case_path: Optional[str] = None, _qlim: bool = False,
-                 **kwargs: Any): ...
+    def __init__(self, case_path: Optional[str] = None, qlim: bool = False,
+                 **kwargs: Any):
+        """qlim=True enforces generator reactive limits (PV buses are demoted
+        to PQ when their Q output saturates, with an outer iteration loop)."""
+        ...
     @classmethod
     def from_pandapower(cls, net: Any) -> "PowerGrid":
         """Build from a live pandapower net. The pandapower data model is
@@ -188,19 +191,24 @@ class PowerGrid:
     def set_base(self, f_hz: float = 50.0, sn_mva: float = 100.0) -> None: ...
 
     # -- solve ---------------------------------------------------------------
-    def solve(self) -> SolveReport:
+    def solve(self, v_init: Optional[np.ndarray] = None) -> SolveReport:
         """Run the power flow. Raises RuntimeError only on validation errors
-        (empty grid, no slack); divergence is reported via a falsy report."""
+        (empty grid, no slack); divergence is reported via a falsy report.
+        v_init: Optional initial voltage guess (p.u. complex) for all buses."""
         ...
 
-    # -- results (read-only projections) -------------------------------------
+    # -- results -------------------------------------------------------------
     @property
     def res_bus(self) -> pd.DataFrame: ...
     @property
     def res_line(self) -> pd.DataFrame: ...
     @property
     def v(self) -> np.ndarray:
-        """Complex bus voltages (p.u.) of the last solve, original bus order."""
+        """Complex bus voltages (p.u.). Original bus order."""
+        ...
+    @v.setter
+    def v(self, value: np.ndarray) -> None:
+        """Override the initial voltage guess (vinit) for all buses."""
         ...
     @property
     def converged(self) -> bool: ...

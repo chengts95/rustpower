@@ -1,3 +1,4 @@
+//! Python bindings for the RustPower simulation framework.
 #![cfg(feature = "python")]
 
 pub mod handles;
@@ -6,11 +7,13 @@ pub mod solver;
 
 use pyo3::prelude::*;
 
+/// Get the version of the rustpower package.
 #[pyfunction]
 pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// Get the list of enabled features in this build.
 #[pyfunction]
 pub fn features() -> Vec<&'static str> {
     let mut f = Vec::new();
@@ -23,6 +26,7 @@ pub fn features() -> Vec<&'static str> {
     f
 }
 
+/// Load a pandapower network from a CSV-ZIP file.
 #[pyfunction]
 pub fn load_csv_zip(path: String) -> PyResult<crate::io::pandapower::Network> {
     crate::io::pandapower::load_csv_zip(&path).map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{}", e)))
