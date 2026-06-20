@@ -59,12 +59,12 @@ jobs:
             # This runs inside the manylinux container
             if command -v yum &> /dev/null; then
               yum install -y epel-release
-              yum install -y suitesparse-devel clang libomp-devel
+              yum install -y suitesparse-devel clang
             elif command -v apk &> /dev/null; then
-              apk add suitesparse-dev clang libomp-dev
+              apk add suitesparse-dev clang
             elif command -v apt-get &> /dev/null; then
               apt-get update
-              apt-get install -y libsuitesparse-dev clang libomp-dev
+              apt-get install -y libsuitesparse-dev clang
             fi
 
       - name: Upload wheels

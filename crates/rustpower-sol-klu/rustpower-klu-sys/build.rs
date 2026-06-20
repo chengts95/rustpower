@@ -129,7 +129,6 @@ fn main() {
     println!("cargo:rustc-link-lib={}suitesparseconfig", link_type);
 
     if cfg!(target_os = "linux") {
-        println!("cargo:rustc-link-lib=omp");
         println!("cargo:rustc-link-search=/usr/local/lib");
     } else if cfg!(target_os = "macos") {
         // Search Homebrew paths
