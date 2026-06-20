@@ -30,12 +30,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install SuiteSparse (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsuitesparse-dev
-
       - name: Install SuiteSparse (MacOS)
         if: startsWith(matrix.os, 'macos')
         run: |
@@ -54,7 +48,7 @@ jobs:
           target: ${{ matrix.target }}
           args: --release --out dist --features python,archive,klu,arrow
           sccache: 'true'
-          manylinux: auto
+          manylinux: 2_28
           before-script-linux: |
             # This runs inside the manylinux container
             if command -v yum &> /dev/null; then
