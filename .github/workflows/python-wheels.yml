@@ -21,10 +21,13 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64
+            features: python,archive,klu_dyn,arrow
           - os: windows-latest
             target: x86_64
+            features: python,archive,klu,arrow
           - os: macos-13
             target: x86_64
+            features: python,archive,klu_dyn,arrow
           # Add ARM cases later when ready
 
     steps:
@@ -44,9 +47,11 @@ jobs:
 
       - name: Install SuiteSparse (Windows)
         if: matrix.os == 'windows-latest'
+        shell: bash
         env:
           VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
         run: |
+          mkdir -p "${{ github.workspace }}/vcpkg-cache"
           vcpkg install suitesparse:x64-windows
           # Find where vcpkg installed it
           echo "SUITESPARSE_DIR=$VCPKG_INSTALLATION_ROOT/installed/x64-windows" >> $GITHUB_ENV
@@ -55,7 +60,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --features python,archive,klu,arrow
+          args: --release --out dist --features ${{ matrix.features }}
           sccache: 'true'
           manylinux: 2_28
           before-script-linux: |
