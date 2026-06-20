@@ -57,7 +57,15 @@ jobs:
           manylinux: auto
           before-script-linux: |
             # This runs inside the manylinux container
-            yum install -y suitesparse-devel || apk add suitesparse-dev || (apt-get update && apt-get install -y libsuitesparse-dev)
+            if command -v yum &> /dev/null; then
+              yum install -y epel-release
+              yum install -y suitesparse-devel clang libomp-devel
+            elif command -v apk &> /dev/null; then
+              apk add suitesparse-dev clang libomp-dev
+            elif command -v apt-get &> /dev/null; then
+              apt-get update
+              apt-get install -y libsuitesparse-dev clang libomp-dev
+            fi
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4

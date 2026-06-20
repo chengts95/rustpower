@@ -1,11 +1,9 @@
 # Changelog
-## [0.5.0-rc.2] - Pre-release
+## [0.5.0] - Pre-release
 - Fix KLU wrapper small memory leak.
 - Add intial python wrapper.
-
-## [0.5.0-rc.1] - Pre-release
-- Upgrade to Bevy 0.19.0-rc.1.
-- Upgrade bevy_archive to 0.4.0-rc.1.
+- Upgrade to Bevy 0.19.0.
+- Upgrade bevy_archive to 0.4.0.
 - **Newton-Raphson performance optimization**: Three variants benchmarked on PEGASE9241 (9241-bus):
   - **`fill_jacobian_ultimate`**: Directly fills the real-valued Jacobian matrix from `Ybus` + `V` + `Vnorm` + `Ibus` using a pre-computed sparsity pattern (`JacobianPattern`), bypassing the complex dS/dVm, dS/dVa CSC construction and slice/stack assembly entirely.
   - **Element-wise `dSbus_dV`**: Replaces the original 5× SpGEMM path with a single-pass O(nnz) traversal, avoiding expensive sparse matrix multiplications.
