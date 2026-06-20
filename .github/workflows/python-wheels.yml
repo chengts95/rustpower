@@ -35,8 +35,17 @@ jobs:
         run: |
           brew install suite-sparse
 
+      - name: Cache vcpkg binaries
+        if: matrix.os == 'windows-latest'
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg-cache
+          key: vcpkg-${{ runner.os }}-suitesparse-v1
+
       - name: Install SuiteSparse (Windows)
         if: matrix.os == 'windows-latest'
+        env:
+          VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
         run: |
           vcpkg install suitesparse:x64-windows
           # Find where vcpkg installed it
