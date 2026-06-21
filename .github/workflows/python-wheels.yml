@@ -2,102 +2,38 @@ name: Python Wheels
 
 on:
   workflow_dispatch:
-    inputs:
-      tag_name:
-        description: 'Tag name for the release'
-        required: false
-        default: 'latest'
-
-permissions:
-  contents: write
 
 jobs:
-  build_wheels:
-    name: Build wheels on ${{ matrix.os }} (${{ matrix.target || 'x86_64' }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64
-            features: python,archive,klu_dyn,arrow
-          - os: windows-latest
-            target: x86_64
-            features: python,archive,klu,arrow
-          - os: macos-13
-            target: x86_64
-            features: python,archive,klu_dyn,arrow
-          # Add ARM cases later when ready
+  build_linux_wheels:
+    name: Build Linux wheels
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install SuiteSparse (MacOS)
-        if: startsWith(matrix.os, 'macos')
-        run: |
-          brew install suite-sparse
-
-      - name: Cache vcpkg binaries
-        if: matrix.os == 'windows-latest'
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/vcpkg-cache
-          key: vcpkg-${{ runner.os }}-suitesparse-v1
-
-      - name: Install SuiteSparse (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: bash
-        env:
-          VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
-        run: |
-          mkdir -p "${{ github.workspace }}/vcpkg-cache"
-          vcpkg install suitesparse:x64-windows
-          # Find where vcpkg installed it
-          echo "SUITESPARSE_DIR=$VCPKG_INSTALLATION_ROOT/installed/x64-windows" >> $GITHUB_ENV
-
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.target }}
-          args: --release --out dist --features ${{ matrix.features }}
+          target: x86_64
+          args: --release --out dist --features python,archive,klu_dyn,arrow
           sccache: 'true'
           manylinux: 2_28
           before-script-linux: |
-            # This runs inside the manylinux container
-            if command -v yum &> /dev/null; then
-              yum install -y epel-release
+            if command -v dnf >/dev/null 2>&1; then
+              dnf install -y epel-release || true
+              dnf install -y suitesparse-devel clang
+            elif command -v yum >/dev/null 2>&1; then
+              yum install -y epel-release || true
               yum install -y suitesparse-devel clang
-            elif command -v apk &> /dev/null; then
-              apk add suitesparse-dev clang
-            elif command -v apt-get &> /dev/null; then
-              apt-get update
-              apt-get install -y libsuitesparse-dev clang
             fi
+
+      - name: Inspect wheel dependencies
+        run: |
+          python -m pip install --upgrade auditwheel
+          auditwheel show dist/*.whl || true
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-${{ matrix.target }}
-          path: dist
-
-  publish:
-    name: Publish to GitHub Release
-    needs: [build_wheels]
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          pattern: wheels-*
-          merge-multiple: true
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event.inputs.tag_name }}
-          files: dist/*
-          draft: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: wheels-linux-x86_64
+          path: dist/*.whl
