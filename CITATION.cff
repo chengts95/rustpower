@@ -1,4 +1,7 @@
-﻿cff-version: 1.2.0
+﻿# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
 title: RustPower
 message: >-
   If you use this software, please cite it using the
@@ -8,7 +11,7 @@ authors:
   - given-names: Tianshi
     family-names: Cheng
     email: tcheng1@ualberta.ca
-    orcid: 'https://orcid.org/0000-0001-7919-7368'  # <--- 在这里直接贴上你的完整 ORCID 网址
+    orcid: 'https://orcid.org/0000-0001-7919-7368'
 repository-code: 'https://github.com/chengts95/rustpower'
 keywords:
   - power system analysis
