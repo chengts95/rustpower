@@ -13,10 +13,17 @@ mod rsparse;
 #[cfg(feature = "rsparse")]
 pub use rsparse::*;
 
+#[cfg(all(
+    not(feature = "klu"),
+    not(feature = "klu_dyn"),
+    not(feature = "faer"),
+    feature = "rsparse"
+))]
+pub type DefaultSolver = RSparseSolver;
+
 #[cfg(any(feature = "klu", feature = "klu_dyn"))]
 pub type DefaultSolver = KLUSolver;
 
- 
 #[cfg(all(not(feature = "klu"), not(feature = "klu_dyn"), feature = "faer"))]
 pub type DefaultSolver = FaerSolver;
 
