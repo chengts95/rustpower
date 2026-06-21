@@ -38,12 +38,9 @@ python = ["dep:pyo3", "dep:numpy"]
 opt-level = 3              
 overflow-checks = false     
 
-[profile.dev.package.faer]
+[profile.dev.package."*"]
 opt-level = 3
-[profile.dev.package.nalgebra]
-opt-level = 3
-[profile.dev.package.nalgebra-sparse]
-opt-level = 3
+debug=false
 
 [dependencies]
 ordered-float = { version = ">3.0", default-features = false }
