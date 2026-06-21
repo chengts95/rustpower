@@ -15,7 +15,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: x86_64
-          args: --release --out dist --features python,archive,klu_dyn,arrow
+          args: --release --out dist --no-default-features --features python,archive,klu_dyn,arrow
           sccache: 'true'
           manylinux: 2_28
           before-script-linux: |
