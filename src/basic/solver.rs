@@ -3,9 +3,9 @@ mod faer;
 #[cfg(feature = "faer")]
 pub use faer::*;
 
-#[cfg(feature = "klu")]
+#[cfg(any(feature = "klu", feature = "klu_dyn"))]
 mod klu;
-#[cfg(feature = "klu")]
+#[cfg(any(feature = "klu", feature = "klu_dyn"))]
 pub use klu::*;
 
 #[cfg(feature = "rsparse")]
@@ -13,14 +13,12 @@ mod rsparse;
 #[cfg(feature = "rsparse")]
 pub use rsparse::*;
 
-#[cfg(feature = "klu")]
+#[cfg(any(feature = "klu", feature = "klu_dyn"))]
 pub type DefaultSolver = KLUSolver;
 
-#[cfg(all(not(feature = "klu"), feature = "faer"))]
+ 
+#[cfg(all(not(feature = "klu"), not(feature = "klu_dyn"), feature = "faer"))]
 pub type DefaultSolver = FaerSolver;
-
-#[cfg(all(not(feature = "klu"), not(feature = "faer"), feature = "rsparse"))]
-pub type DefaultSolver = RSparseSolver;
 
 #[allow(non_snake_case)]
 /// A trait for solving sparse linear systems.
