@@ -19,6 +19,7 @@ pub fn version() -> String {
 pub fn features() -> Vec<&'static str> {
     let mut f = Vec::new();
     if cfg!(feature = "klu") { f.push("klu"); }
+    if cfg!(feature = "klu_dyn") { f.push("klu_dyn"); }
     if cfg!(feature = "faer") { f.push("faer"); }
     if cfg!(feature = "rsparse") { f.push("rsparse"); }
     if cfg!(feature = "archive") { f.push("archive"); }
