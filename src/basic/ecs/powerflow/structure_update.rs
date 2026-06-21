@@ -1,7 +1,6 @@
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
-
-#[cfg(feature = "rsparse")]
+ 
 use crate::basic::ecs::network::PowerFlowSolver;
 use crate::basic::ecs::{elements::*, network::apply_permutation};
 
