@@ -129,7 +129,6 @@ fn main() {
     println!("cargo:rustc-link-lib={}suitesparseconfig", link_type);
 
     if cfg!(target_os = "linux") {
-        println!("cargo:rustc-link-lib=omp");
         println!("cargo:rustc-link-search=/usr/local/lib");
     } else if cfg!(target_os = "macos") {
         // Search Homebrew paths
@@ -154,7 +153,8 @@ fn main() {
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()));
 
     if cfg!(target_os = "linux") {
-        builder = builder.clang_arg("-I/usr/local/include/suitesparse");
+        builder = builder.clang_arg("-I/usr/include/suitesparse")
+                         .clang_arg("-I/usr/local/include/suitesparse");
     } else if cfg!(target_os = "macos") {
         builder = builder.clang_arg("-I/usr/local/include")
                          .clang_arg("-I/opt/homebrew/include");
