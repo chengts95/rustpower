@@ -14,7 +14,7 @@ use num_traits::Zero;
 // them via `crate::basic::newtonpf::{newton_pf_old, newton_pf_v0, …}`.
 #[cfg(feature = "klu")]
 pub(crate) use crate::basic::pf_old_impl::{
-    assemble_f, build_jacobian, build_jacobian_cached, newton_pf_old, newton_pf_v0, JacobianCache,
+    JacobianCache, assemble_f, build_jacobian, build_jacobian_cached, newton_pf_old, newton_pf_v0,
 };
 
 // ─── Slice trait (public: used by test_jacobian_pattern) ─────────────────────
@@ -62,19 +62,35 @@ pub fn newton_pf<Solver: Solve>(
     let max_iter = max_iter.unwrap_or(100);
     let tol = tolerance.unwrap_or(1e-6);
 
-    let j_pattern = JacobianPattern2::build_from_permuted(
-        Ybus.col_offsets(),
-        Ybus.row_indices(),
-        npv,
-        npq,
-    );
+    let j_pattern =
+        JacobianPattern2::build_from_permuted(Ybus.col_offsets(), Ybus.row_indices(), npv, npq);
     let n_state = npv + 2 * npq;
     let mut j_values = vec![0.0; j_pattern.nnz_j];
 
     let n_bus = npv + npq;
-    let mut mis = &v.component_mul(&(Ybus * &v).conjugate()) - Sbus;
-    let mut F = DVector::zeros(n_state);
-    assemble_f_v2(&mut F, n_bus, &mis, n_state, npq);
+    let mut ibus = DVector::zeros(n_state);
+    let mut F = DVector::zeros(2 * n_state);
+    let mut s_calc = DVector::zeros(n_state);
+    csc_matvec_complex(
+        Ybus.col_offsets(),
+        Ybus.row_indices(),
+        Ybus.values(),
+        v.as_slice(),
+        ibus.as_mut_slice(),
+    );
+
+    // let mut mis = &v.component_mul(&(Ybus * &v).conjugate()) - Sbus;
+    fill_f_from_ibus::<false>(
+        v.as_slice(),
+        ibus.as_slice(),
+        Sbus.as_slice(),
+        npq,
+        n_bus,
+        s_calc.as_mut_slice(),
+        F.as_mut_slice(),
+    );
+
+    // assemble_f_v2(&mut F, n_bus, &mis, n_state, npq);
     if F.norm() < tol {
         return Ok((v, 0));
     }
@@ -97,8 +113,7 @@ pub fn newton_pf<Solver: Solve>(
     };
 
     for it in 0..max_iter {
-        let ibus = Ybus * &v;
-        let s_calc = v.component_mul(&ibus.map(|e| e.conj()));
+        // let s_calc = v.component_mul(&ibus.map(|e| e.conj()));
 
         fill_jacobian_v3(
             Ybus,
@@ -125,7 +140,7 @@ pub fn newton_pf<Solver: Solve>(
         v_a.rows_range_mut(0..n_bus)
             .zip_apply(&dx.rows_range(0..n_bus), |a, b| {
                 *a -= b;
-                *a = a.rem_euclid(2.0 * PI);
+                // *a = a;
             });
         // Magnitude update: PQ buses only (at 0..npq in PQ-first ordering).
         let mut vm_pq = v_m.rows_range_mut(0..npq);
@@ -133,10 +148,27 @@ pub fn newton_pf<Solver: Solve>(
 
         v_norm.zip_apply(&v_a, |a, va| *a = Complex64::from_polar(1.0, va));
         v.zip_zip_apply(&v_norm, &v_m, |a, e, vm| *a = vm * e);
+        csc_matvec_complex(
+            Ybus.col_offsets(),
+            Ybus.row_indices(),
+            Ybus.values(),
+            v.as_slice(),
+            ibus.as_mut_slice(),
+        );
 
-        v.component_mul(&(Ybus * &v).conjugate())
-            .sub_to(Sbus, &mut mis);
-        assemble_f_v2(&mut F, n_bus, &mis, n_state, npq);
+        let norm2 = fill_f_from_ibus::<false>(
+            v.as_slice(),
+            ibus.as_slice(),
+            Sbus.as_slice(),
+            npq,
+            n_bus, // 如果这里 n_bus = npq + npv，也就是 active bus count
+            s_calc.as_mut_slice(),
+            F.as_mut_slice(),
+        );
+
+        if norm2 < tol * tol {
+            return Ok((v, it));
+        }
 
         if F.norm() < tol {
             return Ok((v, it));
@@ -164,4 +196,71 @@ pub(crate) fn assemble_f_v2(
         .zip_apply(&mis.rows_range(0..n_bus), |a, b| *a = b.simd_real());
     f.rows_range_mut(n_bus..num_state)
         .zip_apply(&mis.rows_range(0..npq), |a, b| *a = b.simd_imaginary());
+}
+#[inline(always)]
+fn fill_f_from_ibus<const SPEC_MINUS_CALC: bool>(
+    v: &[Complex64],
+    ibus: &[Complex64],
+    sbus: &[Complex64],
+    npq: usize,
+    n_active: usize,
+    scalc: &mut [Complex64],
+    f: &mut [f64],
+) -> f64 {
+    let mut norm2 = 0.0;
+
+    // PQ: P and Q
+    for i in 0..npq {
+        let s = v[i] * ibus[i].conj();
+        scalc[i] = s;
+
+        let mis = if SPEC_MINUS_CALC {
+            sbus[i] - s
+        } else {
+            s - sbus[i]
+        };
+
+        f[i] = mis.re;
+        f[n_active + i] = mis.im;
+
+        norm2 += mis.re * mis.re + mis.im * mis.im;
+    }
+
+    // PV: P only
+    for i in npq..n_active {
+        let s = v[i] * ibus[i].conj();
+        scalc[i] = s;
+
+        let mis = if SPEC_MINUS_CALC {
+            sbus[i] - s
+        } else {
+            s - sbus[i]
+        };
+
+        f[i] = mis.re;
+
+        norm2 += mis.re * mis.re;
+    }
+
+    norm2
+}
+
+#[inline(always)]
+fn csc_matvec_complex(
+    col_ptrs: &[usize],
+    row_idx: &[usize],
+    y_vals: &[Complex64],
+    v: &[Complex64],
+    ibus: &mut [Complex64],
+) {
+    ibus.fill(Complex64::new(0.0, 0.0));
+
+    for k in 0..v.len() {
+        let vk = v[k];
+
+        for p in col_ptrs[k]..col_ptrs[k + 1] {
+            let i = row_idx[p];
+            ibus[i] += y_vals[p] * vk;
+        }
+    }
 }
