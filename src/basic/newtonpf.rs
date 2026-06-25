@@ -80,7 +80,7 @@ pub fn newton_pf<Solver: Solve>(
     );
 
     // let mut mis = &v.component_mul(&(Ybus * &v).conjugate()) - Sbus;
-    fill_f_from_ibus::<false>(
+    let norm = fill_f_from_ibus::<false>(
         v.as_slice(),
         ibus.as_slice(),
         Sbus.as_slice(),
@@ -91,7 +91,7 @@ pub fn newton_pf<Solver: Solve>(
     );
 
     // assemble_f_v2(&mut F, n_bus, &mis, n_state, npq);
-    if F.norm() < tol {
+    if norm < tol {
         return Ok((v, 0));
     }
 
@@ -148,6 +148,7 @@ pub fn newton_pf<Solver: Solve>(
 
         v_norm.zip_apply(&v_a, |a, va| *a = Complex64::from_polar(1.0, va));
         v.zip_zip_apply(&v_norm, &v_m, |a, e, vm| *a = vm * e);
+
         csc_matvec_complex(
             Ybus.col_offsets(),
             Ybus.row_indices(),
