@@ -69,7 +69,7 @@ pub fn newton_pf<Solver: Solve>(
 
     let n_bus = npv + npq;
     let mut ibus = DVector::zeros(n_state);
-    let mut F = DVector::zeros(2 * n_state);
+    let mut F = DVector::zeros(n_state);
     let mut s_calc = DVector::zeros(n_state);
     csc_matvec_complex(
         Ybus.col_offsets(),
@@ -126,13 +126,15 @@ pub fn newton_pf<Solver: Solve>(
             &mut j_values,
         );
 
-        let _ = solver.solve(
+        if let Err(err) = solver.solve(
             Ap,
             Ai,
             j_values.as_mut_slice(),
             F.data.as_mut_slice(),
             n_state,
-        );
+        ) {
+            return Err((format!("Linear solve failed: {err}"), v, it));
+        }
 
         let dx = &F;
 
