@@ -13,9 +13,9 @@
 //! node power-balance only (branch limits / merged slacks added later). Constraint
 //! columns (CSR) + permutation + PIPS wiring come next.
 
-use num_complex::Complex64;
-use crate::opf::problem::OPFData;
 use super::v5_kkt::KKTSymbolicV5;
+use crate::opf::problem::OPFData;
+use num_complex::Complex64;
 
 /// Per-Ybus-column context (column k = the variable's bus). Precomputed once per column.
 #[derive(Clone, Copy)]
@@ -32,11 +32,11 @@ pub struct ColCtx {
 #[derive(Clone, Copy)]
 pub struct NbrCtx {
     pub vi: Complex64,
-    pub y_ik: Complex64,   // Ybus[i,k]
-    pub y_ki: Complex64,   // Ybus[k,i] (transpose entry, for the Hessian)
+    pub y_ik: Complex64, // Ybus[i,k]
+    pub y_ki: Complex64, // Ybus[k,i] (transpose entry, for the Hessian)
     pub lam_v_i: Complex64,
     pub inv_vmag_i: f64,
-    pub is_diag: bool,     // i == k
+    pub is_diag: bool, // i == k
 }
 
 // ── shared subexpressions (kept local so each block op stays a pure (Col,Nbr)→f64) ──
@@ -108,16 +108,24 @@ pub fn hvv(col: &ColCtx, nbr: &NbrCtx) -> f64 {
 }
 /// θ-column coupling ∂P_i/∂θ_k (dgᵀ, P row).
 #[inline(always)]
-pub fn dp_dth(col: &ColCtx, nbr: &NbrCtx) -> f64 { ds_dva(col, nbr).re }
+pub fn dp_dth(col: &ColCtx, nbr: &NbrCtx) -> f64 {
+    ds_dva(col, nbr).re
+}
 /// θ-column coupling ∂Q_i/∂θ_k (dgᵀ, Q row).
 #[inline(always)]
-pub fn dq_dth(col: &ColCtx, nbr: &NbrCtx) -> f64 { ds_dva(col, nbr).im }
+pub fn dq_dth(col: &ColCtx, nbr: &NbrCtx) -> f64 {
+    ds_dva(col, nbr).im
+}
 /// Vm-column coupling ∂P_i/∂Vm_k.
 #[inline(always)]
-pub fn dp_dvm(col: &ColCtx, nbr: &NbrCtx) -> f64 { ds_dvm(col, nbr).re }
+pub fn dp_dvm(col: &ColCtx, nbr: &NbrCtx) -> f64 {
+    ds_dvm(col, nbr).re
+}
 /// Vm-column coupling ∂Q_i/∂Vm_k.
 #[inline(always)]
-pub fn dq_dvm(col: &ColCtx, nbr: &NbrCtx) -> f64 { ds_dvm(col, nbr).im }
+pub fn dq_dvm(col: &ColCtx, nbr: &NbrCtx) -> f64 {
+    ds_dvm(col, nbr).im
+}
 
 // ── constraint-column block operators (CSR row access via y_trans) ──
 // For constraint bus i, swept over its variable neighbors k. Uses Y_ik = Ybus[i,k],
@@ -157,10 +165,22 @@ fn con_ds_dvm(c: &ConColCtx, n: &ConNbrCtx) -> Complex64 {
     }
 }
 /// ∂P_i/∂θ_k, ∂P_i/∂Vm_k, ∂Q_i/∂θ_k, ∂Q_i/∂Vm_k — uniform (&ConColCtx,&ConNbrCtx)->f64.
-#[inline(always)] pub fn cp_dth(c: &ConColCtx, n: &ConNbrCtx) -> f64 { con_ds_dva(c, n).re }
-#[inline(always)] pub fn cp_dvm(c: &ConColCtx, n: &ConNbrCtx) -> f64 { con_ds_dvm(c, n).re }
-#[inline(always)] pub fn cq_dth(c: &ConColCtx, n: &ConNbrCtx) -> f64 { con_ds_dva(c, n).im }
-#[inline(always)] pub fn cq_dvm(c: &ConColCtx, n: &ConNbrCtx) -> f64 { con_ds_dvm(c, n).im }
+#[inline(always)]
+pub fn cp_dth(c: &ConColCtx, n: &ConNbrCtx) -> f64 {
+    con_ds_dva(c, n).re
+}
+#[inline(always)]
+pub fn cp_dvm(c: &ConColCtx, n: &ConNbrCtx) -> f64 {
+    con_ds_dvm(c, n).re
+}
+#[inline(always)]
+pub fn cq_dth(c: &ConColCtx, n: &ConNbrCtx) -> f64 {
+    con_ds_dva(c, n).im
+}
+#[inline(always)]
+pub fn cq_dvm(c: &ConColCtx, n: &ConNbrCtx) -> f64 {
+    con_ds_dvm(c, n).im
+}
 
 /// Fill the KKT **constraint columns** (P_eq, Q_eq) of `kkt_vals` in place, streaming.
 /// Row access into Ybus is done through `y_trans` (transpose index): the offset-th
@@ -195,22 +215,27 @@ pub fn fill_constraint_columns(
 
     for i in 0..nb {
         let deg = y_cp[i + 1] - y_cp[i];
-        let con = ConColCtx { vi: vs[i], vnorm_i: vnorm[i], ibus_i: ibus_s[i] };
+        let con = ConColCtx {
+            vi: vs[i],
+            vnorm_i: vnorm[i],
+            ibus_i: ibus_s[i],
+        };
 
-        let p0 = cp[nx + i];        // P_eq_i column: [∂P/∂θ_k | ∂P/∂Vm_k | gen]
-        let q0 = cp[nx + nb + i];   // Q_eq_i column: [∂Q/∂θ_k | ∂Q/∂Vm_k | gen]
+        let p0 = cp[nx + i]; // P_eq_i column: [∂P/∂θ_k | ∂P/∂Vm_k | gen]
+        let q0 = cp[nx + nb + i]; // Q_eq_i column: [∂Q/∂θ_k | ∂Q/∂Vm_k | gen]
         for off in 0..deg {
             let pos = y_cp[i] + off;
             let k = y_ri[pos];
             let nbr = ConNbrCtx {
-                vk: vs[k], vnorm_k: vnorm[k],
+                vk: vs[k],
+                vnorm_k: vnorm[k],
                 y_ik: y_v[y_trans[pos]], // Ybus[i,k] via transpose index
                 is_diag: k == i,
             };
-            kkt_vals[p0 + off]         = cp_dth(&con, &nbr);
-            kkt_vals[p0 + deg + off]   = cp_dvm(&con, &nbr);
-            kkt_vals[q0 + off]         = cq_dth(&con, &nbr);
-            kkt_vals[q0 + deg + off]   = cq_dvm(&con, &nbr);
+            kkt_vals[p0 + off] = cp_dth(&con, &nbr);
+            kkt_vals[p0 + deg + off] = cp_dvm(&con, &nbr);
+            kkt_vals[q0 + off] = cq_dth(&con, &nbr);
+            kkt_vals[q0 + deg + off] = cq_dvm(&con, &nbr);
         }
         // generator coupling run: −1 per gen on bus i
         let pg_run = p0 + 2 * deg;
@@ -271,13 +296,19 @@ pub fn fill_variable_columns(
     }
 
     let mut is_fixed = vec![false; v5.nx];
-    for &vix in &v5.ieq { is_fixed[vix] = true; }
+    for &vix in &v5.ieq {
+        is_fixed[vix] = true;
+    }
 
     let cp = &v5.col_ptrs;
 
     let col_ctx = |k: usize| ColCtx {
-        vk: vs[k], vnorm_k: vnorm[k], inv_vmag_k: inv_vmag[k],
-        lam_v_k: lam_v[k], ibus_k: ibus_s[k], d_lam_k: d_lam[k],
+        vk: vs[k],
+        vnorm_k: vnorm[k],
+        inv_vmag_k: inv_vmag[k],
+        lam_v_k: lam_v[k],
+        ibus_k: ibus_s[k],
+        d_lam_k: d_lam[k],
     };
 
     // θ columns and Vm columns (both driven by Ybus column k)
@@ -285,28 +316,36 @@ pub fn fill_variable_columns(
         let deg = y_cp[k + 1] - y_cp[k];
         let col = col_ctx(k);
 
-        let th0 = cp[k];          // θ_k column base: [Haa | Hva | dgP | dgQ]
-        let vm0 = cp[nb + k];     // Vm_k column base: [Hav | Hvv | dgP | dgQ]
+        let th0 = cp[k]; // θ_k column base: [Haa | Hva | dgP | dgQ]
+        let vm0 = cp[nb + k]; // Vm_k column base: [Hav | Hvv | dgP | dgQ]
         for off in 0..deg {
             let idx = y_cp[k] + off;
             let i = y_ri[idx];
             let nbr = NbrCtx {
-                vi: vs[i], y_ik: y_v[idx], y_ki: y_v[y_trans[idx]],
-                lam_v_i: lam_v[i], inv_vmag_i: inv_vmag[i], is_diag: i == k,
+                vi: vs[i],
+                y_ik: y_v[idx],
+                y_ki: y_v[y_trans[idx]],
+                lam_v_i: lam_v[i],
+                inv_vmag_i: inv_vmag[i],
+                is_diag: i == k,
             };
             // θ_k column
-            kkt_vals[th0 + off]           = haa(&col, &nbr);
-            kkt_vals[th0 + deg + off]     = hva(&col, &nbr);
+            kkt_vals[th0 + off] = haa(&col, &nbr);
+            kkt_vals[th0 + deg + off] = hva(&col, &nbr);
             kkt_vals[th0 + 2 * deg + off] = dp_dth(&col, &nbr);
             kkt_vals[th0 + 3 * deg + off] = dq_dth(&col, &nbr);
             // Vm_k column
-            kkt_vals[vm0 + off]           = hav(&col, &nbr);
-            kkt_vals[vm0 + deg + off]     = hvv(&col, &nbr);
+            kkt_vals[vm0 + off] = hav(&col, &nbr);
+            kkt_vals[vm0 + deg + off] = hvv(&col, &nbr);
             kkt_vals[vm0 + 2 * deg + off] = dp_dvm(&col, &nbr);
             kkt_vals[vm0 + 3 * deg + off] = dq_dvm(&col, &nbr);
         }
-        if is_fixed[k]      { kkt_vals[th0 + 4 * deg] = 1.0; }
-        if is_fixed[nb + k] { kkt_vals[vm0 + 4 * deg] = 1.0; }
+        if is_fixed[k] {
+            kkt_vals[th0 + 4 * deg] = 1.0;
+        }
+        if is_fixed[nb + k] {
+            kkt_vals[vm0 + 4 * deg] = 1.0;
+        }
     }
 
     // generator columns: [diag, −1 coupling, optional lineq]
@@ -315,13 +354,17 @@ pub fn fill_variable_columns(
         let pg = 2 * nb + g;
         let qg = 2 * nb + ng + g;
         let pg0 = cp[pg];
-        kkt_vals[pg0]     = cost_mult * 2.0 * data.cost_coeffs[g][0] * base_mva * base_mva; // cost diag
+        kkt_vals[pg0] = cost_mult * 2.0 * data.cost_coeffs[g][0] * base_mva * base_mva; // cost diag
         kkt_vals[pg0 + 1] = -1.0; // ∂P_eq/∂Pg
-        if is_fixed[pg] { kkt_vals[pg0 + 2] = 1.0; }
+        if is_fixed[pg] {
+            kkt_vals[pg0 + 2] = 1.0;
+        }
         let qg0 = cp[qg];
-        kkt_vals[qg0]     = 0.0;  // structural Qg diagonal
+        kkt_vals[qg0] = 0.0; // structural Qg diagonal
         kkt_vals[qg0 + 1] = -1.0; // ∂Q_eq/∂Qg
-        if is_fixed[qg] { kkt_vals[qg0 + 2] = 1.0; }
+        if is_fixed[qg] {
+            kkt_vals[qg0 + 2] = 1.0;
+        }
     }
 }
 
@@ -359,12 +402,18 @@ pub fn fill_branch_hessian(
         let hf = branch_end_hess_v4(
             yf_vals[yf_l[0]].conj(),
             yf_vals[yf_l[1]].conj(),
-            vs[f], vs[t], mu_f[l], wf,
+            vs[f],
+            vs[t],
+            mu_f[l],
+            wf,
         );
         let ht = branch_end_hess_v4(
             yt_vals[yt_l[0]].conj(),
             yt_vals[yt_l[1]].conj(),
-            vs[t], vs[f], mu_t[l], wt,
+            vs[t],
+            vs[f],
+            mu_t[l],
+            wt,
         );
 
         let mut hq = [[0.0f64; 4]; 4];
@@ -387,7 +436,8 @@ pub fn fill_branch_hessian(
                     for row_var in 0..2 {
                         let h_idx_row = row_var * 2 + row_node;
                         let h_idx_col = nj * 2 + ni;
-                        kkt_vals[ptrs[ni*8 + nj*4 + row_node*2 + row_var]] += hq[h_idx_row][h_idx_col];
+                        kkt_vals[ptrs[ni * 8 + nj * 4 + row_node * 2 + row_var]] +=
+                            hq[h_idx_row][h_idx_col];
                     }
                 }
             }
@@ -398,8 +448,8 @@ pub fn fill_branch_hessian(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::opf::builder::opf_data_from_network;
     use crate::io::pandapower::load_csv_zip;
+    use crate::opf::builder::opf_data_from_network;
 
     /// V5.2 block-operator variable-column fill must match V5.0 on the variable-column
     /// portion of the KKT (node power-balance only ⇒ mu=0 so no branch Hessian).
@@ -421,40 +471,79 @@ mod tests {
 
         // Reference: V5.0 fill (lxx with mu=0, no z) → variable-column portion
         let lxx = crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
-            &data, &v3c, x.as_slice(), &lam, &mu, None, cm,
+            &data,
+            &v3c,
+            x.as_slice(),
+            &lam,
+            &mu,
+            None,
+            cm,
         );
         let (_, _, dg, _) = crate::opf::constraints::opf_consfcn(&data, x.as_slice());
         let dg_t = dg.transpose();
         let mut ref_vals = vec![0.0f64; v5.row_idx.len()];
         v5.fill(
-            lxx.col_offsets(), lxx.values(),
-            dg.col_offsets(), dg.values(),
-            dg_t.col_offsets(), dg_t.values(),
+            lxx.col_offsets(),
+            lxx.values(),
+            dg.col_offsets(),
+            dg.values(),
+            dg_t.col_offsets(),
+            dg_t.values(),
             &mut ref_vals,
         );
 
         // V5.2 block-operator fill: variable columns + constraint columns (full KKT)
         let mut gens_at_bus: Vec<Vec<usize>> = vec![Vec::new(); nb];
-        for g in 0..data.ng { gens_at_bus[data.gen_bus[g]].push(g); }
+        for g in 0..data.ng {
+            gens_at_bus[data.gen_bus[g]].push(g);
+        }
 
         let mut v52_vals = vec![0.0f64; v5.row_idx.len()];
-        fill_variable_columns(&v5, &data, &v3c.y_transpose_idx, x.as_slice(), &lam, cm, &mut v52_vals);
-        fill_constraint_columns(&v5, &data, &v3c.y_transpose_idx, &gens_at_bus, x.as_slice(), &mut v52_vals);
+        fill_variable_columns(
+            &v5,
+            &data,
+            &v3c.y_transpose_idx,
+            x.as_slice(),
+            &lam,
+            cm,
+            &mut v52_vals,
+        );
+        fill_constraint_columns(
+            &v5,
+            &data,
+            &v3c.y_transpose_idx,
+            &gens_at_bus,
+            x.as_slice(),
+            &mut v52_vals,
+        );
 
         // Compare the FULL KKT (all columns) vs V5.0
         let mut max_diff = 0.0f64;
         let mut worst = 0usize;
         for p in 0..v5.row_idx.len() {
             let d = (v52_vals[p] - ref_vals[p]).abs();
-            if d > max_diff { max_diff = d; worst = p; }
+            if d > max_diff {
+                max_diff = d;
+                worst = p;
+            }
         }
         let nvar = v5.col_ptrs[nx];
         println!(
             "V5.2 FULL KKT fill vs V5.0: compared {} vals, max_diff={:.3e} at pos {} ({})",
-            v5.row_idx.len(), max_diff, worst,
-            if worst < nvar { "variable col" } else { "constraint col" }
+            v5.row_idx.len(),
+            max_diff,
+            worst,
+            if worst < nvar {
+                "variable col"
+            } else {
+                "constraint col"
+            }
         );
-        assert!(max_diff < 1e-12, "V5.2 full KKT differs (max_diff={:.3e})", max_diff);
+        assert!(
+            max_diff < 1e-12,
+            "V5.2 full KKT differs (max_diff={:.3e})",
+            max_diff
+        );
     }
 
     /// Per-iteration KKT-matrix production speed: V4 (lxx+dg+build_saddle_point) vs
@@ -470,10 +559,13 @@ mod tests {
         let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
         for case in ["IEEE118", "pegase9241"] {
             let path = format!("{}/cases/{}/data.zip", dir, case);
-            if !std::path::Path::new(&path).exists() { continue; }
+            if !std::path::Path::new(&path).exists() {
+                continue;
+            }
             let net = crate::io::pandapower::load_csv_zip(&path).unwrap();
             let data = opf_data_from_network(&net);
-            let nb = data.nb; let nx = data.nx();
+            let nb = data.nb;
+            let nx = data.nx();
             let v5 = KKTSymbolicV5::build(&data);
             let v3c = crate::new_opf::v3_symbolic::V3SymbolicCache::analyze(&data);
             let x = data.warm_x0();
@@ -481,7 +573,9 @@ mod tests {
             let mu = vec![0.0; 2 * data.nl];
             let cm = 1e-4;
             let mut gens_at_bus: Vec<Vec<usize>> = vec![Vec::new(); nb];
-            for g in 0..data.ng { gens_at_bus[data.gen_bus[g]].push(g); }
+            for g in 0..data.ng {
+                gens_at_bus[data.gen_bus[g]].push(g);
+            }
             let neqlin = v5.ieq.len();
             let iters = if case == "IEEE118" { 300 } else { 30 };
 
@@ -492,11 +586,25 @@ mod tests {
             let t = std::time::Instant::now();
             let mut sink = 0.0;
             for _ in 0..iters {
-                let lxx = crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(&data, &v3c, x.as_slice(), &lam, &mu, None, cm);
+                let lxx = crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
+                    &data,
+                    &v3c,
+                    x.as_slice(),
+                    &lam,
+                    &mu,
+                    None,
+                    cm,
+                );
                 let (_, _, dg, _) = crate::opf::constraints::opf_consfcn(&data, x.as_slice());
-                let mut coo = CooMatrix::<f64>::new(nx, 2*nb+neqlin);
-                for j in 0..dg.ncols() { for idx in dg.col_offsets()[j]..dg.col_offsets()[j+1] { coo.push(dg.row_indices()[idx], j, dg.values()[idx]); } }
-                for (r,&vv) in v5.ieq.iter().enumerate() { coo.push(vv, 2*nb+r, 1.0); }
+                let mut coo = CooMatrix::<f64>::new(nx, 2 * nb + neqlin);
+                for j in 0..dg.ncols() {
+                    for idx in dg.col_offsets()[j]..dg.col_offsets()[j + 1] {
+                        coo.push(dg.row_indices()[idx], j, dg.values()[idx]);
+                    }
+                }
+                for (r, &vv) in v5.ieq.iter().enumerate() {
+                    coo.push(vv, 2 * nb + r, 1.0);
+                }
                 let dgf = CscMatrix::from(&coo);
                 let k = build_saddle_point(&lxx, &Some(dgf), nx, v5.neq);
                 sink += k.values()[0];
@@ -506,14 +614,36 @@ mod tests {
             // V5.0: v4 node fill + opf_consfcn dg + transpose + fill
             let t = std::time::Instant::now();
             for _ in 0..iters {
-                let lxx = crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(&data, &v3c, x.as_slice(), &lam, &mu, None, cm);
+                let lxx = crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
+                    &data,
+                    &v3c,
+                    x.as_slice(),
+                    &lam,
+                    &mu,
+                    None,
+                    cm,
+                );
                 let (_, _, dg, _) = crate::opf::constraints::opf_consfcn(&data, x.as_slice());
-                let mut coo = CooMatrix::<f64>::new(nx, 2*nb+neqlin);
-                for j in 0..dg.ncols() { for idx in dg.col_offsets()[j]..dg.col_offsets()[j+1] { coo.push(dg.row_indices()[idx], j, dg.values()[idx]); } }
-                for (r,&vv) in v5.ieq.iter().enumerate() { coo.push(vv, 2*nb+r, 1.0); }
+                let mut coo = CooMatrix::<f64>::new(nx, 2 * nb + neqlin);
+                for j in 0..dg.ncols() {
+                    for idx in dg.col_offsets()[j]..dg.col_offsets()[j + 1] {
+                        coo.push(dg.row_indices()[idx], j, dg.values()[idx]);
+                    }
+                }
+                for (r, &vv) in v5.ieq.iter().enumerate() {
+                    coo.push(vv, 2 * nb + r, 1.0);
+                }
                 let dgf = CscMatrix::from(&coo);
                 let dgt = dgf.transpose();
-                v5.fill_from_merged(lxx.col_offsets(), lxx.values(), dgf.col_offsets(), dgf.values(), dgt.col_offsets(), dgt.values(), &mut kkt);
+                v5.fill_from_merged(
+                    lxx.col_offsets(),
+                    lxx.values(),
+                    dgf.col_offsets(),
+                    dgf.values(),
+                    dgt.col_offsets(),
+                    dgt.values(),
+                    &mut kkt,
+                );
                 sink += kkt[0];
             }
             let d_v50 = t.elapsed() / iters;
@@ -521,17 +651,35 @@ mod tests {
             // V5.2: block operators, fully inline
             let t = std::time::Instant::now();
             for _ in 0..iters {
-                fill_variable_columns(&v5, &data, &v3c.y_transpose_idx, x.as_slice(), &lam, cm, &mut kkt);
-                fill_constraint_columns(&v5, &data, &v3c.y_transpose_idx, &gens_at_bus, x.as_slice(), &mut kkt);
+                fill_variable_columns(
+                    &v5,
+                    &data,
+                    &v3c.y_transpose_idx,
+                    x.as_slice(),
+                    &lam,
+                    cm,
+                    &mut kkt,
+                );
+                fill_constraint_columns(
+                    &v5,
+                    &data,
+                    &v3c.y_transpose_idx,
+                    &gens_at_bus,
+                    x.as_slice(),
+                    &mut kkt,
+                );
                 sink += kkt[0];
             }
             let d_v52 = t.elapsed() / iters;
 
             println!(
                 "[{}] KKT-prep/iter — V4: {:?} | V5.0: {:?} ({:.1}x) | V5.2 inline: {:?} ({:.1}x)  (sink={:.2e})",
-                case, d_v4,
-                d_v50, d_v4.as_secs_f64()/d_v50.as_secs_f64(),
-                d_v52, d_v4.as_secs_f64()/d_v52.as_secs_f64(),
+                case,
+                d_v4,
+                d_v50,
+                d_v4.as_secs_f64() / d_v50.as_secs_f64(),
+                d_v52,
+                d_v4.as_secs_f64() / d_v52.as_secs_f64(),
                 sink
             );
         }

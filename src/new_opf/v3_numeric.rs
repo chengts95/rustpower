@@ -1,8 +1,8 @@
+use super::v3_symbolic::V3SymbolicCache;
+use crate::opf::problem::OPFData;
 use nalgebra::DVector;
 use nalgebra_sparse::CscMatrix;
 use num_complex::Complex64;
-use super::v3_symbolic::V3SymbolicCache;
-use crate::opf::problem::OPFData;
 
 use crate::basic::d2sbr_dv2::d2ASbr_dV2;
 use crate::basic::dsbr_dv::dSbr_dV;
@@ -39,14 +39,11 @@ pub fn v3_numeric_fill(
         cos_th[i] = vre[i] / m;
         sin_th[i] = vim[i] / m;
     }
-    
-    let jt = |i: usize| [
-        -vim[i], cos_th[i],
-         vre[i], sin_th[i]
-    ];
+
+    let jt = |i: usize| [-vim[i], cos_th[i], vre[i], sin_th[i]];
 
     let lp = &lam_eq[..nb];
-    let lq = &lam_eq[nb..2*nb];
+    let lq = &lam_eq[nb..2 * nb];
     let mut lam_vec = DVector::from_element(nb, Complex64::new(0.0, 0.0));
     let mut lam_v_conj = DVector::from_element(nb, Complex64::new(0.0, 0.0));
     for i in 0..nb {
@@ -64,11 +61,11 @@ pub fn v3_numeric_fill(
     let y_cp = ybus.col_offsets();
 
     for j in 0..nb {
-        for idx in y_cp[j]..y_cp[j+1] {
+        for idx in y_cp[j]..y_cp[j + 1] {
             let i = y_ri[idx];
             let y_conj = y_vals[idx].conj();
             let ji_idx = cache.y_transpose_idx[idx];
-            
+
             let mij = lam_vec[i] * y_conj;
             let mji = lam_vec[j] * y_vals[ji_idx].conj();
 
@@ -79,10 +76,14 @@ pub fn v3_numeric_fill(
 
             let m_i = jt(i);
             let m_j = jt(j);
-            let haa = m_i[0]*(hrr*m_j[0] + h_ef*m_j[2]) + m_i[2]*(h_fe*m_j[0] + hii*m_j[2]);
-            let hav = m_i[0]*(hrr*m_j[1] + h_ef*m_j[3]) + m_i[2]*(h_fe*m_j[1] + hii*m_j[3]);
-            let hva = m_i[1]*(hrr*m_j[0] + h_ef*m_j[2]) + m_i[3]*(h_fe*m_j[0] + hii*m_j[2]);
-            let hvv = m_i[1]*(hrr*m_j[1] + h_ef*m_j[3]) + m_i[3]*(h_fe*m_j[1] + hii*m_j[3]);
+            let haa =
+                m_i[0] * (hrr * m_j[0] + h_ef * m_j[2]) + m_i[2] * (h_fe * m_j[0] + hii * m_j[2]);
+            let hav =
+                m_i[0] * (hrr * m_j[1] + h_ef * m_j[3]) + m_i[2] * (h_fe * m_j[1] + hii * m_j[3]);
+            let hva =
+                m_i[1] * (hrr * m_j[0] + h_ef * m_j[2]) + m_i[3] * (h_fe * m_j[0] + hii * m_j[2]);
+            let hvv =
+                m_i[1] * (hrr * m_j[1] + h_ef * m_j[3]) + m_i[3] * (h_fe * m_j[1] + hii * m_j[3]);
 
             let ptrs = cache.y_to_lxx[idx];
             lxx_vals[ptrs[0]] = haa;
@@ -96,13 +97,41 @@ pub fn v3_numeric_fill(
     let mu_f = &mu_ineq[..nl];
     let mu_t = &mu_ineq[nl..];
     let v_norm: DVector<Complex64> = v.map(|vi| vi / vi.norm());
-    let (dSf_dVa, dSf_dVm, dSt_dVa, dSt_dVm, Sf, St) =
-        dSbr_dV(&data.yf, &data.yt, &data.f_buses, &data.t_buses, &v, &v_norm);
+    let (dSf_dVa, dSf_dVm, dSt_dVa, dSt_dVm, Sf, St) = dSbr_dV(
+        &data.yf,
+        &data.yt,
+        &data.f_buses,
+        &data.t_buses,
+        &v,
+        &v_norm,
+    );
 
-    let hf = d2ASbr_dV2(&dSf_dVa, &dSf_dVm, &Sf, &data.cf, &data.yf, &v, &DVector::from_column_slice(mu_f));
-    let ht = d2ASbr_dV2(&dSt_dVa, &dSt_dVm, &St, &data.ct, &data.yt, &v, &DVector::from_column_slice(mu_t));
+    let hf = d2ASbr_dV2(
+        &dSf_dVa,
+        &dSf_dVm,
+        &Sf,
+        &data.cf,
+        &data.yf,
+        &v,
+        &DVector::from_column_slice(mu_f),
+    );
+    let ht = d2ASbr_dV2(
+        &dSt_dVa,
+        &dSt_dVm,
+        &St,
+        &data.ct,
+        &data.yt,
+        &v,
+        &DVector::from_column_slice(mu_t),
+    );
 
-    let add_br_h = |lxx: &mut [f64], h_blocks: (CscMatrix<f64>, CscMatrix<f64>, CscMatrix<f64>, CscMatrix<f64>)| {
+    let add_br_h = |lxx: &mut [f64],
+                    h_blocks: (
+        CscMatrix<f64>,
+        CscMatrix<f64>,
+        CscMatrix<f64>,
+        CscMatrix<f64>,
+    )| {
         let (haa, hav, hva, hvv) = h_blocks;
         let blks = [haa, hav, hva, hvv];
         for (b_idx, block) in blks.iter().enumerate() {
@@ -110,7 +139,7 @@ pub fn v3_numeric_fill(
             let ri = block.row_indices();
             let vals = block.values();
             for col in 0..nb {
-                for idx in cp[col]..cp[col+1] {
+                for idx in cp[col]..cp[col + 1] {
                     let row = ri[idx];
                     let val = vals[idx];
                     let r_off = (b_idx % 2) * nb;
@@ -132,7 +161,7 @@ pub fn v3_numeric_fill(
         let zv = zi * v[i];
         let d_aa = -zv.re;
         let d_av = -zv.im / vmag[i];
-        
+
         lxx_vals[cache.lxx_diag_ptrs[i]] += d_aa;
         lxx_vals[cache.lxx_va_diag_ptrs[i]] += d_av;
         lxx_vals[cache.lxx_av_diag_ptrs[i]] += d_av;
@@ -145,5 +174,6 @@ pub fn v3_numeric_fill(
         lxx_vals[cache.lxx_diag_ptrs[2 * nb + g]] = val;
     }
 
-    CscMatrix::try_from_csc_data(nx, nx, cache.lxx_cp.clone(), cache.lxx_ri.clone(), lxx_vals).unwrap()
+    CscMatrix::try_from_csc_data(nx, nx, cache.lxx_cp.clone(), cache.lxx_ri.clone(), lxx_vals)
+        .unwrap()
 }

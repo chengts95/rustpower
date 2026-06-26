@@ -14,8 +14,15 @@ pub mod klu_probe {
     pub static N_FIRST_FACTOR: AtomicU64 = AtomicU64::new(0);
 
     pub fn reset() {
-        for a in [&REFACTOR_NS, &FACTOR_NS, &SOLVE_NS, &SYM_NS,
-                  &N_REFACTOR, &N_FACTOR_FALLBACK, &N_FIRST_FACTOR] {
+        for a in [
+            &REFACTOR_NS,
+            &FACTOR_NS,
+            &SOLVE_NS,
+            &SYM_NS,
+            &N_REFACTOR,
+            &N_FACTOR_FALLBACK,
+            &N_FIRST_FACTOR,
+        ] {
             a.store(0, Ordering::Relaxed);
         }
     }
@@ -25,8 +32,10 @@ pub mod klu_probe {
             "KLU breakdown: sym={:.3}ms factor(first)={:.3}ms refactor={:.3}ms({}) fallback={:.3}ms({}) tri_solve={:.3}ms",
             g(&SYM_NS) as f64 / 1e6,
             g(&FACTOR_NS) as f64 / 1e6,
-            g(&REFACTOR_NS) as f64 / 1e6, g(&N_REFACTOR),
-            0.0, g(&N_FACTOR_FALLBACK),
+            g(&REFACTOR_NS) as f64 / 1e6,
+            g(&N_REFACTOR),
+            0.0,
+            g(&N_FACTOR_FALLBACK),
             g(&SOLVE_NS) as f64 / 1e6,
         )
     }

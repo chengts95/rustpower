@@ -59,7 +59,11 @@ pub fn opf_cfg_from_csv_str(s: &str) -> Option<OPFCfg> {
         let row: PolyCostRow = rec.deserialize(Some(&headers)).ok()?;
         rows.push(row);
     }
-    if rows.is_empty() { None } else { Some(OPFCfg::from_rows(rows)) }
+    if rows.is_empty() {
+        None
+    } else {
+        Some(OPFCfg::from_rows(rows))
+    }
 }
 
 pub fn load_opf_cfg_csv(path: &str) -> Option<OPFCfg> {
@@ -86,7 +90,11 @@ pub fn load_opf_cfg_json_str(json_str: &str) -> Option<OPFCfg> {
         .iter()
         .filter_map(|x| serde_json::from_value(x.clone()).ok())
         .collect();
-    if rows.is_empty() { None } else { Some(OPFCfg::from_rows(rows)) }
+    if rows.is_empty() {
+        None
+    } else {
+        Some(OPFCfg::from_rows(rows))
+    }
 }
 
 // ── ECS patch ─────────────────────────────────────────────────────────────────
@@ -197,9 +205,9 @@ mod tests {
     /// Full ECS round-trip: load network → patch GenCost → query components.
     #[test]
     fn test_patch_gen_cost_ecs_ieee39() {
-        use bevy_ecs::prelude::*;
         use crate::basic::ecs::elements::{GenCost, PandapowerEntityMap};
         use crate::io::pandapower::ecs_net_conv::LoadPandapowerNet;
+        use bevy_ecs::prelude::*;
 
         let net: crate::io::pandapower::Network =
             serde_json::from_str(crate::testcases::case_ieee39::IEEE_39).unwrap();

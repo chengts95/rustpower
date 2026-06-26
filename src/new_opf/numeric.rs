@@ -1,8 +1,8 @@
+use super::symbolic::SymbolicCache;
+use crate::opf::problem::OPFData;
 use nalgebra::DVector;
 use nalgebra_sparse::CscMatrix;
 use num_complex::Complex64;
-use super::symbolic::SymbolicCache;
-use crate::opf::problem::OPFData;
 
 use crate::basic::d2sbr_dv2::d2ASbr_dV2;
 use crate::basic::dsbr_dv::dSbr_dV;
@@ -43,14 +43,11 @@ pub fn numeric_fill(
     // J_trans per bus (2x2):
     // [ d_vre/d_th  d_vre/d_Vm ] = [ -vim  cos ]
     // [ d_vim/d_th  d_vim/d_Vm ]   [  vre  sin ]
-    let jt = |i: usize| [
-        -vim[i], cos_th[i],
-         vre[i], sin_th[i]
-    ];
+    let jt = |i: usize| [-vim[i], cos_th[i], vre[i], sin_th[i]];
 
     // 2. Evaluate equality multipliers and auxiliary vectors (O(nnz))
     let lp = &lam_eq[..nb];
-    let lq = &lam_eq[nb..2*nb];
+    let lq = &lam_eq[nb..2 * nb];
     let mut lam_v_conj = DVector::from_element(nb, Complex64::new(0.0, 0.0));
     let mut lam_vec = DVector::from_element(nb, Complex64::new(0.0, 0.0));
     for i in 0..nb {
@@ -70,10 +67,10 @@ pub fn numeric_fill(
     let y_cp = ybus.col_offsets();
 
     for j in 0..nb {
-        for idx in y_cp[j]..y_cp[j+1] {
+        for idx in y_cp[j]..y_cp[j + 1] {
             let i = y_ri[idx];
             let y_conj = y_vals[idx].conj();
-            
+
             // --- A. Jacobian (dg) ---
             // Rectangular: dPj/dVi, dQj/dVi
             let (jr_re, jr_im, ji_re, ji_im) = if i == j {
@@ -81,13 +78,21 @@ pub fn numeric_fill(
                 let iim = ibus[j].im;
                 let g = y_vals[idx].re;
                 let b = y_vals[idx].im;
-                (g*vre[j] + b*vim[j] + ire, -b*vre[j] + g*vim[j] + iim,
-                 g*vim[j] - b*vre[j] - iim, -(b*vim[j] + g*vre[j]) + ire)
+                (
+                    g * vre[j] + b * vim[j] + ire,
+                    -b * vre[j] + g * vim[j] + iim,
+                    g * vim[j] - b * vre[j] - iim,
+                    -(b * vim[j] + g * vre[j]) + ire,
+                )
             } else {
                 let g = y_vals[idx].re;
                 let b = y_vals[idx].im;
-                (g*vre[j] + b*vim[j], -b*vre[j] + g*vim[j],
-                 g*vim[j] - b*vre[j], -(b*vim[j] + g*vre[j]))
+                (
+                    g * vre[j] + b * vim[j],
+                    -b * vre[j] + g * vim[j],
+                    g * vim[j] - b * vre[j],
+                    -(b * vim[j] + g * vre[j]),
+                )
             };
 
             let m_i = jt(i);
@@ -117,10 +122,14 @@ pub fn numeric_fill(
 
             // Transform to polar: H_p = Ji^T * H_r * Jj
             let m_j = jt(j);
-            let haa = m_i[0]*(hrr*m_j[0] + h_ef*m_j[2]) + m_i[2]*(h_fe*m_j[0] + hii*m_j[2]);
-            let hav = m_i[0]*(hrr*m_j[1] + h_ef*m_j[3]) + m_i[2]*(h_fe*m_j[1] + hii*m_j[3]);
-            let hva = m_i[1]*(hrr*m_j[0] + h_ef*m_j[2]) + m_i[3]*(h_fe*m_j[0] + hii*m_j[2]);
-            let hvv = m_i[1]*(hrr*m_j[1] + h_ef*m_j[3]) + m_i[3]*(h_fe*m_j[1] + hii*m_j[3]);
+            let haa =
+                m_i[0] * (hrr * m_j[0] + h_ef * m_j[2]) + m_i[2] * (h_fe * m_j[0] + hii * m_j[2]);
+            let hav =
+                m_i[0] * (hrr * m_j[1] + h_ef * m_j[3]) + m_i[2] * (h_fe * m_j[1] + hii * m_j[3]);
+            let hva =
+                m_i[1] * (hrr * m_j[0] + h_ef * m_j[2]) + m_i[3] * (h_fe * m_j[0] + hii * m_j[2]);
+            let hvv =
+                m_i[1] * (hrr * m_j[1] + h_ef * m_j[3]) + m_i[3] * (h_fe * m_j[1] + hii * m_j[3]);
 
             let h_ptrs = cache.y_to_lxx[idx];
             lxx_vals[h_ptrs[0]] = haa;
@@ -137,7 +146,7 @@ pub fn numeric_fill(
         let gim = -zi.im;
         let d_aa = -(gre * vre[i] + gim * vim[i]);
         let d_av = (gim * vre[i] - gre * vim[i]) / vmag[i];
-        
+
         let ptrs = cache.y_to_lxx[cache.y_diag_ptrs[i]];
         lxx_vals[ptrs[0]] += d_aa;
         lxx_vals[ptrs[1]] += d_av;
@@ -156,13 +165,42 @@ pub fn numeric_fill(
     let mu_f = &mu_ineq[..nl];
     let mu_t = &mu_ineq[nl..];
     let v_norm: DVector<Complex64> = v.map(|vi| vi / vi.norm());
-    let (dSf_dVa, dSf_dVm, dSt_dVa, dSt_dVm, Sf, St) =
-        dSbr_dV(&data.yf, &data.yt, &data.f_buses, &data.t_buses, &v, &v_norm);
+    let (dSf_dVa, dSf_dVm, dSt_dVa, dSt_dVm, Sf, St) = dSbr_dV(
+        &data.yf,
+        &data.yt,
+        &data.f_buses,
+        &data.t_buses,
+        &v,
+        &v_norm,
+    );
 
-    let hf = d2ASbr_dV2(&dSf_dVa, &dSf_dVm, &Sf, &data.cf, &data.yf, &v, &DVector::from_column_slice(mu_f));
-    let ht = d2ASbr_dV2(&dSt_dVa, &dSt_dVm, &St, &data.ct, &data.yt, &v, &DVector::from_column_slice(mu_t));
+    let hf = d2ASbr_dV2(
+        &dSf_dVa,
+        &dSf_dVm,
+        &Sf,
+        &data.cf,
+        &data.yf,
+        &v,
+        &DVector::from_column_slice(mu_f),
+    );
+    let ht = d2ASbr_dV2(
+        &dSt_dVa,
+        &dSt_dVm,
+        &St,
+        &data.ct,
+        &data.yt,
+        &v,
+        &DVector::from_column_slice(mu_t),
+    );
 
-    let add_br_h = |lxx: &mut [f64], h_blocks: (CscMatrix<f64>, CscMatrix<f64>, CscMatrix<f64>, CscMatrix<f64>), _is_to: bool| {
+    let add_br_h = |lxx: &mut [f64],
+                    h_blocks: (
+        CscMatrix<f64>,
+        CscMatrix<f64>,
+        CscMatrix<f64>,
+        CscMatrix<f64>,
+    ),
+                    _is_to: bool| {
         let (haa, hav, hva, hvv) = h_blocks;
         // Each branch l contributes to its nodes f, t.
         // d2Sbr/dV2 is a 2x2 block matrix (for nodes f, t).
@@ -170,14 +208,14 @@ pub fn numeric_fill(
         // To do this truly single-pass, we'd need to modify d2ASbr_dV2.
         // For now, since haa etc are nb x nb, we'll iterate their NNZ.
         // But wait! haa NNZ is already mapped to Ybus NNZ.
-        
+
         let blocks = [haa, hav, hva, hvv];
         for (b_idx, block) in blocks.iter().enumerate() {
             let cp = block.col_offsets();
             let ri = block.row_indices();
             let vals = block.values();
             for col in 0..nb {
-                for idx in cp[col]..cp[col+1] {
+                for idx in cp[col]..cp[col + 1] {
                     let row = ri[idx];
                     let val = vals[idx];
                     // Find position in Lxx. We use a faster way if we know the Ybus structure.
@@ -194,12 +232,29 @@ pub fn numeric_fill(
     add_br_h(&mut lxx_vals, ht, true);
 
     (
-        CscMatrix::try_from_csc_data(nx, nx, cache.lxx_template.col_offsets().to_vec(), cache.lxx_template.row_indices().to_vec(), lxx_vals).unwrap(),
-        CscMatrix::try_from_csc_data(nx, 2*nb, cache.dg_template.col_offsets().to_vec(), cache.dg_template.row_indices().to_vec(), dg_vals).unwrap()
+        CscMatrix::try_from_csc_data(
+            nx,
+            nx,
+            cache.lxx_template.col_offsets().to_vec(),
+            cache.lxx_template.row_indices().to_vec(),
+            lxx_vals,
+        )
+        .unwrap(),
+        CscMatrix::try_from_csc_data(
+            nx,
+            2 * nb,
+            cache.dg_template.col_offsets().to_vec(),
+            cache.dg_template.row_indices().to_vec(),
+            dg_vals,
+        )
+        .unwrap(),
     )
 }
 
 fn find_nnz_cx(mat: &CscMatrix<Complex64>, r: usize, c: usize) -> Option<usize> {
     let range = mat.col_offsets()[c]..mat.col_offsets()[c + 1];
-    mat.row_indices()[range.clone()].binary_search(&r).ok().map(|pos| range.start + pos)
+    mat.row_indices()[range.clone()]
+        .binary_search(&r)
+        .ok()
+        .map(|pos| range.start + pos)
 }

@@ -65,16 +65,25 @@ impl KKTSymbolicV5 {
         // per-iteration find_br_entry searches in the branch-Hessian kernels.
         let find = |mat: &nalgebra_sparse::CscMatrix<Complex64>, c: usize, r: usize| -> usize {
             let range = mat.col_offsets()[c]..mat.col_offsets()[c + 1];
-            mat.row_indices()[range.clone()].binary_search(&r).map(|p| range.start + p).unwrap()
+            mat.row_indices()[range.clone()]
+                .binary_search(&r)
+                .map(|p| range.start + p)
+                .unwrap()
         };
-        s.br_yf_idx = (0..data.nl).map(|l| {
-            let f = data.f_buses[l]; let t = data.t_buses[l];
-            [find(&data.yf, f, l), find(&data.yf, t, l)]
-        }).collect();
-        s.br_yt_idx = (0..data.nl).map(|l| {
-            let f = data.f_buses[l]; let t = data.t_buses[l];
-            [find(&data.yt, t, l), find(&data.yt, f, l)]
-        }).collect();
+        s.br_yf_idx = (0..data.nl)
+            .map(|l| {
+                let f = data.f_buses[l];
+                let t = data.t_buses[l];
+                [find(&data.yf, f, l), find(&data.yf, t, l)]
+            })
+            .collect();
+        s.br_yt_idx = (0..data.nl)
+            .map(|l| {
+                let f = data.f_buses[l];
+                let t = data.t_buses[l];
+                [find(&data.yt, t, l), find(&data.yt, f, l)]
+            })
+            .collect();
         s
     }
 
@@ -119,10 +128,18 @@ impl KKTSymbolicV5 {
         // θ_j  (c = j, j < nb)
         for j in 0..nb {
             let nbr = &y_ri[y_cp[j]..y_cp[j + 1]];
-            for &i in nbr { row_idx.push(i); }              // Haa
-            for &i in nbr { row_idx.push(nb + i); }         // Hva
-            for &i in nbr { row_idx.push(nx + i); }         // dgPᵀ
-            for &i in nbr { row_idx.push(nx + nb + i); }    // dgQᵀ
+            for &i in nbr {
+                row_idx.push(i);
+            } // Haa
+            for &i in nbr {
+                row_idx.push(nb + i);
+            } // Hva
+            for &i in nbr {
+                row_idx.push(nx + i);
+            } // dgPᵀ
+            for &i in nbr {
+                row_idx.push(nx + nb + i);
+            } // dgQᵀ
             if var_to_lineq[j] != usize::MAX {
                 row_idx.push(nx + 2 * nb + var_to_lineq[j]);
             }
@@ -131,10 +148,18 @@ impl KKTSymbolicV5 {
         // Vm_j (c = nb + j, j < nb)
         for j in 0..nb {
             let nbr = &y_ri[y_cp[j]..y_cp[j + 1]];
-            for &i in nbr { row_idx.push(i); }              // Hav
-            for &i in nbr { row_idx.push(nb + i); }         // Hvv
-            for &i in nbr { row_idx.push(nx + i); }         // dgPᵀ
-            for &i in nbr { row_idx.push(nx + nb + i); }    // dgQᵀ
+            for &i in nbr {
+                row_idx.push(i);
+            } // Hav
+            for &i in nbr {
+                row_idx.push(nb + i);
+            } // Hvv
+            for &i in nbr {
+                row_idx.push(nx + i);
+            } // dgPᵀ
+            for &i in nbr {
+                row_idx.push(nx + nb + i);
+            } // dgQᵀ
             if var_to_lineq[nb + j] != usize::MAX {
                 row_idx.push(nx + 2 * nb + var_to_lineq[nb + j]);
             }
@@ -143,8 +168,8 @@ impl KKTSymbolicV5 {
         // Pg_g (c = 2*nb + g)
         for g in 0..ng {
             let bus = gen_bus[g];
-            row_idx.push(2 * nb + g);            // cost diag
-            row_idx.push(nx + bus);              // coupling to P_eq_bus
+            row_idx.push(2 * nb + g); // cost diag
+            row_idx.push(nx + bus); // coupling to P_eq_bus
             if var_to_lineq[2 * nb + g] != usize::MAX {
                 row_idx.push(nx + 2 * nb + var_to_lineq[2 * nb + g]);
             }
@@ -153,8 +178,8 @@ impl KKTSymbolicV5 {
         // Qg_g (c = 2*nb + ng + g)
         for g in 0..ng {
             let bus = gen_bus[g];
-            row_idx.push(2 * nb + ng + g);       // structural diag
-            row_idx.push(nx + nb + bus);         // coupling to Q_eq_bus
+            row_idx.push(2 * nb + ng + g); // structural diag
+            row_idx.push(nx + nb + bus); // coupling to Q_eq_bus
             if var_to_lineq[2 * nb + ng + g] != usize::MAX {
                 row_idx.push(nx + 2 * nb + var_to_lineq[2 * nb + ng + g]);
             }
@@ -165,20 +190,28 @@ impl KKTSymbolicV5 {
         // P_eq_i (c = nx + i, i < nb)
         for i in 0..nb {
             let nbr = &y_ri[y_cp[i]..y_cp[i + 1]];
-            for &k in nbr { row_idx.push(k); }              // dP/dθ_k
-            for &k in nbr { row_idx.push(nb + k); }         // dP/dVm_k
+            for &k in nbr {
+                row_idx.push(k);
+            } // dP/dθ_k
+            for &k in nbr {
+                row_idx.push(nb + k);
+            } // dP/dVm_k
             for &g in &gens_at_bus[i] {
-                row_idx.push(2 * nb + g);                   // dP/dPg
+                row_idx.push(2 * nb + g); // dP/dPg
             }
             col_ptrs[nx + i + 1] = row_idx.len();
         }
         // Q_eq_i (c = nx + nb + i)
         for i in 0..nb {
             let nbr = &y_ri[y_cp[i]..y_cp[i + 1]];
-            for &k in nbr { row_idx.push(k); }              // dQ/dθ_k
-            for &k in nbr { row_idx.push(nb + k); }         // dQ/dVm_k
+            for &k in nbr {
+                row_idx.push(k);
+            } // dQ/dθ_k
+            for &k in nbr {
+                row_idx.push(nb + k);
+            } // dQ/dVm_k
             for &g in &gens_at_bus[i] {
-                row_idx.push(2 * nb + ng + g);              // dQ/dQg
+                row_idx.push(2 * nb + ng + g); // dQ/dQg
             }
             col_ptrs[nx + nb + i + 1] = row_idx.len();
         }
@@ -189,40 +222,51 @@ impl KKTSymbolicV5 {
         }
 
         let _find_k = |r: usize, c: usize| -> usize {
-            let s = col_ptrs[c]; let e = col_ptrs[c+1];
-            row_idx[s..e].binary_search(&r).map(|p| s + p).expect("KKT element missing")
+            let s = col_ptrs[c];
+            let e = col_ptrs[c + 1];
+            row_idx[s..e]
+                .binary_search(&r)
+                .map(|p| s + p)
+                .expect("KKT element missing")
         };
 
         let mut br_to_kkt = vec![[0usize; 16]; nl];
         for l in 0..nl {
-            let f = f_buses[l]; let t = t_buses[l];
+            let f = f_buses[l];
+            let t = t_buses[l];
             let buses = [f, t];
             let vars = [0, nb]; // θ offset, Vm offset
             let mut ptrs = [0usize; 16];
-            for ni in 0..2 { // from bus (f or t)
-                for nj in 0..2 { // to variable (θ or Vm)
+            for ni in 0..2 {
+                // from bus (f or t)
+                for nj in 0..2 {
+                    // to variable (θ or Vm)
                     let c_bus = buses[ni];
                     let c_var_off = vars[nj];
                     let col = c_bus + c_var_off;
-                    
-                    let nbr_range = y_cp[c_bus]..y_cp[c_bus+1];
+
+                    let nbr_range = y_cp[c_bus]..y_cp[c_bus + 1];
                     let deg = nbr_range.len();
-                    
-                    for row_node_idx in 0..2 { // to row bus (f or t)
+
+                    for row_node_idx in 0..2 {
+                        // to row bus (f or t)
                         let r_bus = buses[row_node_idx];
-                        let r_pos = y_ri[nbr_range.clone()].binary_search(&r_bus).expect("Branch neighbor missing");
-                        
-                        for row_var_idx in 0..2 { // to row variable (θ or Vm)
+                        let r_pos = y_ri[nbr_range.clone()]
+                            .binary_search(&r_bus)
+                            .expect("Branch neighbor missing");
+
+                        for row_var_idx in 0..2 {
+                            // to row variable (θ or Vm)
                             let _r_var_off = vars[row_var_idx];
                             // Row index in KKT column `col`:
                             // θ_j column has: [Haa | Hva | dgP | dgQ]
                             // Vm_j column has: [Hav | Hvv | dgP | dgQ]
                             let kkt_row_pos = col_ptrs[col] + (row_var_idx * deg) + r_pos;
-                            
+
                             // Map [ni, nj, row_node_idx, row_var_idx] to 0..16
                             // Order: [θf,θf θf,vmf θf,θt θf,vmt | vmf,θf ...]
                             // ni*8 + nj*4 + row_node_idx*2 + row_var_idx
-                            ptrs[ni*8 + nj*4 + row_node_idx*2 + row_var_idx] = kkt_row_pos;
+                            ptrs[ni * 8 + nj * 4 + row_node_idx * 2 + row_var_idx] = kkt_row_pos;
                         }
                     }
                 }
@@ -230,8 +274,18 @@ impl KKTSymbolicV5 {
             br_to_kkt[l] = ptrs;
         }
 
-        Self { dim, nx, neq, ieq, col_ptrs, row_idx, gens_at_bus, br_to_kkt,
-               br_yf_idx: Vec::new(), br_yt_idx: Vec::new() }
+        Self {
+            dim,
+            nx,
+            neq,
+            ieq,
+            col_ptrs,
+            row_idx,
+            gens_at_bus,
+            br_to_kkt,
+            br_yf_idx: Vec::new(),
+            br_yt_idx: Vec::new(),
+        }
     }
 
     /// Optimized streaming fill. Writes numerical values directly into `kkt_vals`
@@ -241,9 +295,12 @@ impl KKTSymbolicV5 {
     #[allow(clippy::too_many_arguments)]
     pub fn fill(
         &self,
-        lxx_cp: &[usize], lxx_v: &[f64],
-        dg_cp: &[usize], dg_v: &[f64],
-        dgt_cp: &[usize], dgt_v: &[f64],
+        lxx_cp: &[usize],
+        lxx_v: &[f64],
+        dg_cp: &[usize],
+        dg_v: &[f64],
+        dgt_cp: &[usize],
+        dgt_v: &[f64],
         kkt_vals: &mut [f64],
     ) {
         let nx = self.nx;
@@ -251,7 +308,9 @@ impl KKTSymbolicV5 {
 
         // var → linear-eq presence (value is always 1.0)
         let mut is_fixed = vec![false; nx];
-        for &v in &self.ieq { is_fixed[v] = true; }
+        for &v in &self.ieq {
+            is_fixed[v] = true;
+        }
 
         let mut ptr = 0usize;
 
@@ -296,22 +355,38 @@ impl KKTSymbolicV5 {
     #[allow(clippy::too_many_arguments)]
     pub fn fill_from_merged(
         &self,
-        lxx_cp: &[usize], lxx_v: &[f64],
-        dg_cp: &[usize], dg_v: &[f64],
-        dgt_cp: &[usize], dgt_v: &[f64],
+        lxx_cp: &[usize],
+        lxx_v: &[f64],
+        dg_cp: &[usize],
+        dg_v: &[f64],
+        dgt_cp: &[usize],
+        dgt_v: &[f64],
         kkt_vals: &mut [f64],
     ) {
         let nx = self.nx;
         let neq = self.neq;
         let mut ptr = 0usize;
         for c in 0..nx {
-            for idx in lxx_cp[c]..lxx_cp[c + 1] { kkt_vals[ptr] = lxx_v[idx]; ptr += 1; }
-            for idx in dgt_cp[c]..dgt_cp[c + 1] { kkt_vals[ptr] = dgt_v[idx]; ptr += 1; }
+            for idx in lxx_cp[c]..lxx_cp[c + 1] {
+                kkt_vals[ptr] = lxx_v[idx];
+                ptr += 1;
+            }
+            for idx in dgt_cp[c]..dgt_cp[c + 1] {
+                kkt_vals[ptr] = dgt_v[idx];
+                ptr += 1;
+            }
         }
         for j in 0..neq {
-            for idx in dg_cp[j]..dg_cp[j + 1] { kkt_vals[ptr] = dg_v[idx]; ptr += 1; }
+            for idx in dg_cp[j]..dg_cp[j + 1] {
+                kkt_vals[ptr] = dg_v[idx];
+                ptr += 1;
+            }
         }
-        debug_assert_eq!(ptr, self.row_idx.len(), "V5 fill_from_merged wrote wrong nnz count");
+        debug_assert_eq!(
+            ptr,
+            self.row_idx.len(),
+            "V5 fill_from_merged wrote wrong nnz count"
+        );
     }
 }
 
@@ -328,11 +403,25 @@ pub fn opf_bus_order(data: &OPFData) -> Vec<usize> {
         }
     }
     let mut order: Vec<usize> = Vec::with_capacity(nb);
-    for b in 0..nb { if b != data.ref_bus && !is_pv[b] { order.push(b); } } // PQ
-    for b in 0..nb { if is_pv[b] { order.push(b); } }                       // PV
-    for b in 0..nb { if b == data.ref_bus { order.push(b); } }              // ext/slack
+    for b in 0..nb {
+        if b != data.ref_bus && !is_pv[b] {
+            order.push(b);
+        }
+    } // PQ
+    for b in 0..nb {
+        if is_pv[b] {
+            order.push(b);
+        }
+    } // PV
+    for b in 0..nb {
+        if b == data.ref_bus {
+            order.push(b);
+        }
+    } // ext/slack
     let mut map = vec![0usize; nb];
-    for (new, &orig) in order.iter().enumerate() { map[orig] = new; }
+    for (new, &orig) in order.iter().enumerate() {
+        map[orig] = new;
+    }
     map
 }
 
@@ -366,14 +455,21 @@ pub fn permute_for_v5(
     gen_order.sort_by_key(|&g| map[data.gen_bus[g]]);
     let gen_bus_new: Vec<usize> = gen_order.iter().map(|&g| map[data.gen_bus[g]]).collect();
     let mut inv_gen = vec![0usize; ng];
-    for (newg, &orig) in gen_order.iter().enumerate() { inv_gen[orig] = newg; }
+    for (newg, &orig) in gen_order.iter().enumerate() {
+        inv_gen[orig] = newg;
+    }
 
     // map a natural variable index → new variable index
     let var_new = |v: usize| -> usize {
-        if v < nb { map[v] }
-        else if v < 2 * nb { nb + map[v - nb] }
-        else if v < 2 * nb + ng { 2 * nb + inv_gen[v - 2 * nb] }
-        else { 2 * nb + ng + inv_gen[v - 2 * nb - ng] }
+        if v < nb {
+            map[v]
+        } else if v < 2 * nb {
+            nb + map[v - nb]
+        } else if v < 2 * nb + ng {
+            2 * nb + inv_gen[v - 2 * nb]
+        } else {
+            2 * nb + ng + inv_gen[v - 2 * nb - ng]
+        }
     };
 
     let (xmin, xmax) = data.bounds();
@@ -410,8 +506,12 @@ impl DgTransposeCache {
         let dg_ri = dg.row_indices();
 
         let mut col_ptrs = vec![0usize; nx + 1];
-        for &r in dg_ri { col_ptrs[r + 1] += 1; }
-        for i in 0..nx { col_ptrs[i + 1] += col_ptrs[i]; }
+        for &r in dg_ri {
+            col_ptrs[r + 1] += 1;
+        }
+        for i in 0..nx {
+            col_ptrs[i + 1] += col_ptrs[i];
+        }
 
         let mut row_idx = vec![0usize; nnz];
         let mut src = vec![0usize; nnz];
@@ -425,7 +525,12 @@ impl DgTransposeCache {
                 pos[var] += 1;
             }
         }
-        Self { col_ptrs, row_idx, src, nnz }
+        Self {
+            col_ptrs,
+            row_idx,
+            src,
+            nnz,
+        }
     }
 
     /// Sequential transpose into a reused buffer (length `nnz`): no allocation.
@@ -440,9 +545,9 @@ impl DgTransposeCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::io::pandapower::load_csv_zip;
     use crate::opf::builder::opf_data_from_network;
     use crate::opf::pips::build_saddle_point;
-    use crate::io::pandapower::load_csv_zip;
     use nalgebra_sparse::{CooMatrix, CscMatrix};
 
     /// V5 symbolic skeleton structure must be byte-identical to what the legacy
@@ -464,7 +569,13 @@ mod tests {
         let mu = vec![0.05; 2 * data.nl];
         let v3c = crate::new_opf::v3_symbolic::V3SymbolicCache::analyze(&data);
         let m = crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
-            &data, &v3c, x.as_slice(), &lam, &mu, None, 1e-4,
+            &data,
+            &v3c,
+            x.as_slice(),
+            &lam,
+            &mu,
+            None,
+            1e-4,
         );
 
         // dg = [dgn | aeᵀ], nx × (2nb + neqlin)
@@ -486,14 +597,20 @@ mod tests {
 
         // === Compare structure ===
         assert_eq!(v5.dim, ref_kkt.nrows(), "dim mismatch");
-        assert_eq!(v5.col_ptrs.len(), ref_kkt.col_offsets().len(), "col_ptrs length");
+        assert_eq!(
+            v5.col_ptrs.len(),
+            ref_kkt.col_offsets().len(),
+            "col_ptrs length"
+        );
         assert_eq!(&v5.col_ptrs, ref_kkt.col_offsets(), "col_ptrs differ");
         assert_eq!(v5.row_idx.len(), ref_kkt.row_indices().len(), "nnz differ");
         assert_eq!(&v5.row_idx, ref_kkt.row_indices(), "row_indices differ");
 
         println!(
             "V5 KKT skeleton matches build_saddle_point: dim={}, nnz={}, neqlin={}",
-            v5.dim, v5.row_idx.len(), neqlin
+            v5.dim,
+            v5.row_idx.len(),
+            neqlin
         );
     }
 
@@ -518,7 +635,13 @@ mod tests {
         // M includes the nonlinear branch slack penalty (z provided), exactly as the
         // merged-slack solve path feeds build_saddle_point.
         let lxx = crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
-            &data, &v3c, x.as_slice(), &lam, &mu, Some(&z), cm,
+            &data,
+            &v3c,
+            x.as_slice(),
+            &lam,
+            &mu,
+            Some(&z),
+            cm,
         );
         let (_, _, dg, _) = crate::opf::constraints::opf_consfcn(&data, x.as_slice());
         let dg_t = dg.transpose();
@@ -526,16 +649,27 @@ mod tests {
         // V5 streaming fill (slice API)
         let mut v5_vals = vec![0.0f64; v5.row_idx.len()];
         v5.fill(
-            lxx.col_offsets(), lxx.values(),
-            dg.col_offsets(), dg.values(),
-            dg_t.col_offsets(), dg_t.values(),
+            lxx.col_offsets(),
+            lxx.values(),
+            dg.col_offsets(),
+            dg.values(),
+            dg_t.col_offsets(),
+            dg_t.values(),
             &mut v5_vals,
         );
 
         // Cached transpose must reproduce dg.transpose() exactly.
         let tcache = DgTransposeCache::analyze(&dg);
-        assert_eq!(&tcache.col_ptrs, dg_t.col_offsets(), "DgTransposeCache col_ptrs differ");
-        assert_eq!(&tcache.row_idx, dg_t.row_indices(), "DgTransposeCache row_idx differ");
+        assert_eq!(
+            &tcache.col_ptrs,
+            dg_t.col_offsets(),
+            "DgTransposeCache col_ptrs differ"
+        );
+        assert_eq!(
+            &tcache.row_idx,
+            dg_t.row_indices(),
+            "DgTransposeCache row_idx differ"
+        );
         let mut dgt_buf = vec![0.0f64; tcache.nnz];
         tcache.apply(dg.values(), &mut dgt_buf);
         for (a, b) in dgt_buf.iter().zip(dg_t.values()) {
@@ -562,7 +696,15 @@ mod tests {
         for (a, b) in v5_vals.iter().zip(ref_kkt.values()) {
             max_diff = max_diff.max((a - b).abs());
         }
-        println!("V5 fill vs build_saddle_point: nnz={}, max_diff={:.3e}", v5_vals.len(), max_diff);
-        assert!(max_diff < 1e-12, "V5 fill values differ (max_diff={:.3e})", max_diff);
+        println!(
+            "V5 fill vs build_saddle_point: nnz={}, max_diff={:.3e}",
+            v5_vals.len(),
+            max_diff
+        );
+        assert!(
+            max_diff < 1e-12,
+            "V5 fill values differ (max_diff={:.3e})",
+            max_diff
+        );
     }
 }

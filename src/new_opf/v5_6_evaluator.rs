@@ -13,9 +13,9 @@
 //! contiguous prefix). Per iteration only the cheap linear scalars `ae·x−be`, `ai·x−bi`
 //! are recomputed. No transpose, no hstack, no matrix allocation in the loop.
 
+use super::v5_5_evaluator::V55Evaluator;
 use crate::opf::problem::OPFData;
 use nalgebra_sparse::CscMatrix;
-use super::v5_5_evaluator::V55Evaluator;
 
 pub struct V56Evaluator {
     v55: V55Evaluator,
@@ -52,30 +52,53 @@ impl V56Evaluator {
         let (mut ieq, mut ilt, mut igt, mut ibx) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for i in 0..nx {
             let (lo, hi) = (xmin[i], xmax[i]);
-            if (hi - lo).abs() <= eps { ieq.push(i); }
-            else if lo <= -1e10 && hi < 1e10 { ilt.push(i); }
-            else if lo > -1e10 && hi >= 1e10 { igt.push(i); }
-            else if lo > -1e10 && hi < 1e10 { ibx.push(i); }
+            if (hi - lo).abs() <= eps {
+                ieq.push(i);
+            } else if lo <= -1e10 && hi < 1e10 {
+                ilt.push(i);
+            } else if lo > -1e10 && hi >= 1e10 {
+                igt.push(i);
+            } else if lo > -1e10 && hi < 1e10 {
+                ibx.push(i);
+            }
         }
 
         // ae (neqlin × nx): one +1 per fixed variable.  be = xmax[ieq].
         let neqlin = ieq.len();
         let ae = if neqlin > 0 {
-            let ent: Vec<(usize, usize, f64)> = ieq.iter().enumerate().map(|(r, &i)| (r, i, 1.0)).collect();
+            let ent: Vec<(usize, usize, f64)> =
+                ieq.iter().enumerate().map(|(r, &i)| (r, i, 1.0)).collect();
             Some(coo_to_csc(neqlin, nx, &ent))
-        } else { None };
+        } else {
+            None
+        };
         let be: Vec<f64> = ieq.iter().map(|&i| xmax[i]).collect();
 
         // ai (nlin × nx): bound inequalities (matches build_linear_constraints).
         let nlin = ilt.len() + igt.len() + 2 * ibx.len();
         let ai = if nlin > 0 {
-            let mut row = 0usize; let mut ent = Vec::new();
-            for &i in &ilt { ent.push((row, i, 1.0)); row += 1; }
-            for &i in &igt { ent.push((row, i, -1.0)); row += 1; }
-            for &i in &ibx { ent.push((row, i, 1.0)); ent.push((row + 1, i, -1.0)); row += 2; }
+            let mut row = 0usize;
+            let mut ent = Vec::new();
+            for &i in &ilt {
+                ent.push((row, i, 1.0));
+                row += 1;
+            }
+            for &i in &igt {
+                ent.push((row, i, -1.0));
+                row += 1;
+            }
+            for &i in &ibx {
+                ent.push((row, i, 1.0));
+                ent.push((row + 1, i, -1.0));
+                row += 2;
+            }
             Some(coo_to_csc(nlin, nx, &ent))
-        } else { None };
-        let bi: Vec<f64> = ilt.iter().map(|&i| xmax[i])
+        } else {
+            None
+        };
+        let bi: Vec<f64> = ilt
+            .iter()
+            .map(|&i| xmax[i])
             .chain(igt.iter().map(|&i| -xmin[i]))
             .chain(ibx.iter().flat_map(|&i| vec![xmax[i], -xmin[i]]))
             .collect();
@@ -95,15 +118,31 @@ impl V56Evaluator {
         let (dh_cp, dh_ri, mut dh_vals0) =
             hstack_with_transpose(nx, &v55.dhn_cp, &v55.dhn_ri, niqnln, ai.as_ref());
         // prefix (nonlinear) starts at 0; suffix already holds the const ±1 from aeᵀ/aiᵀ.
-        for v in dg_vals0[..dgn_nnz].iter_mut() { *v = 0.0; }
-        for v in dh_vals0[..dhn_nnz].iter_mut() { *v = 0.0; }
+        for v in dg_vals0[..dgn_nnz].iter_mut() {
+            *v = 0.0;
+        }
+        for v in dh_vals0[..dhn_nnz].iter_mut() {
+            *v = 0.0;
+        }
 
         Self {
-            v55, dg_cp, dg_ri, dh_cp, dh_ri, dg_vals0, dh_vals0,
-            dgn_nnz, dhn_nnz,
-            neqnln, niqnln,
-            neq: neqnln + neqlin, niq: niqnln + nlin,
-            ae, be, ai, bi,
+            v55,
+            dg_cp,
+            dg_ri,
+            dh_cp,
+            dh_ri,
+            dg_vals0,
+            dh_vals0,
+            dgn_nnz,
+            dhn_nnz,
+            neqnln,
+            niqnln,
+            neq: neqnln + neqlin,
+            niq: niqnln + nlin,
+            ae,
+            be,
+            ai,
+            bi,
         }
     }
 
@@ -112,14 +151,22 @@ impl V56Evaluator {
     /// already present in `dg_v`/`dh_v` (caller seeds them from dg_vals0/dh_vals0 once,
     /// or we only overwrite the nonlinear prefix here).
     pub fn update(
-        &self, data: &OPFData, x: &[f64],
-        g: &mut [f64], h: &mut [f64], dg_v: &mut [f64], dh_v: &mut [f64],
+        &self,
+        data: &OPFData,
+        x: &[f64],
+        g: &mut [f64],
+        h: &mut [f64],
+        dg_v: &mut [f64],
+        dh_v: &mut [f64],
     ) {
         // Nonlinear g/h + dgn/dhn prefix via V5.5 direct-fill.
         self.v55.update(
-            data, x,
-            &mut g[..self.neqnln], &mut h[..self.niqnln],
-            &mut dg_v[..self.dgn_nnz], &mut dh_v[..self.dhn_nnz],
+            data,
+            x,
+            &mut g[..self.neqnln],
+            &mut h[..self.niqnln],
+            &mut dg_v[..self.dgn_nnz],
+            &mut dh_v[..self.dhn_nnz],
         );
 
         // Linear equality rows: g[2nb..] = ae·x − be.
@@ -185,18 +232,31 @@ fn coo_to_csc(nr: usize, nc: usize, ent: &[(usize, usize, f64)]) -> CscMatrix<f6
     let mut cp = vec![0usize; nc + 1];
     let mut ri = Vec::new();
     let mut v = Vec::new();
-    for &(_, c, _) in &s { cp[c + 1] += 1; }
-    for j in 0..nc { cp[j + 1] += cp[j]; }
-    for &(r, _, val) in &s { ri.push(r); v.push(val); }
+    for &(_, c, _) in &s {
+        cp[c + 1] += 1;
+    }
+    for j in 0..nc {
+        cp[j + 1] += cp[j];
+    }
+    for &(r, _, val) in &s {
+        ri.push(r);
+        v.push(val);
+    }
     CscMatrix::try_from_csc_data(nr, nc, cp, ri, v).unwrap()
 }
 
 fn transpose(a: &CscMatrix<f64>) -> CscMatrix<f64> {
     let (m, n) = (a.nrows(), a.ncols());
-    let cp = a.col_offsets(); let ri = a.row_indices(); let v = a.values();
+    let cp = a.col_offsets();
+    let ri = a.row_indices();
+    let v = a.values();
     let mut tcp = vec![0usize; m + 1];
-    for &r in ri { tcp[r + 1] += 1; }
-    for i in 0..m { tcp[i + 1] += tcp[i]; }
+    for &r in ri {
+        tcp[r + 1] += 1;
+    }
+    for i in 0..m {
+        tcp[i + 1] += tcp[i];
+    }
     let mut pos = tcp.clone();
     let mut tri = vec![0usize; ri.len()];
     let mut tv = vec![0.0; v.len()];
@@ -204,7 +264,9 @@ fn transpose(a: &CscMatrix<f64>) -> CscMatrix<f64> {
         for idx in cp[c]..cp[c + 1] {
             let r = ri[idx];
             let p = pos[r];
-            tri[p] = c; tv[p] = v[idx]; pos[r] += 1;
+            tri[p] = c;
+            tv[p] = v[idx];
+            pos[r] += 1;
         }
     }
     CscMatrix::try_from_csc_data(n, m, tcp, tri, tv).unwrap()
@@ -212,11 +274,17 @@ fn transpose(a: &CscMatrix<f64>) -> CscMatrix<f64> {
 
 fn spmv(a: &CscMatrix<f64>, x: &[f64]) -> Vec<f64> {
     let mut y = vec![0.0; a.nrows()];
-    let cp = a.col_offsets(); let ri = a.row_indices(); let v = a.values();
+    let cp = a.col_offsets();
+    let ri = a.row_indices();
+    let v = a.values();
     for j in 0..a.ncols() {
         let xj = x[j];
-        if xj == 0.0 { continue; }
-        for idx in cp[j]..cp[j + 1] { y[ri[idx]] += v[idx] * xj; }
+        if xj == 0.0 {
+            continue;
+        }
+        for idx in cp[j]..cp[j + 1] {
+            y[ri[idx]] += v[idx] * xj;
+        }
     }
     y
 }
@@ -224,9 +292,9 @@ fn spmv(a: &CscMatrix<f64>, x: &[f64]) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::io::pandapower::load_csv_zip;
     use crate::opf::builder::opf_data_from_network;
     use crate::opf::constraints::opf_consfcn;
-    use crate::io::pandapower::load_csv_zip;
 
     /// V5.6 merged g/h/dg/dh must equal the legacy merge_constraints output byte-for-byte.
     #[test]
@@ -238,7 +306,9 @@ mod tests {
 
         let ev = V56Evaluator::new(&data);
         let mut x = data.warm_x0();
-        for (i, xi) in x.iter_mut().enumerate() { *xi += 0.01 * ((i % 7) as f64 - 3.0); }
+        for (i, xi) in x.iter_mut().enumerate() {
+            *xi += 0.01 * ((i % 7) as f64 - 3.0);
+        }
 
         // Reference: opf_consfcn + the exact merge the pips loop does.
         let (gn, hn, dgn, dhn) = {
@@ -251,12 +321,16 @@ mod tests {
         let mut g_ref = gn.clone();
         if let Some(ref ae) = ev_ref.ae {
             let ax = spmv(ae, &x);
-            for (r, val) in ax.into_iter().enumerate() { g_ref.push(val - ev_ref.be[r]); }
+            for (r, val) in ax.into_iter().enumerate() {
+                g_ref.push(val - ev_ref.be[r]);
+            }
         }
         let mut h_ref = hn.clone();
         if let Some(ref ai) = ev_ref.ai {
             let ax = spmv(ai, &x);
-            for (r, val) in ax.into_iter().enumerate() { h_ref.push(val - ev_ref.bi[r]); }
+            for (r, val) in ax.into_iter().enumerate() {
+                h_ref.push(val - ev_ref.bi[r]);
+            }
         }
 
         // V5.6 update
@@ -266,19 +340,31 @@ mod tests {
         let mut dh_v = ev.dh_vals0.clone();
         ev.update(&data, &x, &mut g, &mut h, &mut dg_v, &mut dh_v);
 
-        let maxd = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x,y)|(x-y).abs()).fold(0.0f64,f64::max);
+        let maxd = |a: &[f64], b: &[f64]| {
+            a.iter()
+                .zip(b)
+                .map(|(x, y)| (x - y).abs())
+                .fold(0.0f64, f64::max)
+        };
         let dg_diff = maxd(&g, &g_ref);
         let dh_diff = maxd(&h, &h_ref);
 
         // dg/dh value check: reconstruct reference dg = [dgn | aeᵀ] values.
         let mut dgn_ref_v = dgn.values().to_vec();
-        if let Some(ref ae) = ev_ref.ae { dgn_ref_v.extend_from_slice(transpose(ae).values()); }
+        if let Some(ref ae) = ev_ref.ae {
+            dgn_ref_v.extend_from_slice(transpose(ae).values());
+        }
         let mut dhn_ref_v = dhn.values().to_vec();
-        if let Some(ref ai) = ev_ref.ai { dhn_ref_v.extend_from_slice(transpose(ai).values()); }
+        if let Some(ref ai) = ev_ref.ai {
+            dhn_ref_v.extend_from_slice(transpose(ai).values());
+        }
         let ddg = maxd(&dg_v, &dgn_ref_v);
         let ddh = maxd(&dh_v, &dhn_ref_v);
 
-        println!("V5.6 vs merge_constraints: |g|={:.2e} |h|={:.2e} |dg|={:.2e} |dh|={:.2e}", dg_diff, dh_diff, ddg, ddh);
+        println!(
+            "V5.6 vs merge_constraints: |g|={:.2e} |h|={:.2e} |dg|={:.2e} |dh|={:.2e}",
+            dg_diff, dh_diff, ddg, ddh
+        );
         assert!(dg_diff < 1e-12 && dh_diff < 1e-12 && ddg < 1e-12 && ddh < 1e-12);
         assert_eq!(g.len(), g_ref.len());
         assert_eq!(dg_v.len(), dgn_ref_v.len());

@@ -21,8 +21,8 @@ use super::problem::OPFData;
 pub fn opf_hessfcn(
     data: &OPFData,
     x: &[f64],
-    lam_eq: &[f64],   // length 2·nb
-    mu_ineq: &[f64],  // length 2·nl
+    lam_eq: &[f64],  // length 2·nb
+    mu_ineq: &[f64], // length 2·nl
     cost_mult: f64,
 ) -> CscMatrix<f64> {
     let nb = data.nb;
@@ -56,8 +56,14 @@ pub fn opf_hessfcn(
     let mu_f = &mu_ineq[..nl];
     let mu_t = &mu_ineq[nl..];
 
-    let (dSf_dVa, dSf_dVm, dSt_dVa, dSt_dVm, Sf, St) =
-        dSbr_dV(&data.yf, &data.yt, &data.f_buses, &data.t_buses, &v, &v_norm);
+    let (dSf_dVa, dSf_dVm, dSt_dVa, dSt_dVm, Sf, St) = dSbr_dV(
+        &data.yf,
+        &data.yt,
+        &data.f_buses,
+        &data.t_buses,
+        &v,
+        &v_norm,
+    );
 
     let mu_f_vec = DVector::from_column_slice(mu_f);
     let mu_t_vec = DVector::from_column_slice(mu_t);
@@ -88,7 +94,9 @@ pub fn opf_hessfcn(
     let va_block = f64_add(&d2G_va, &d2H_va);
     let vv_block = f64_add(&d2G_vv, &d2H_vv);
 
-    assemble_hessian(nb, ng, nx, cost_mult, &d2f, &aa_block, &av_block, &va_block, &vv_block)
+    assemble_hessian(
+        nb, ng, nx, cost_mult, &d2f, &aa_block, &av_block, &va_block, &vv_block,
+    )
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -190,7 +198,7 @@ fn assemble_hessian(
     ng: usize,
     nx: usize,
     cost_mult: f64,
-    d2f: &[f64],        // ng cost diagonals
+    d2f: &[f64],         // ng cost diagonals
     aa: &CscMatrix<f64>, // nb × nb
     av: &CscMatrix<f64>, // nb × nb
     va: &CscMatrix<f64>, // nb × nb
@@ -210,12 +218,12 @@ fn assemble_hessian(
     for j in 0..nb {
         // aa col j → rows 0..nb
         for idx in aa.col_offsets()[j]..aa.col_offsets()[j + 1] {
-            c_ri.push(aa.row_indices()[idx]);          // row ∈ 0..nb
+            c_ri.push(aa.row_indices()[idx]); // row ∈ 0..nb
             c_v.push(aa.values()[idx]);
         }
         // va col j → rows nb..2nb
         for idx in va.col_offsets()[j]..va.col_offsets()[j + 1] {
-            c_ri.push(nb + va.row_indices()[idx]);     // row ∈ nb..2nb
+            c_ri.push(nb + va.row_indices()[idx]); // row ∈ nb..2nb
             c_v.push(va.values()[idx]);
         }
         c_cp[j + 1] = c_ri.len();
@@ -225,11 +233,11 @@ fn assemble_hessian(
     for j in 0..nb {
         let col = nb + j;
         for idx in av.col_offsets()[j]..av.col_offsets()[j + 1] {
-            c_ri.push(av.row_indices()[idx]);           // row ∈ 0..nb
+            c_ri.push(av.row_indices()[idx]); // row ∈ 0..nb
             c_v.push(av.values()[idx]);
         }
         for idx in vv.col_offsets()[j]..vv.col_offsets()[j + 1] {
-            c_ri.push(nb + vv.row_indices()[idx]);      // row ∈ nb..2nb
+            c_ri.push(nb + vv.row_indices()[idx]); // row ∈ nb..2nb
             c_v.push(vv.values()[idx]);
         }
         c_cp[col + 1] = c_ri.len();
@@ -240,7 +248,7 @@ fn assemble_hessian(
         let col = 2 * nb + g;
         let val = cost_mult * d2f[g];
         if val != 0.0 {
-            c_ri.push(col);  // diagonal
+            c_ri.push(col); // diagonal
             c_v.push(val);
         }
         c_cp[col + 1] = c_ri.len();

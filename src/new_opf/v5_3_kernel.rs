@@ -1,14 +1,14 @@
 //! V5.3: Partitioned Isomorphic KKT Assembly.
 //!
 //! This module implements a top-down, partitioned assembly architecture for the KKT matrix.
-//! It leverages the topological isomorphism between the network structure (Ybus/Ybr) 
+//! It leverages the topological isomorphism between the network structure (Ybus/Ybr)
 //! and the KKT Hessian to achieve zero-scatter, cache-local assembly.
 //!
 //! Branch limit Hessians are pre-projected into a contiguous array shaped exactly like Ybus.
 //! The main assembly loop then performs a purely sequential, single-pass streaming read/write.
 
-use crate::opf::problem::OPFData;
 use crate::new_opf::v5_kkt::KKTSymbolicV5;
+use crate::opf::problem::OPFData;
 use num_complex::Complex64;
 
 /// Column-centric symbolic mapping for V5.3.
@@ -26,12 +26,16 @@ impl KKTSymbolicV5_3 {
         let ybus = &data.ybus;
         let y_cp = ybus.col_offsets();
         let y_ri = ybus.row_indices();
-        
+
         let mut br_to_ybus_idx = vec![[0usize; 4]; nl];
-        
+
         let find_idx = |col: usize, row: usize| -> usize {
             let range = (y_cp[col] as usize)..(y_cp[col + 1] as usize);
-            y_ri[range.clone()].iter().position(|&r| r as usize == row).unwrap() + range.start
+            y_ri[range.clone()]
+                .iter()
+                .position(|&r| r as usize == row)
+                .unwrap()
+                + range.start
         };
 
         for l in 0..nl {
@@ -44,8 +48,11 @@ impl KKTSymbolicV5_3 {
                 find_idx(t, t), // col t, row t
             ];
         }
-        
-        Self { base, br_to_ybus_idx }
+
+        Self {
+            base,
+            br_to_ybus_idx,
+        }
     }
 }
 
@@ -78,29 +85,70 @@ pub fn assemble_kkt_v5_3(
     let lp = &lam_eq[..nb];
     let lq = &lam_eq[nb..2 * nb];
     let mut lam_v = vec![Complex64::new(0.0, 0.0); nb];
-    for i in 0..nb { lam_v[i] = Complex64::new(lp[i], -lq[i]) * vs[i]; }
+    for i in 0..nb {
+        lam_v[i] = Complex64::new(lp[i], -lq[i]) * vs[i];
+    }
     let ibus = ybus * &v;
     let ibus_s = ibus.as_slice();
     let mut d_lam = vec![Complex64::new(0.0, 0.0); nb];
     for i in 0..nb {
-        for idx in (ybus.col_offsets()[i] as usize)..(ybus.col_offsets()[i+1] as usize) {
+        for idx in (ybus.col_offsets()[i] as usize)..(ybus.col_offsets()[i + 1] as usize) {
             d_lam[i] += ybus.values()[idx].conj() * lam_v[ybus.row_indices()[idx] as usize];
         }
     }
     let mut is_fixed = vec![false; nx];
-    for &vix in &v53.base.ieq { is_fixed[vix] = true; }
+    for &vix in &v53.base.ieq {
+        is_fixed[vix] = true;
+    }
 
     // 2. Pre-Project Branch Hessians into Ybus Operator Space
     // We allocate a buffer matching Ybus nnz exactly.
     let mut ybus_br_hess = vec![[0.0f64; 4]; ybus.values().len()];
-    pre_project_branch_hessians(data, &v53.base, vs, mu_ineq, z_ineq, nl, &v53.br_to_ybus_idx, &mut ybus_br_hess);
+    pre_project_branch_hessians(
+        data,
+        &v53.base,
+        vs,
+        mu_ineq,
+        z_ineq,
+        nl,
+        &v53.br_to_ybus_idx,
+        &mut ybus_br_hess,
+    );
 
     // 3. Clear KKT
     kkt_vals.fill(0.0);
 
     // 4. Fill Columns via strictly separated functions
-    fill_theta_columns(nb, v53, ybus, vs, &vnorm, &inv_vmag, &lam_v, ibus_s, &d_lam, y_trans, &ybus_br_hess, &is_fixed, kkt_vals);
-    fill_vm_columns(nb, v53, ybus, vs, &vnorm, &inv_vmag, &lam_v, ibus_s, &d_lam, y_trans, &ybus_br_hess, &is_fixed, kkt_vals);
+    fill_theta_columns(
+        nb,
+        v53,
+        ybus,
+        vs,
+        &vnorm,
+        &inv_vmag,
+        &lam_v,
+        ibus_s,
+        &d_lam,
+        y_trans,
+        &ybus_br_hess,
+        &is_fixed,
+        kkt_vals,
+    );
+    fill_vm_columns(
+        nb,
+        v53,
+        ybus,
+        vs,
+        &vnorm,
+        &inv_vmag,
+        &lam_v,
+        ibus_s,
+        &d_lam,
+        y_trans,
+        &ybus_br_hess,
+        &is_fixed,
+        kkt_vals,
+    );
     fill_generator_columns(data, nx, cost_mult, &is_fixed, &v53.base.col_ptrs, kkt_vals);
 
     // 5. Constraint & Linear Eq Columns (Reuse V5.2 sequential fill).
@@ -108,7 +156,12 @@ pub fn assemble_kkt_v5_3(
     // direct assignment, so it can target kkt_vals directly — no temp, no double write.
     // Reuse the prestored gens_at_bus from the symbolic cache (no per-iter rebuild).
     super::v5_2_kernel::fill_constraint_columns(
-        &v53.base, data, y_trans, &v53.base.gens_at_bus, x, kkt_vals,
+        &v53.base,
+        data,
+        y_trans,
+        &v53.base.gens_at_bus,
+        x,
+        kkt_vals,
     );
 }
 
@@ -141,34 +194,63 @@ fn pre_project_branch_hessians(
         let hf_all = branch_end_hess_v4(
             yf_vals[yf_l[0]].conj(),
             yf_vals[yf_l[1]].conj(),
-            vs[f], vs[t], mu_f, wf,
+            vs[f],
+            vs[t],
+            mu_f,
+            wf,
         );
         let ht_all = branch_end_hess_v4(
             yt_vals[yt_l[0]].conj(),
             yt_vals[yt_l[1]].conj(),
-            vs[t], vs[f], mu_t, wt,
+            vs[t],
+            vs[f],
+            mu_t,
+            wt,
         );
 
         let mut hq = [[0.0f64; 4]; 4];
         const P: [usize; 4] = [1, 0, 3, 2];
         for r in 0..4 {
-            for c in 0..4 { hq[r][c] = hf_all[r][c] + ht_all[P[r]][P[c]]; }
+            for c in 0..4 {
+                hq[r][c] = hf_all[r][c] + ht_all[P[r]][P[c]];
+            }
         }
 
         let idxs = &br_to_ybus_idx[l];
-        ybus_br_hess[idxs[0]][0] += hq[0][0]; ybus_br_hess[idxs[0]][1] += hq[2][0]; ybus_br_hess[idxs[0]][2] += hq[0][2]; ybus_br_hess[idxs[0]][3] += hq[2][2];
-        ybus_br_hess[idxs[1]][0] += hq[1][0]; ybus_br_hess[idxs[1]][1] += hq[3][0]; ybus_br_hess[idxs[1]][2] += hq[1][2]; ybus_br_hess[idxs[1]][3] += hq[3][2];
-        ybus_br_hess[idxs[2]][0] += hq[0][1]; ybus_br_hess[idxs[2]][1] += hq[2][1]; ybus_br_hess[idxs[2]][2] += hq[0][3]; ybus_br_hess[idxs[2]][3] += hq[2][3];
-        ybus_br_hess[idxs[3]][0] += hq[1][1]; ybus_br_hess[idxs[3]][1] += hq[3][1]; ybus_br_hess[idxs[3]][2] += hq[1][3]; ybus_br_hess[idxs[3]][3] += hq[3][3];
+        ybus_br_hess[idxs[0]][0] += hq[0][0];
+        ybus_br_hess[idxs[0]][1] += hq[2][0];
+        ybus_br_hess[idxs[0]][2] += hq[0][2];
+        ybus_br_hess[idxs[0]][3] += hq[2][2];
+        ybus_br_hess[idxs[1]][0] += hq[1][0];
+        ybus_br_hess[idxs[1]][1] += hq[3][0];
+        ybus_br_hess[idxs[1]][2] += hq[1][2];
+        ybus_br_hess[idxs[1]][3] += hq[3][2];
+        ybus_br_hess[idxs[2]][0] += hq[0][1];
+        ybus_br_hess[idxs[2]][1] += hq[2][1];
+        ybus_br_hess[idxs[2]][2] += hq[0][3];
+        ybus_br_hess[idxs[2]][3] += hq[2][3];
+        ybus_br_hess[idxs[3]][0] += hq[1][1];
+        ybus_br_hess[idxs[3]][1] += hq[3][1];
+        ybus_br_hess[idxs[3]][2] += hq[1][3];
+        ybus_br_hess[idxs[3]][3] += hq[3][3];
     }
 }
 
 #[inline(always)]
 fn fill_theta_columns(
-    nb: usize, v53: &KKTSymbolicV5_3, ybus: &nalgebra_sparse::CscMatrix<Complex64>,
-    vs: &[Complex64], vnorm: &[Complex64], inv_vmag: &[f64], lam_v: &[Complex64],
-    ibus_s: &[Complex64], d_lam: &[Complex64], y_trans: &[usize], ybus_br_hess: &[[f64; 4]],
-    is_fixed: &[bool], kkt_vals: &mut [f64]
+    nb: usize,
+    v53: &KKTSymbolicV5_3,
+    ybus: &nalgebra_sparse::CscMatrix<Complex64>,
+    vs: &[Complex64],
+    vnorm: &[Complex64],
+    inv_vmag: &[f64],
+    lam_v: &[Complex64],
+    ibus_s: &[Complex64],
+    d_lam: &[Complex64],
+    y_trans: &[usize],
+    ybus_br_hess: &[[f64; 4]],
+    is_fixed: &[bool],
+    kkt_vals: &mut [f64],
 ) {
     use super::v5_2_kernel::*;
     let y_v = ybus.values();
@@ -179,36 +261,55 @@ fn fill_theta_columns(
         let start = v53.base.col_ptrs[j];
         let col_slice = &mut kkt_vals[start..];
         let deg = (y_cp[j + 1] - y_cp[j]) as usize;
-        
+
         let col_ctx = ColCtx {
-            vk: vs[j], vnorm_k: vnorm[j], inv_vmag_k: inv_vmag[j],
-            lam_v_k: lam_v[j], ibus_k: ibus_s[j], d_lam_k: d_lam[j],
+            vk: vs[j],
+            vnorm_k: vnorm[j],
+            inv_vmag_k: inv_vmag[j],
+            lam_v_k: lam_v[j],
+            ibus_k: ibus_s[j],
+            d_lam_k: d_lam[j],
         };
-        
+
         for off in 0..deg {
             let idx = y_cp[j] as usize + off;
             let i = y_ri[idx] as usize;
             let nbr = NbrCtx {
-                vi: vs[i], y_ik: y_v[idx], y_ki: y_v[y_trans[idx]],
-                lam_v_i: lam_v[i], inv_vmag_i: inv_vmag[i], is_diag: i == j,
+                vi: vs[i],
+                y_ik: y_v[idx],
+                y_ki: y_v[y_trans[idx]],
+                lam_v_i: lam_v[i],
+                inv_vmag_i: inv_vmag[i],
+                is_diag: i == j,
             };
-            
+
             let br_h = &ybus_br_hess[idx];
-            col_slice[off]       = haa(&col_ctx, &nbr) + br_h[0];
+            col_slice[off] = haa(&col_ctx, &nbr) + br_h[0];
             col_slice[deg + off] = hva(&col_ctx, &nbr) + br_h[1];
-            col_slice[2*deg + off] = dp_dth(&col_ctx, &nbr);
-            col_slice[3*deg + off] = dq_dth(&col_ctx, &nbr);
+            col_slice[2 * deg + off] = dp_dth(&col_ctx, &nbr);
+            col_slice[3 * deg + off] = dq_dth(&col_ctx, &nbr);
         }
-        if is_fixed[j] { col_slice[4 * deg] = 1.0; }
+        if is_fixed[j] {
+            col_slice[4 * deg] = 1.0;
+        }
     }
 }
 
 #[inline(always)]
 fn fill_vm_columns(
-    nb: usize, v53: &KKTSymbolicV5_3, ybus: &nalgebra_sparse::CscMatrix<Complex64>,
-    vs: &[Complex64], vnorm: &[Complex64], inv_vmag: &[f64], lam_v: &[Complex64],
-    ibus_s: &[Complex64], d_lam: &[Complex64], y_trans: &[usize], ybus_br_hess: &[[f64; 4]],
-    is_fixed: &[bool], kkt_vals: &mut [f64]
+    nb: usize,
+    v53: &KKTSymbolicV5_3,
+    ybus: &nalgebra_sparse::CscMatrix<Complex64>,
+    vs: &[Complex64],
+    vnorm: &[Complex64],
+    inv_vmag: &[f64],
+    lam_v: &[Complex64],
+    ibus_s: &[Complex64],
+    d_lam: &[Complex64],
+    y_trans: &[usize],
+    ybus_br_hess: &[[f64; 4]],
+    is_fixed: &[bool],
+    kkt_vals: &mut [f64],
 ) {
     use super::v5_2_kernel::*;
     let y_v = ybus.values();
@@ -220,39 +321,54 @@ fn fill_vm_columns(
         let start = v53.base.col_ptrs[col];
         let col_slice = &mut kkt_vals[start..];
         let deg = (y_cp[j + 1] - y_cp[j]) as usize; // Vm_j has same degree as theta_j
-        
+
         let col_ctx = ColCtx {
-            vk: vs[j], vnorm_k: vnorm[j], inv_vmag_k: inv_vmag[j],
-            lam_v_k: lam_v[j], ibus_k: ibus_s[j], d_lam_k: d_lam[j],
+            vk: vs[j],
+            vnorm_k: vnorm[j],
+            inv_vmag_k: inv_vmag[j],
+            lam_v_k: lam_v[j],
+            ibus_k: ibus_s[j],
+            d_lam_k: d_lam[j],
         };
-        
+
         for off in 0..deg {
             let idx = y_cp[j] as usize + off;
             let i = y_ri[idx] as usize;
             let nbr = NbrCtx {
-                vi: vs[i], y_ik: y_v[idx], y_ki: y_v[y_trans[idx]],
-                lam_v_i: lam_v[i], inv_vmag_i: inv_vmag[i], is_diag: i == j,
+                vi: vs[i],
+                y_ik: y_v[idx],
+                y_ki: y_v[y_trans[idx]],
+                lam_v_i: lam_v[i],
+                inv_vmag_i: inv_vmag[i],
+                is_diag: i == j,
             };
-            
+
             let br_h = &ybus_br_hess[idx];
-            col_slice[off]       = hav(&col_ctx, &nbr) + br_h[2];
+            col_slice[off] = hav(&col_ctx, &nbr) + br_h[2];
             col_slice[deg + off] = hvv(&col_ctx, &nbr) + br_h[3];
-            col_slice[2*deg + off] = dp_dvm(&col_ctx, &nbr);
-            col_slice[3*deg + off] = dq_dvm(&col_ctx, &nbr);
+            col_slice[2 * deg + off] = dp_dvm(&col_ctx, &nbr);
+            col_slice[3 * deg + off] = dq_dvm(&col_ctx, &nbr);
         }
-        if is_fixed[col] { col_slice[4 * deg] = 1.0; }
+        if is_fixed[col] {
+            col_slice[4 * deg] = 1.0;
+        }
     }
 }
 
 #[inline(always)]
 fn fill_generator_columns(
-    data: &OPFData, nx: usize, cost_mult: f64, is_fixed: &[bool], col_ptrs: &[usize], kkt_vals: &mut [f64]
+    data: &OPFData,
+    nx: usize,
+    cost_mult: f64,
+    is_fixed: &[bool],
+    col_ptrs: &[usize],
+    kkt_vals: &mut [f64],
 ) {
     let nb = data.nb;
     for j in (2 * nb)..nx {
         let start = col_ptrs[j];
         let col_slice = &mut kkt_vals[start..];
-        
+
         let g = (j - 2 * nb) % data.ng;
         let is_qg = (j - 2 * nb) >= data.ng;
         if !is_qg {
@@ -262,6 +378,8 @@ fn fill_generator_columns(
             col_slice[0] = 0.0;
             col_slice[1] = -1.0;
         }
-        if is_fixed[j] { col_slice[2] = 1.0; }
+        if is_fixed[j] {
+            col_slice[2] = 1.0;
+        }
     }
 }

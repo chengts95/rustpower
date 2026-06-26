@@ -1,7 +1,7 @@
-use bevy_ecs::prelude::{World, Entity};
 use super::symbolic::SymbolicCache;
-use crate::opf::problem::OPFData;
 use crate::opf::pips::PipsResult;
+use crate::opf::problem::OPFData;
+use bevy_ecs::prelude::{Entity, World};
 
 /// New OPF Data structure that integrates the Symbolic Cache for high performance.
 pub struct NewOPFData {
@@ -16,21 +16,23 @@ impl NewOPFData {
     }
 
     pub fn write_results(&self, world: &mut World, result: &PipsResult) {
-        use crate::basic::ecs::elements::*;
         use super::components::*;
+        use crate::basic::ecs::elements::*;
 
         let nb = self.nb;
         let ng = self.ng;
 
         // Clone mappings to avoid borrow conflicts
         let (gen_entities, ext_grid_entities) = {
-            let map = world.get_resource::<PandapowerEntityMap>()
+            let map = world
+                .get_resource::<PandapowerEntityMap>()
                 .expect("PandapowerEntityMap missing");
             (map.gen_entities.clone(), map.ext_grid_entities.clone())
         };
-        
+
         let bus_entities: Vec<Option<Entity>> = {
-            let node_lookup = world.get_resource::<NodeLookup>()
+            let node_lookup = world
+                .get_resource::<NodeLookup>()
                 .expect("NodeLookup missing");
             (0..nb).map(|i| node_lookup.get_entity(i as i64)).collect()
         };
@@ -42,7 +44,7 @@ impl NewOPFData {
                 let vm = result.x[nb + i];
                 let lp = result.lam_eq[i];
                 let lq = result.lam_eq[nb + i];
-                
+
                 world.entity_mut(entity).insert((
                     OpfResultVa(va),
                     OpfResultVm(vm),
@@ -62,14 +64,13 @@ impl NewOPFData {
             } else {
                 gen_entities[g - num_ext]
             };
-            
+
             let pg = result.x[pg_off + g];
             let qg = result.x[qg_off + g];
-            
-            world.entity_mut(entity).insert((
-                OpfResultPg(pg),
-                OpfResultQg(qg),
-            ));
+
+            world
+                .entity_mut(entity)
+                .insert((OpfResultPg(pg), OpfResultQg(qg)));
         }
     }
 }
