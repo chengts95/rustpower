@@ -1,21 +1,21 @@
-pub mod problem;
-pub mod cost;
+pub mod builder;
 pub mod constraints;
+pub mod cost;
 pub mod hessian;
 pub mod pips;
-pub mod builder;
+pub mod problem;
 
-pub use problem::OPFData;
-pub use pips::{pips, PipsOpt, PipsResult};
 pub use builder::opf_data_from_network;
+pub use pips::{PipsOpt, PipsResult, pips};
+pub use problem::OPFData;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::io::pandapower::load_csv_zip;
-    use std::env;
     #[allow(unused_imports)]
     use serde_json;
+    use std::env;
 
     fn load_ieee118() -> crate::io::pandapower::Network {
         let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -30,7 +30,13 @@ mod tests {
         assert_eq!(data.nb, 118);
         assert!(data.nl > 0);
         assert!(data.ng > 0);
-        println!("nb={} nl={} ng={} nx={}", data.nb, data.nl, data.ng, data.nx());
+        println!(
+            "nb={} nl={} ng={} nx={}",
+            data.nb,
+            data.nl,
+            data.ng,
+            data.nx()
+        );
     }
 
     fn load_ieee39() -> crate::io::pandapower::Network {
@@ -43,16 +49,17 @@ mod tests {
         let mut data = opf_data_from_network(&net);
 
         // Apply real poly_cost from the embedded case39 JSON (cp2=0.01, cp1=0.3, cp0=0.2 EUR/MW)
-        let opf_cfg = crate::io::pandapower::load_opf_cfg_json_str(
-            crate::testcases::case_ieee39::IEEE_39,
-        ).expect("poly_cost missing from case39 JSON");
+        let opf_cfg =
+            crate::io::pandapower::load_opf_cfg_json_str(crate::testcases::case_ieee39::IEEE_39)
+                .expect("poly_cost missing from case39 JSON");
         // Generator order: ext_grid[0] → cost_coeffs[0], gen[0..8] → cost_coeffs[1..9]
         if let Some(row) = opf_cfg.get("ext_grid", 0) {
             data.cost_coeffs[0] = [row.cp2_eur_per_mw2, row.cp1_eur_per_mw, row.cp0_eur];
         }
         for g in 0..9i64 {
             if let Some(row) = opf_cfg.get("gen", g) {
-                data.cost_coeffs[(1 + g) as usize] = [row.cp2_eur_per_mw2, row.cp1_eur_per_mw, row.cp0_eur];
+                data.cost_coeffs[(1 + g) as usize] =
+                    [row.cp2_eur_per_mw2, row.cp1_eur_per_mw, row.cp0_eur];
             }
         }
 
@@ -66,13 +73,29 @@ mod tests {
                 (h, g, dh, dg)
             },
             |x, lam_eq, mu_ineq, _z, cm| hessian::opf_hessfcn(&data, x, lam_eq, mu_ineq, cm),
-            x0, xmin, xmax,
-            PipsOpt { max_it: 100, cost_mult: 1e-4, ..Default::default() },
+            x0,
+            xmin,
+            xmax,
+            PipsOpt {
+                max_it: 100,
+                cost_mult: 1e-4,
+                ..Default::default()
+            },
         );
-        println!("IEEE39 OPF: converged={} iter={} f={:.4} EUR", result.converged, result.iterations, result.f);
-        assert!(result.converged, "IEEE39 OPF should converge with warm start");
+        println!(
+            "IEEE39 OPF: converged={} iter={} f={:.4} EUR",
+            result.converged, result.iterations, result.f
+        );
+        assert!(
+            result.converged,
+            "IEEE39 OPF should converge with warm start"
+        );
         // pandapower reference: ~41872 EUR
-        assert!(result.f > 35000.0 && result.f < 50000.0, "Objective out of expected range: {}", result.f);
+        assert!(
+            result.f > 35000.0 && result.f < 50000.0,
+            "Objective out of expected range: {}",
+            result.f
+        );
     }
 
     #[test]
@@ -92,7 +115,8 @@ mod tests {
         }
         for g in 0..54i64 {
             if let Some(row) = opf_cfg.get("gen", g) {
-                data.cost_coeffs[(1 + g) as usize] = [row.cp2_eur_per_mw2, row.cp1_eur_per_mw, row.cp0_eur];
+                data.cost_coeffs[(1 + g) as usize] =
+                    [row.cp2_eur_per_mw2, row.cp1_eur_per_mw, row.cp0_eur];
             }
         }
 
@@ -106,8 +130,14 @@ mod tests {
                 (h, g, dh, dg)
             },
             |x, lam_eq, mu_ineq, _z, cm| hessian::opf_hessfcn(&data, x, lam_eq, mu_ineq, cm),
-            x0, xmin, xmax,
-            PipsOpt { max_it: 150, cost_mult: 1e-4, ..Default::default() },
+            x0,
+            xmin,
+            xmax,
+            PipsOpt {
+                max_it: 150,
+                cost_mult: 1e-4,
+                ..Default::default()
+            },
         );
 
         println!(
@@ -117,7 +147,10 @@ mod tests {
 
         assert!(result.converged, "IEEE118 OPF should converge");
         // Pandapower reference: ~129704 EUR
-        assert!(result.f > 120000.0 && result.f < 140000.0, "Objective out of expected range: {}", result.f);
+        assert!(
+            result.f > 120000.0 && result.f < 140000.0,
+            "Objective out of expected range: {}",
+            result.f
+        );
     }
-
 }

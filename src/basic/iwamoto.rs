@@ -1,11 +1,11 @@
 use std::f64::consts::PI;
 
-use nalgebra::{DVector, ComplexField, SimdComplexField};
+use nalgebra::{ComplexField, DVector, SimdComplexField};
 use nalgebra_sparse::CscMatrix;
 use num_complex::Complex64;
 use num_traits::Zero;
 
-use super::new_dsdvbus2::{fill_jacobian_v2, JacobianPattern2};
+use super::new_dsdvbus2::{JacobianPattern2, fill_jacobian_v2};
 use super::newtonpf::assemble_f_v2;
 use super::solver::Solve;
 
@@ -25,12 +25,8 @@ pub fn newton_pf_iwamoto<Solver: Solve>(
     let max_iter = max_iter.unwrap_or(100);
     let tol = tolerance.unwrap_or(1e-6);
 
-    let j_pattern = JacobianPattern2::build_from_permuted(
-        Ybus.col_offsets(),
-        Ybus.row_indices(),
-        npv,
-        npq,
-    );
+    let j_pattern =
+        JacobianPattern2::build_from_permuted(Ybus.col_offsets(), Ybus.row_indices(), npv, npq);
     let n_state = npv + 2 * npq;
     let mut j_values = vec![0.0; j_pattern.nnz_j];
 
@@ -76,13 +72,15 @@ pub fn newton_pf_iwamoto<Solver: Solve>(
         // Save original mismatch vector a before solver.solve overwrites it
         let a = F.clone();
 
-        let _ = solver.solve(
+        if let Err(err) = solver.solve(
             Ap,
             Ai,
             j_values.as_mut_slice(),
             F.data.as_mut_slice(),
             n_state,
-        );
+        ) {
+            return Err((format!("Linear solve failed: {err}"), v, it));
+        }
 
         let dx = &F;
 

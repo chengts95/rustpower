@@ -45,7 +45,9 @@ pub fn opf_data_from_network(net: &Network) -> OPFData {
     // Net load: s_load[bus] = Pd+jQd [p.u.] (loads and shunts)
     let mut s_load = DVector::zeros(nb);
     for load in net.load.as_deref().unwrap_or(&[]) {
-        if !load.in_service { continue; }
+        if !load.in_service {
+            continue;
+        }
         if let Some(&idx) = bus_id_to_idx.get(&load.bus) {
             s_load[idx] += Complex64::new(
                 load.p_mw * load.scaling / base_mva,
@@ -55,7 +57,9 @@ pub fn opf_data_from_network(net: &Network) -> OPFData {
     }
     // sgen as negative load (fixed P/Q injection)
     for sg in net.sgen.as_deref().unwrap_or(&[]) {
-        if !sg.in_service { continue; }
+        if !sg.in_service {
+            continue;
+        }
         if let Some(&idx) = bus_id_to_idx.get(&sg.bus) {
             s_load[idx] -= Complex64::new(
                 sg.p_mw * sg.scaling / base_mva,
@@ -79,33 +83,69 @@ pub fn opf_data_from_network(net: &Network) -> OPFData {
 
     // Lines
     for line in net.line.as_deref().unwrap_or(&[]) {
-        if !line.in_service { continue; }
-        let Some(&f) = bus_id_to_idx.get(&line.from_bus) else { continue };
-        let Some(&t) = bus_id_to_idx.get(&line.to_bus) else { continue };
+        if !line.in_service {
+            continue;
+        }
+        let Some(&f) = bus_id_to_idx.get(&line.from_bus) else {
+            continue;
+        };
+        let Some(&t) = bus_id_to_idx.get(&line.to_bus) else {
+            continue;
+        };
         let l = f_buses.len();
         f_buses.push(f);
         t_buses.push(t);
 
         let (yff, yft, ytf, ytt, smax) = line_admittances(line, vbase[f], base_mva, wbase);
-        push_branch(l, f, t, yff, yft, ytf, ytt,
-            &mut yf_rows, &mut yf_cols, &mut yf_vals,
-            &mut yt_rows, &mut yt_cols, &mut yt_vals);
+        push_branch(
+            l,
+            f,
+            t,
+            yff,
+            yft,
+            ytf,
+            ytt,
+            &mut yf_rows,
+            &mut yf_cols,
+            &mut yf_vals,
+            &mut yt_rows,
+            &mut yt_cols,
+            &mut yt_vals,
+        );
         rate_a.push(smax);
     }
 
     // Transformers
     for trafo in net.trafo.as_deref().unwrap_or(&[]) {
-        if !trafo.in_service { continue; }
-        let Some(&f) = bus_id_to_idx.get(&(trafo.hv_bus as i64)) else { continue };
-        let Some(&t) = bus_id_to_idx.get(&(trafo.lv_bus as i64)) else { continue };
+        if !trafo.in_service {
+            continue;
+        }
+        let Some(&f) = bus_id_to_idx.get(&(trafo.hv_bus as i64)) else {
+            continue;
+        };
+        let Some(&t) = bus_id_to_idx.get(&(trafo.lv_bus as i64)) else {
+            continue;
+        };
         let l = f_buses.len();
         f_buses.push(f);
         t_buses.push(t);
 
         let (yff, yft, ytf, ytt, smax) = trafo_admittances(trafo, base_mva);
-        push_branch(l, f, t, yff, yft, ytf, ytt,
-            &mut yf_rows, &mut yf_cols, &mut yf_vals,
-            &mut yt_rows, &mut yt_cols, &mut yt_vals);
+        push_branch(
+            l,
+            f,
+            t,
+            yff,
+            yft,
+            ytf,
+            ytt,
+            &mut yf_rows,
+            &mut yf_cols,
+            &mut yf_vals,
+            &mut yt_rows,
+            &mut yt_cols,
+            &mut yt_vals,
+        );
         rate_a.push(smax);
     }
 
@@ -128,7 +168,9 @@ pub fn opf_data_from_network(net: &Network) -> OPFData {
     // So Y* = (P + jQ) / |V|^2 -> Y = (P - jQ) / |V|^2.
     // G = P / |V|^2, B = -Q / |V|^2.
     for sh in net.shunt.as_deref().unwrap_or(&[]) {
-        if !sh.in_service { continue; }
+        if !sh.in_service {
+            continue;
+        }
         if let Some(&idx) = bus_id_to_idx.get(&sh.bus) {
             let step = sh.step as f64;
             let v_ratio = vbase[idx] / sh.vn_kv;
@@ -136,7 +178,7 @@ pub fn opf_data_from_network(net: &Network) -> OPFData {
             let g_pu = sh.p_mw * step / base_mva * scale;
             let b_pu = -sh.q_mvar * step / base_mva * scale;
             let y_sh = Complex64::new(g_pu, b_pu);
-            
+
             // Add to Ybus diagonal
             add_to_csc_diagonal(&mut ybus, idx, y_sh);
         }
@@ -159,20 +201,42 @@ pub fn opf_data_from_network(net: &Network) -> OPFData {
     let mut pg_init: Vec<f64> = Vec::new();
 
     for eg in ext_grids {
-        if !eg.in_service { continue; }
+        if !eg.in_service {
+            continue;
+        }
         let bus = bus_id_to_idx[&eg.bus];
         vm_set[bus] = eg.vm_pu;
-        push_ext_grid(eg, &bus_id_to_idx, base_mva,
-            &mut gen_bus, &mut pg_min, &mut pg_max,
-            &mut qg_min, &mut qg_max, &mut cost_coeffs, &mut pg_init);
+        push_ext_grid(
+            eg,
+            &bus_id_to_idx,
+            base_mva,
+            &mut gen_bus,
+            &mut pg_min,
+            &mut pg_max,
+            &mut qg_min,
+            &mut qg_max,
+            &mut cost_coeffs,
+            &mut pg_init,
+        );
     }
     for generator in net.r#gen.as_deref().unwrap_or(&[]) {
-        if !generator.in_service { continue; }
+        if !generator.in_service {
+            continue;
+        }
         let bus = bus_id_to_idx[&generator.bus];
         vm_set[bus] = generator.vm_pu;
-        push_gen(generator, &bus_id_to_idx, base_mva,
-            &mut gen_bus, &mut pg_min, &mut pg_max,
-            &mut qg_min, &mut qg_max, &mut cost_coeffs, &mut pg_init);
+        push_gen(
+            generator,
+            &bus_id_to_idx,
+            base_mva,
+            &mut gen_bus,
+            &mut pg_min,
+            &mut pg_max,
+            &mut qg_min,
+            &mut qg_max,
+            &mut cost_coeffs,
+            &mut pg_init,
+        );
     }
 
     let ng = gen_bus.len();
@@ -192,27 +256,35 @@ pub fn opf_data_from_network(net: &Network) -> OPFData {
     };
 
     OPFData {
-        nb, nl, ng,
-        ybus, yf, yt,
-        f_buses, t_buses,
+        nb,
+        nl,
+        ng,
+        ybus,
+        yf,
+        yt,
+        f_buses,
+        t_buses,
         s_load,
-        vm_min, vm_max,
+        vm_min,
+        vm_max,
         ref_bus,
         gen_bus,
         cg,
-        pg_min, pg_max,
-        qg_min, qg_max,
+        pg_min,
+        pg_max,
+        qg_min,
+        qg_max,
         cost_coeffs,
         base_mva,
         rate_a,
-        cf, ct,
+        cf,
+        ct,
         pg_init,
         vm_set,
     }
 }
 
 // ── per-element helpers ───────────────────────────────────────────────────────
-
 
 /// Compute (Yf[l,f], Yf[l,t], Yt[l,f], Yt[l,t], smax_pu) for a line (π-model).
 pub fn line_admittances(
@@ -251,7 +323,7 @@ pub fn trafo_admittances(
     base_mva: f64,
 ) -> (Complex64, Complex64, Complex64, Complex64, f64) {
     let parallel = trafo.parallel as f64;
-    let v_base = trafo.vn_lv_kv;  // LV side base [kV]
+    let v_base = trafo.vn_lv_kv; // LV side base [kV]
 
     // Series impedance on transformer's own base [Ω]
     let z_base = v_base * v_base / trafo.sn_mva;
@@ -264,7 +336,11 @@ pub fn trafo_admittances(
 
     // Magnetizing branch (core losses)
     let re_core = z_base * 0.001 * trafo.pfe_kw / trafo.sn_mva;
-    let im_core = if trafo.i0_percent > 0.0 { z_base / (0.01 * trafo.i0_percent) } else { 0.0 };
+    let im_core = if trafo.i0_percent > 0.0 {
+        z_base / (0.01 * trafo.i0_percent)
+    } else {
+        0.0
+    };
     let y_m_phys = if re_core > 0.0 || im_core > 0.0 {
         parallel / Complex64::new(re_core, im_core)
     } else {
@@ -272,7 +348,8 @@ pub fn trafo_admittances(
     };
 
     // Tap ratio
-    let tap_m = trafo.tap_pos
+    let tap_m = trafo
+        .tap_pos
         .zip(trafo.tap_neutral)
         .zip(trafo.tap_step_percent)
         .map(|((pos, neutral), step)| 1.0 + (pos - neutral) * 0.01 * step)
@@ -288,23 +365,45 @@ pub fn trafo_admittances(
     // Per-unit: scale by vbase_lv² / sbase_sys
     let scale = v_base * v_base / base_mva;
 
-    let smax_pu = trafo.sn_mva * parallel
-        * trafo.max_loading_percent.unwrap_or(100.0) / 100.0
-        / base_mva;
+    let smax_pu =
+        trafo.sn_mva * parallel * trafo.max_loading_percent.unwrap_or(100.0) / 100.0 / base_mva;
 
-    (yff_phys * scale, yft_phys * scale, ytf_phys * scale, ytt_phys * scale, smax_pu)
+    (
+        yff_phys * scale,
+        yft_phys * scale,
+        ytf_phys * scale,
+        ytt_phys * scale,
+        smax_pu,
+    )
 }
 
 fn push_branch(
-    l: usize, f: usize, t: usize,
-    yff: Complex64, yft: Complex64, ytf: Complex64, ytt: Complex64,
-    yf_rows: &mut Vec<usize>, yf_cols: &mut Vec<usize>, yf_vals: &mut Vec<Complex64>,
-    yt_rows: &mut Vec<usize>, yt_cols: &mut Vec<usize>, yt_vals: &mut Vec<Complex64>,
+    l: usize,
+    f: usize,
+    t: usize,
+    yff: Complex64,
+    yft: Complex64,
+    ytf: Complex64,
+    ytt: Complex64,
+    yf_rows: &mut Vec<usize>,
+    yf_cols: &mut Vec<usize>,
+    yf_vals: &mut Vec<Complex64>,
+    yt_rows: &mut Vec<usize>,
+    yt_cols: &mut Vec<usize>,
+    yt_vals: &mut Vec<Complex64>,
 ) {
-    yf_rows.push(l); yf_cols.push(f); yf_vals.push(yff);
-    yf_rows.push(l); yf_cols.push(t); yf_vals.push(yft);
-    yt_rows.push(l); yt_cols.push(f); yt_vals.push(ytf);
-    yt_rows.push(l); yt_cols.push(t); yt_vals.push(ytt);
+    yf_rows.push(l);
+    yf_cols.push(f);
+    yf_vals.push(yff);
+    yf_rows.push(l);
+    yf_cols.push(t);
+    yf_vals.push(yft);
+    yt_rows.push(l);
+    yt_cols.push(f);
+    yt_vals.push(ytf);
+    yt_rows.push(l);
+    yt_cols.push(t);
+    yt_vals.push(ytt);
 }
 
 fn push_ext_grid(
@@ -323,9 +422,17 @@ fn push_ext_grid(
     gen_bus.push(bus);
     // Use ±∞ when no limit is specified — matches PYPOWER/pandapower convention for slack bus.
     // Finite ±999 defaults inflate barrier slacks and destroy PIPS complementarity convergence.
-    pg_min.push(eg.min_p_mw.map(|p| p / base_mva).unwrap_or(f64::NEG_INFINITY));
+    pg_min.push(
+        eg.min_p_mw
+            .map(|p| p / base_mva)
+            .unwrap_or(f64::NEG_INFINITY),
+    );
     pg_max.push(eg.max_p_mw.map(|p| p / base_mva).unwrap_or(f64::INFINITY));
-    qg_min.push(eg.min_q_mvar.map(|q| q / base_mva).unwrap_or(f64::NEG_INFINITY));
+    qg_min.push(
+        eg.min_q_mvar
+            .map(|q| q / base_mva)
+            .unwrap_or(f64::NEG_INFINITY),
+    );
     qg_max.push(eg.max_q_mvar.map(|q| q / base_mva).unwrap_or(f64::INFINITY));
     cost_coeffs.push([0.0, 0.0, 0.0]);
     pg_init.push(0.0); // slack P is free; not used in warm-start Sbus
@@ -416,7 +523,10 @@ fn build_incidence_cx(
     nl: usize,
     f_buses: &[usize],
     t_buses: &[usize],
-) -> (nalgebra_sparse::CscMatrix<Complex64>, nalgebra_sparse::CscMatrix<Complex64>) {
+) -> (
+    nalgebra_sparse::CscMatrix<Complex64>,
+    nalgebra_sparse::CscMatrix<Complex64>,
+) {
     let mut cf_coo: CooMatrix<Complex64> = CooMatrix::new(nb, nl);
     let mut ct_coo: CooMatrix<Complex64> = CooMatrix::new(nb, nl);
     let one = Complex64::new(1.0, 0.0);
@@ -430,7 +540,11 @@ fn build_incidence_cx(
     )
 }
 
-fn add_to_csc_diagonal(mat: &mut nalgebra_sparse::CscMatrix<Complex64>, idx: usize, val: Complex64) {
+fn add_to_csc_diagonal(
+    mat: &mut nalgebra_sparse::CscMatrix<Complex64>,
+    idx: usize,
+    val: Complex64,
+) {
     let start = mat.col_offsets()[idx];
     let end = mat.col_offsets()[idx + 1];
     let mut found = false;
@@ -447,6 +561,9 @@ fn add_to_csc_diagonal(mat: &mut nalgebra_sparse::CscMatrix<Complex64>, idx: usi
         // Let's panic if it doesn't exist for now to catch it, or just use Coo and convert later.
         // For standard networks Ybus ALWAYS has diagonals due to line admittances.
         // An isolated bus with ONLY a shunt would trigger this.
-        panic!("Ybus missing diagonal for bus {}, cannot add shunt directly.", idx);
+        panic!(
+            "Ybus missing diagonal for bus {}, cannot add shunt directly.",
+            idx
+        );
     }
 }

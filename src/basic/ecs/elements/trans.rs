@@ -2,9 +2,9 @@ use crate::io::pandapower::Transformer;
 use bevy_archive::prelude::SnapshotRegistry;
 
 use bevy_ecs::prelude::*;
-use rustpower_proc_marco::DeferBundle;
 use nalgebra::Complex;
 use nalgebra::Matrix2;
+use rustpower_proc_marco::DeferBundle;
 
 use super::{
     bus::SnaptShotRegGroup,

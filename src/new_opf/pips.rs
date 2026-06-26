@@ -1,8 +1,8 @@
-pub use crate::opf::pips::{PipsOpt, PipsResult};
 use super::problem::NewOPFData;
-use crate::opf::cost;
-use crate::opf::constraints;
 use crate::new_opf::v3_symbolic::V3SymbolicCache;
+use crate::opf::constraints;
+use crate::opf::cost;
+pub use crate::opf::pips::{PipsOpt, PipsResult};
 
 /// Optimized PIPS solver using V3/V4 Revolutionary Scalar Assembly and Persistent KLU.
 pub fn pips(
@@ -24,11 +24,22 @@ pub fn pips(
         |x, lam_eq, mu_ineq, z_ineq, cost_mult| {
             // V4 (Rectangular Rotate + Merged Slacks Penalty)
             crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
-                data, &v3_cache, x, lam_eq, mu_ineq, Some(z_ineq), cost_mult
+                data,
+                &v3_cache,
+                x,
+                lam_eq,
+                mu_ineq,
+                Some(z_ineq),
+                cost_mult,
             )
         },
-        x0, xmin, xmax,
-        PipsOpt { merged_slacks: true, ..opt },
+        x0,
+        xmin,
+        xmax,
+        PipsOpt {
+            merged_slacks: true,
+            ..opt
+        },
         &mut persistent_solver,
         None,
     )
@@ -56,11 +67,22 @@ pub fn pips_v5(
         },
         |x, lam_eq, mu_ineq, z_ineq, cost_mult| {
             crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
-                data, &v3_cache, x, lam_eq, mu_ineq, Some(z_ineq), cost_mult
+                data,
+                &v3_cache,
+                x,
+                lam_eq,
+                mu_ineq,
+                Some(z_ineq),
+                cost_mult,
             )
         },
-        x0, xmin, xmax,
-        PipsOpt { merged_slacks: true, ..opt },
+        x0,
+        xmin,
+        xmax,
+        PipsOpt {
+            merged_slacks: true,
+            ..opt
+        },
         &mut persistent_solver,
         Some(&v5_cache),
     )
@@ -89,12 +111,32 @@ pub fn pips_v5_2(
         |x, lam_eq, mu_ineq, z_ineq, cost_mult, kkt_vals| {
             use super::v5_2_kernel::*;
             kkt_vals.fill(0.0);
-            fill_variable_columns(&v5_cache, data, &v3_cache.y_transpose_idx, x, lam_eq, cost_mult, kkt_vals);
-            fill_constraint_columns(&v5_cache, data, &v3_cache.y_transpose_idx, &v5_cache.gens_at_bus, x, kkt_vals);
+            fill_variable_columns(
+                &v5_cache,
+                data,
+                &v3_cache.y_transpose_idx,
+                x,
+                lam_eq,
+                cost_mult,
+                kkt_vals,
+            );
+            fill_constraint_columns(
+                &v5_cache,
+                data,
+                &v3_cache.y_transpose_idx,
+                &v5_cache.gens_at_bus,
+                x,
+                kkt_vals,
+            );
             fill_branch_hessian(&v5_cache, data, x, mu_ineq, z_ineq, kkt_vals);
         },
-        x0, xmin, xmax,
-        PipsOpt { merged_slacks: true, ..opt },
+        x0,
+        xmin,
+        xmax,
+        PipsOpt {
+            merged_slacks: true,
+            ..opt
+        },
         &mut persistent_solver,
         &v5_cache,
     )
@@ -122,10 +164,25 @@ pub fn pips_v5_3(
         },
         |x, lam_eq, mu_ineq, z_ineq, cost_mult, kkt_vals| {
             use super::v5_3_kernel::*;
-            assemble_kkt_v5_3(&v53_cache, data, &v3_cache.y_transpose_idx, x, lam_eq, mu_ineq, z_ineq, cost_mult, kkt_vals);
+            assemble_kkt_v5_3(
+                &v53_cache,
+                data,
+                &v3_cache.y_transpose_idx,
+                x,
+                lam_eq,
+                mu_ineq,
+                z_ineq,
+                cost_mult,
+                kkt_vals,
+            );
         },
-        x0, xmin, xmax,
-        PipsOpt { merged_slacks: true, ..opt },
+        x0,
+        xmin,
+        xmax,
+        PipsOpt {
+            merged_slacks: true,
+            ..opt
+        },
         &mut persistent_solver,
         &v53_cache.base,
     )
@@ -150,15 +207,37 @@ pub fn pips_v5_6(
         |x, g, h, dg_v, dh_v| ev.update(data, x, g, h, dg_v, dh_v),
         |x, lam_eq, mu_ineq, z_ineq, cost_mult, kkt_vals| {
             use super::v5_3_kernel::*;
-            assemble_kkt_v5_3(&v53_cache, data, &v3_cache.y_transpose_idx, x, lam_eq, mu_ineq, z_ineq, cost_mult, kkt_vals);
+            assemble_kkt_v5_3(
+                &v53_cache,
+                data,
+                &v3_cache.y_transpose_idx,
+                x,
+                lam_eq,
+                mu_ineq,
+                z_ineq,
+                cost_mult,
+                kkt_vals,
+            );
         },
-        x0, xmin, xmax,
-        PipsOpt { merged_slacks: true, ..opt },
+        x0,
+        xmin,
+        xmax,
+        PipsOpt {
+            merged_slacks: true,
+            ..opt
+        },
         &mut persistent_solver,
         &v53_cache.base,
-        ev.dg_cp.clone(), ev.dg_ri.clone(), ev.dg_vals0.clone(),
-        ev.dh_cp.clone(), ev.dh_ri.clone(), ev.dh_vals0.clone(),
-        ev.neqnln, ev.niqnln, ev.neq, ev.niq,
+        ev.dg_cp.clone(),
+        ev.dg_ri.clone(),
+        ev.dg_vals0.clone(),
+        ev.dh_cp.clone(),
+        ev.dh_ri.clone(),
+        ev.dh_vals0.clone(),
+        ev.neqnln,
+        ev.niqnln,
+        ev.neq,
+        ev.niq,
     )
 }
 
@@ -185,10 +264,25 @@ pub fn pips_v5_5(
         },
         |x, lam_eq, mu_ineq, z_ineq, cost_mult, kkt_vals| {
             use super::v5_3_kernel::*;
-            assemble_kkt_v5_3(&v53_cache, data, &v3_cache.y_transpose_idx, x, lam_eq, mu_ineq, z_ineq, cost_mult, kkt_vals);
+            assemble_kkt_v5_3(
+                &v53_cache,
+                data,
+                &v3_cache.y_transpose_idx,
+                x,
+                lam_eq,
+                mu_ineq,
+                z_ineq,
+                cost_mult,
+                kkt_vals,
+            );
         },
-        x0, xmin, xmax,
-        PipsOpt { merged_slacks: true, ..opt },
+        x0,
+        xmin,
+        xmax,
+        PipsOpt {
+            merged_slacks: true,
+            ..opt
+        },
         &mut persistent_solver,
         &v53_cache.base,
     )

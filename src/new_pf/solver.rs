@@ -4,10 +4,10 @@ use nalgebra_sparse::*;
 use num_complex::Complex64;
 use std::f64::consts::PI;
 
-use crate::new_pf::systems::{NetworkOperators, PFOrder};
-use crate::basic::new_dsdvbus2::{JacobianPattern2};
+use crate::basic::new_dsdvbus2::JacobianPattern2;
 use crate::basic::new_dsdvbus3::fill_jacobian_v3;
 use crate::basic::solver::Solve;
+use crate::new_pf::systems::{NetworkOperators, PFOrder};
 
 /// Core Newton-Raphson Solver (Free Function)
 ///
@@ -26,13 +26,12 @@ pub fn run_newton_pf<S: Solve>(
     let mut v = v_init.clone();
     let n_bus = npv + npq;
     let n_state = npv + 2 * npq;
-    
-    let j_pattern = JacobianPattern2::build_from_permuted(
-        ybus.col_offsets(), ybus.row_indices(), npv, npq,
-    );
+
+    let j_pattern =
+        JacobianPattern2::build_from_permuted(ybus.col_offsets(), ybus.row_indices(), npv, npq);
     let mut j_values = vec![0.0; j_pattern.nnz_j];
     let mut f_vec = DVector::zeros(n_state);
-    
+
     let mut v_m = v.map(|e| e.norm());
     let mut v_a = v.map(|e| e.arg());
     let mut v_norm = v.map(|e| Complex64::from_polar(1.0, e.arg()));
@@ -41,10 +40,14 @@ pub fn run_newton_pf<S: Solve>(
         let ibus = ybus * &v;
         let s_calc = v.component_mul(&ibus.map(|e| e.conj()));
         let mis = &s_calc - sbus;
-        
+
         // Assemble mismatch vector F
-        for i in 0..n_bus { f_vec[i] = mis[i].re; }
-        for i in 0..npq { f_vec[n_bus + i] = mis[i].im; }
+        for i in 0..n_bus {
+            f_vec[i] = mis[i].re;
+        }
+        for i in 0..npq {
+            f_vec[n_bus + i] = mis[i].im;
+        }
 
         if f_vec.norm() < tol {
             return Ok((v, it));
@@ -61,16 +64,18 @@ pub fn run_newton_pf<S: Solve>(
             &mut j_values,
         );
 
-        solver.solve(
-            &mut j_pattern.j_col_ptrs.clone(), // This clone is bad for perf, but Solve trait requires mut
-            &mut j_pattern.j_row_indices.clone(),
-            &mut j_values,
-            f_vec.data.as_mut_slice(),
-            n_state,
-        ).map_err(|e| e.to_string())?;
+        solver
+            .solve(
+                &mut j_pattern.j_col_ptrs.clone(), // This clone is bad for perf, but Solve trait requires mut
+                &mut j_pattern.j_row_indices.clone(),
+                &mut j_values,
+                f_vec.data.as_mut_slice(),
+                n_state,
+            )
+            .map_err(|e| e.to_string())?;
 
         let dx = &f_vec;
-        
+
         // Update x
         for i in 0..n_bus {
             v_a[i] -= dx[i];

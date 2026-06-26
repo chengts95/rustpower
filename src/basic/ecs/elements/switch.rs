@@ -516,7 +516,7 @@ fn update_power_flow_matrix(
 ) {
     let permutation_matrix = create_permutation_matrix(&pv, &pq, &ext, new_total_nodes);
     mats.reorder = permutation_matrix;
-    
+
     let mut to_perm = vec![0; new_total_nodes];
     let mut from_perm = vec![0; new_total_nodes];
     let n_bus_re = pq.len() + pv.len();

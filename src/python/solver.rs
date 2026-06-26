@@ -1,19 +1,19 @@
 #[cfg(feature = "python")]
-use pyo3::prelude::*;
-#[cfg(feature = "python")]
-use numpy::{IntoPyArray, PyArrayMethods};
-#[cfg(feature = "python")]
-use crate::basic::ecs::powerflow::systems::{PowerFlowMat, PowerFlowResult, PowerFlowConfig};
-#[cfg(feature = "python")]
 use crate::basic::ecs::elements::PFCommonData;
 #[cfg(feature = "python")]
 use crate::basic::ecs::network::PowerFlowSolver;
+#[cfg(feature = "python")]
+use crate::basic::ecs::powerflow::systems::{PowerFlowConfig, PowerFlowMat, PowerFlowResult};
 #[cfg(feature = "python")]
 use bevy_app::App;
 #[cfg(feature = "python")]
 use nalgebra::DVector;
 #[cfg(feature = "python")]
-use nalgebra_sparse::{CscMatrix, CooMatrix, CsrMatrix};
+use nalgebra_sparse::{CooMatrix, CscMatrix, CsrMatrix};
+#[cfg(feature = "python")]
+use numpy::{IntoPyArray, PyArrayMethods};
+#[cfg(feature = "python")]
+use pyo3::prelude::*;
 
 /// Low-level Newton-Raphson power flow solver.
 ///
@@ -45,7 +45,7 @@ impl NewtonSolver {
             max_it: Some(10),
             tol: Some(1e-8),
         });
-        
+
         Self {
             app,
             p_vec: Vec::new(),
@@ -75,21 +75,26 @@ impl NewtonSolver {
         npq: usize,
     ) -> PyResult<()> {
         let n = v_init.len()?;
-        
-        let indptr: Vec<usize> = y_indptr.readonly().as_slice()?.iter().map(|&x| x as usize).collect();
-        let indices: Vec<usize> = y_indices.readonly().as_slice()?.iter().map(|&x| x as usize).collect();
+
+        let indptr: Vec<usize> = y_indptr
+            .readonly()
+            .as_slice()?
+            .iter()
+            .map(|&x| x as usize)
+            .collect();
+        let indices: Vec<usize> = y_indices
+            .readonly()
+            .as_slice()?
+            .iter()
+            .map(|&x| x as usize)
+            .collect();
         let data = y_data.readonly().as_slice()?.to_vec();
 
         // Use the ultra-fast O(NNZ) sort-free permutation utility
         let y_perm_csc = crate::basic::sparse::utils::permute_csr_to_csc_sort_free(
-            n,
-            &indptr,
-            &indices,
-            &data,
-            &p_vec,
-            &p_inv,
+            n, &indptr, &indices, &data, &p_vec, &p_inv,
         );
-        
+
         let s_raw = DVector::from_vec(s_bus.readonly().as_slice()?.to_vec());
         let v_raw = DVector::from_vec(v_init.readonly().as_slice()?.to_vec());
 
@@ -121,14 +126,19 @@ impl NewtonSolver {
     fn solve(&mut self) -> PyResult<bool> {
         let world = self.app.world_mut();
         let (max_it, tol) = {
-             let cfg = world.get_resource::<PowerFlowConfig>().cloned().unwrap_or_default();
-             (cfg.max_it, cfg.tol)
+            let cfg = world
+                .get_resource::<PowerFlowConfig>()
+                .cloned()
+                .unwrap_or_default();
+            (cfg.max_it, cfg.tol)
         };
 
-        let mut mat = world.remove_resource::<PowerFlowMat>()
-            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Context not initialized"))?;
-        let mut solver_res = world.remove_resource::<PowerFlowSolver>()
-            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Solver resource missing"))?;
+        let mut mat = world.remove_resource::<PowerFlowMat>().ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Context not initialized")
+        })?;
+        let mut solver_res = world.remove_resource::<PowerFlowSolver>().ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Solver resource missing")
+        })?;
 
         let result = crate::basic::newton_pf(
             &mat.y_bus,
@@ -140,7 +150,7 @@ impl NewtonSolver {
             max_it,
             &mut solver_res.solver,
         );
-        
+
         let (converged, its, v_final) = match result {
             Ok((v, i)) => (true, i, v),
             Err((_err, v, i)) => (false, i, v),
@@ -158,11 +168,15 @@ impl NewtonSolver {
     }
 
     /// Get the final complex bus voltages in original order.
-    fn get_voltage<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
+    fn get_voltage<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
         let world = self.app.world();
-        let res = world.get_resource::<PowerFlowResult>()
-            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Solve has not been run"))?;
-        
+        let res = world.get_resource::<PowerFlowResult>().ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Solve has not been run")
+        })?;
+
         let n = res.v.len();
         let mut v_final = vec![num_complex::Complex64::new(0.0, 0.0); n];
         for (i, &val) in res.v.as_slice().iter().enumerate() {

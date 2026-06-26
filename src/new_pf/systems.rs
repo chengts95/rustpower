@@ -1,8 +1,11 @@
+use crate::basic::ecs::elements::{
+    BusID, BusType, FromBus, Line, LineParams, NodeLookup, OutOfService, PFCommonData,
+    Port4MatPatch, ShuntDevice, TargetBus, ToBus, TransformerDevice, VNominal,
+};
 use bevy_ecs::prelude::*;
 use nalgebra::{Complex, Matrix2};
 use nalgebra_sparse::{CooMatrix, CscMatrix};
 use num_complex::Complex64;
-use crate::basic::ecs::elements::{Line, LineParams, PFCommonData, BusID, BusType, Port4MatPatch, NodeLookup, VNominal, FromBus, ToBus, TransformerDevice, ShuntDevice, TargetBus, OutOfService};
 
 /// Specialized component for the new data path: stores the 2x2 primitive block of a branch.
 #[derive(Component, Debug, Clone)]
@@ -84,9 +87,18 @@ pub fn initialize_pf_topology_system(
 
     let mut map = vec![0usize; nb];
     let mut internal_idx = 0;
-    for &orig in &pq { map[orig] = internal_idx; internal_idx += 1; }
-    for &orig in &pv { map[orig] = internal_idx; internal_idx += 1; }
-    for &orig in &slack { map[orig] = internal_idx; internal_idx += 1; }
+    for &orig in &pq {
+        map[orig] = internal_idx;
+        internal_idx += 1;
+    }
+    for &orig in &pv {
+        map[orig] = internal_idx;
+        internal_idx += 1;
+    }
+    for &orig in &slack {
+        map[orig] = internal_idx;
+        internal_idx += 1;
+    }
 
     // 2. Build Permuted A Matrix (2nl × nb) — lines first, then trafos.
     let nl = lines.iter().count() + trafos.iter().count();
@@ -97,20 +109,27 @@ pub fn initialize_pf_topology_system(
     let mut l = 0usize;
     for (ent, from, to) in &lines {
         order.push(ent);
-        a_coo.push(2 * l,     map[from.0 as usize], one);
-        a_coo.push(2 * l + 1, map[to.0 as usize],   one);
+        a_coo.push(2 * l, map[from.0 as usize], one);
+        a_coo.push(2 * l + 1, map[to.0 as usize], one);
         l += 1;
     }
     for (ent, from, to) in &trafos {
         order.push(ent);
-        a_coo.push(2 * l,     map[from.0 as usize], one);
-        a_coo.push(2 * l + 1, map[to.0 as usize],   one);
+        a_coo.push(2 * l, map[from.0 as usize], one);
+        a_coo.push(2 * l + 1, map[to.0 as usize], one);
         l += 1;
     }
 
-    commands.insert_resource(BinaryIncidence { a_mat: CscMatrix::from(&a_coo) });
+    commands.insert_resource(BinaryIncidence {
+        a_mat: CscMatrix::from(&a_coo),
+    });
     commands.insert_resource(BranchOrder(order));
-    commands.insert_resource(PFOrder { pq_nodes: pq, pv_nodes: pv, slack_nodes: slack, map });
+    commands.insert_resource(PFOrder {
+        pq_nodes: pq,
+        pv_nodes: pv,
+        slack_nodes: slack,
+        map,
+    });
 }
 
 /// Resource that stores the binary incidence matrix A (2b x n).
@@ -152,11 +171,13 @@ pub fn assemble_ybus_system(
     let nl = order.0.len();
     let mut y_prim_coo = CooMatrix::<Complex64>::new(2 * nl, 2 * nl);
     for (l, &ent) in order.0.iter().enumerate() {
-        let prim = query_branches.get(ent).expect("branch entity missing PrimitiveY2x2");
+        let prim = query_branches
+            .get(ent)
+            .expect("branch entity missing PrimitiveY2x2");
         let p = prim.0;
-        y_prim_coo.push(2 * l,     2 * l,     p[0]);
-        y_prim_coo.push(2 * l,     2 * l + 1, p[1]);
-        y_prim_coo.push(2 * l + 1, 2 * l,     p[2]);
+        y_prim_coo.push(2 * l, 2 * l, p[0]);
+        y_prim_coo.push(2 * l, 2 * l + 1, p[1]);
+        y_prim_coo.push(2 * l + 1, 2 * l, p[2]);
         y_prim_coo.push(2 * l + 1, 2 * l + 1, p[3]);
     }
     let y_prim = CscMatrix::from(&y_prim_coo);
@@ -199,14 +220,14 @@ pub fn assemble_yf_yt_system(
     let mut y_prim_coo = CooMatrix::<Complex64>::new(2 * nl, 2 * nl);
     for (l, prim) in query_branches.iter().enumerate() {
         let p = prim.0;
-        y_prim_coo.push(2 * l,     2 * l,     p[0]);
-        y_prim_coo.push(2 * l,     2 * l + 1, p[1]);
-        y_prim_coo.push(2 * l + 1, 2 * l,     p[2]);
+        y_prim_coo.push(2 * l, 2 * l, p[0]);
+        y_prim_coo.push(2 * l, 2 * l + 1, p[1]);
+        y_prim_coo.push(2 * l + 1, 2 * l, p[2]);
         y_prim_coo.push(2 * l + 1, 2 * l + 1, p[3]);
     }
     let y_prim = CscMatrix::from(&y_prim_coo);
     let a_mat = &incidence.a_mat;
-    
+
     // M = Y_prim * A
     let _m_mat = &y_prim * a_mat;
 
@@ -267,9 +288,11 @@ pub fn setup_branch_vbase(
     lookup: Res<NodeLookup>,
 ) {
     for (ent, from) in &lines {
-        let bus_ent = lookup.get_entity(from.0)
+        let bus_ent = lookup
+            .get_entity(from.0)
             .unwrap_or_else(|| panic!("Line from_bus {} has no entity", from.0));
-        let vb = buses.get(bus_ent)
+        let vb = buses
+            .get(bus_ent)
             .map(|vn| vn.0.0)
             .unwrap_or_else(|_| panic!("Line from_bus entity missing VNominal"));
         commands.entity(ent).insert(BranchVBase(vb));
@@ -302,16 +325,18 @@ pub fn setup_shunt_admittance(
         let step = dev.step as f64;
         let g_pu = dev.p_mw * step * scale / sbase;
         let b_pu = -dev.q_mvar * step * scale / sbase;
-        commands.entity(ent).insert(ShuntYpu(Complex64::new(g_pu, b_pu)));
+        commands
+            .entity(ent)
+            .insert(ShuntYpu(Complex64::new(g_pu, b_pu)));
     }
 }
 
 #[cfg(test)]
 mod tests_line_patch {
     use super::*;
-    use crate::basic::ecs::network::{DataOps, PowerGrid};
-    use crate::io::pandapower::{load_csv_zip, ecs_net_conv::LoadPandapowerNet};
     use crate::basic::ecs::elements::PandapowerEntityMap;
+    use crate::basic::ecs::network::{DataOps, PowerGrid};
+    use crate::io::pandapower::{ecs_net_conv::LoadPandapowerNet, load_csv_zip};
     use bevy_ecs::system::RunSystemOnce;
 
     #[test]
@@ -324,7 +349,11 @@ mod tests_line_patch {
         pf_net.load_pandapower_net(&net);
         let _ = pf_net.world_mut().run_system_once(setup_line_primitive_y);
 
-        let line_ents = pf_net.world().resource::<PandapowerEntityMap>().line_entities.clone();
+        let line_ents = pf_net
+            .world()
+            .resource::<PandapowerEntityMap>()
+            .line_entities
+            .clone();
         let lines_pp = net.line.as_deref().unwrap_or(&[]);
         assert_eq!(line_ents.len(), lines_pp.len());
 
@@ -347,11 +376,15 @@ mod tests_line_patch {
             let exp_yft = -y_series;
 
             let m = comp.expect("line missing Port4MatPatch").0;
-            assert!((m[(0,0)] - exp_yff).norm() < 1e-12,
-                "line {i} yff: got {:?}, expected {:?}", m[(0,0)], exp_yff);
-            assert!((m[(0,1)] - exp_yft).norm() < 1e-12);
-            assert!((m[(1,0)] - exp_yft).norm() < 1e-12);
-            assert!((m[(1,1)] - exp_yff).norm() < 1e-12);
+            assert!(
+                (m[(0, 0)] - exp_yff).norm() < 1e-12,
+                "line {i} yff: got {:?}, expected {:?}",
+                m[(0, 0)],
+                exp_yff
+            );
+            assert!((m[(0, 1)] - exp_yft).norm() < 1e-12);
+            assert!((m[(1, 0)] - exp_yft).norm() < 1e-12);
+            assert!((m[(1, 1)] - exp_yff).norm() < 1e-12);
             n_check += 1;
         }
         println!("IEEE118: {} lines have correct Port4MatPatch", n_check);
@@ -373,7 +406,11 @@ mod tests_line_patch {
         pf_net.load_pandapower_net(&net);
         let _ = pf_net.world_mut().run_system_once(setup_line_primitive_y);
 
-        let line_ents = pf_net.world().resource::<PandapowerEntityMap>().line_entities.clone();
+        let line_ents = pf_net
+            .world()
+            .resource::<PandapowerEntityMap>()
+            .line_entities
+            .clone();
         let lines_pp = net.line.as_deref().unwrap_or(&[]);
 
         let wbase = 2.0 * std::f64::consts::PI * net.f_hz;
@@ -384,23 +421,30 @@ mod tests_line_patch {
             let from_bus = net.bus.iter().find(|b| b.index == l.from_bus).unwrap();
             let vbase_kv = from_bus.vn_kv;
 
-            let (e_yff, e_yft, e_ytf, e_ytt, _) =
-                line_admittances(l, vbase_kv, base_mva, wbase);
+            let (e_yff, e_yft, e_ytf, e_ytt, _) = line_admittances(l, vbase_kv, base_mva, wbase);
 
             let scale = vbase_kv * vbase_kv / base_mva;
-            let m = pf_net.world().entity(line_ents[i]).get::<Port4MatPatch>().unwrap().0;
+            let m = pf_net
+                .world()
+                .entity(line_ents[i])
+                .get::<Port4MatPatch>()
+                .unwrap()
+                .0;
 
-            let got_yff = m[(0,0)] * scale;
-            let got_yft = m[(0,1)] * scale;
-            let got_ytf = m[(1,0)] * scale;
-            let got_ytt = m[(1,1)] * scale;
+            let got_yff = m[(0, 0)] * scale;
+            let got_yft = m[(0, 1)] * scale;
+            let got_ytf = m[(1, 0)] * scale;
+            let got_ytt = m[(1, 1)] * scale;
 
             assert!((got_yff - e_yff).norm() < 1e-12, "line {i} yff");
             assert!((got_yft - e_yft).norm() < 1e-12, "line {i} yft");
             assert!((got_ytf - e_ytf).norm() < 1e-12, "line {i} ytf");
             assert!((got_ytt - e_ytt).norm() < 1e-12, "line {i} ytt");
         }
-        println!("IEEE118: new_pf Port4MatPatch == opf::builder line_admittances on all {} lines", lines_pp.len());
+        println!(
+            "IEEE118: new_pf Port4MatPatch == opf::builder line_admittances on all {} lines",
+            lines_pp.len()
+        );
     }
 
     /// End-to-end equivalence: new_pf's full Ybus assembly path produces the same Ybus
@@ -419,7 +463,9 @@ mod tests_line_patch {
 
         let mut pf_net = PowerGrid::default();
         pf_net.load_pandapower_net(&net);
-        pf_net.world_mut().insert_resource(NetworkOperators::default());
+        pf_net
+            .world_mut()
+            .insert_resource(NetworkOperators::default());
 
         // Shared setup
         let _ = pf_net.world_mut().run_system_once(init_node_lookup);
@@ -427,25 +473,33 @@ mod tests_line_patch {
 
         // === Old PF path: setup_line_systems (children + Admittance) + create_y_bus ===
         let _ = pf_net.world_mut().run_system_once(setup_line_systems);
-        let (_old_incidence, old_ybus) = pf_net.world_mut()
-            .run_system_once(create_y_bus).unwrap();
+        let (_old_incidence, old_ybus) = pf_net.world_mut().run_system_once(create_y_bus).unwrap();
 
         // === New PF path: setup_line_primitive_y + setup_branch_vbase + topology + Y_prim + assemble ===
         let _ = pf_net.world_mut().run_system_once(setup_line_primitive_y);
         let _ = pf_net.world_mut().run_system_once(setup_branch_vbase);
-        let _ = pf_net.world_mut().run_system_once(initialize_pf_topology_system);
-        let _ = pf_net.world_mut().run_system_once(calculate_primitive_y_system);
+        let _ = pf_net
+            .world_mut()
+            .run_system_once(initialize_pf_topology_system);
+        let _ = pf_net
+            .world_mut()
+            .run_system_once(calculate_primitive_y_system);
         let _ = pf_net.world_mut().run_system_once(assemble_ybus_system);
 
-        let new_ybus = pf_net.world().resource::<NetworkOperators>().ybus
-            .as_ref().expect("new_pf Ybus not populated").clone();
+        let new_ybus = pf_net
+            .world()
+            .resource::<NetworkOperators>()
+            .ybus
+            .as_ref()
+            .expect("new_pf Ybus not populated")
+            .clone();
         let pf_order = pf_net.world().resource::<PFOrder>();
-        let map = pf_order.map.clone();  // orig_bus_id → permuted_idx
+        let map = pf_order.map.clone(); // orig_bus_id → permuted_idx
 
         // Index new_pf Ybus (in permuted order) by its permuted (row, col)
         let mut new_lookup: HashMap<(usize, usize), Complex64> = HashMap::new();
         for j in 0..new_ybus.ncols() {
-            for idx in new_ybus.col_offsets()[j]..new_ybus.col_offsets()[j+1] {
+            for idx in new_ybus.col_offsets()[j]..new_ybus.col_offsets()[j + 1] {
                 let r = new_ybus.row_indices()[idx];
                 new_lookup.insert((r, j), new_ybus.values()[idx]);
             }
@@ -456,13 +510,20 @@ mod tests_line_patch {
         let mut n_compared = 0usize;
         let mut n_missing = 0usize;
         for j in 0..old_ybus.ncols() {
-            for idx in old_ybus.col_offsets()[j]..old_ybus.col_offsets()[j+1] {
+            for idx in old_ybus.col_offsets()[j]..old_ybus.col_offsets()[j + 1] {
                 let i = old_ybus.row_indices()[idx];
                 let v_old = old_ybus.values()[idx];
-                let v_new = new_lookup.get(&(map[i], map[j]))
-                    .cloned().unwrap_or_else(|| { n_missing += 1; Complex64::new(0.0, 0.0) });
+                let v_new = new_lookup
+                    .get(&(map[i], map[j]))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        n_missing += 1;
+                        Complex64::new(0.0, 0.0)
+                    });
                 let d = (v_old - v_new).norm();
-                if d > max_diff { max_diff = d; }
+                if d > max_diff {
+                    max_diff = d;
+                }
                 n_compared += 1;
             }
         }
@@ -471,8 +532,14 @@ mod tests_line_patch {
             "IEEE118: new_pf vs old PF Ybus — compared {} entries, missing in new {}, max_diff = {:.4e}",
             n_compared, n_missing, max_diff
         );
-        assert_eq!(n_missing, 0, "new_pf Ybus is missing structural entries that old PF has");
-        assert!(max_diff < 1e-10, "Ybus values disagree (max_diff = {:.4e})", max_diff);
+        assert_eq!(
+            n_missing, 0,
+            "new_pf Ybus is missing structural entries that old PF has"
+        );
+        assert!(
+            max_diff < 1e-10,
+            "Ybus values disagree (max_diff = {:.4e})",
+            max_diff
+        );
     }
-
 }

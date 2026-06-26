@@ -86,7 +86,8 @@ pub fn apply_permutation(mut mat: ResMut<PowerFlowMat>) {
     let p_vec = mat.from_perm.clone();
     let p_inv = mat.to_perm.clone();
 
-    mat.y_bus = crate::basic::sparse::utils::permute_csc_to_csc_local_sort(&mat.y_bus, &p_vec, &p_inv);
+    mat.y_bus =
+        crate::basic::sparse::utils::permute_csc_to_csc_local_sort(&mat.y_bus, &p_vec, &p_inv);
 
     let mut new_s_bus = mat.s_bus.clone();
     let mut new_v_bus = mat.v_bus_init.clone();
@@ -103,7 +104,8 @@ fn apply_inversed_permutation(mut mat: ResMut<PowerFlowMat>) {
     let p_vec = mat.to_perm.clone();
     let p_inv = mat.from_perm.clone();
 
-    mat.y_bus = crate::basic::sparse::utils::permute_csc_to_csc_local_sort(&mat.y_bus, &p_vec, &p_inv);
+    mat.y_bus =
+        crate::basic::sparse::utils::permute_csc_to_csc_local_sort(&mat.y_bus, &p_vec, &p_inv);
 
     let mut new_s_bus = mat.s_bus.clone();
     let mut new_v_bus = mat.v_bus_init.clone();

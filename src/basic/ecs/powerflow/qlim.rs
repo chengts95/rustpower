@@ -204,12 +204,15 @@ mod tests_python_composition {
 
         app.world_mut().insert_resource(PPNetwork(net));
         let _ = app.world_mut().try_run_schedule(PFInit); // python init_pf()
-        app.update();                                     // python solve()
+        app.update(); // python solve()
 
         let res = app
             .world()
             .get_resource::<super::super::systems::PowerFlowResult>()
             .unwrap();
-        assert!(res.converged, "qlim with the python plugin set must converge");
+        assert!(
+            res.converged,
+            "qlim with the python plugin set must converge"
+        );
     }
 }

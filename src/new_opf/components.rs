@@ -1,6 +1,6 @@
+use crate::basic::solver::DefaultSolver;
 use bevy_ecs::prelude::*;
 use nalgebra_sparse::CscMatrix;
-use crate::basic::solver::DefaultSolver;
 
 /// Lagrange multiplier for bus power balance (P and Q).
 #[derive(Component, Debug, Clone, Default)]

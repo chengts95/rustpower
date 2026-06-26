@@ -31,11 +31,7 @@ macro_rules! timeit {
         let avg_duration = total_duration / $times;
         println!(
             " {}: {} loops - Average: {:?}, Max: {:?}, Min: {:?}",
-            $name,
-            $times,
-            avg_duration,
-            max_duration,
-            min_duration
+            $name, $times, avg_duration, max_duration, min_duration
         );
     }};
 }
@@ -44,15 +40,12 @@ fn run_benchmark(name: &str, net: Network, iterations: u32) {
     let mut pf_net = PowerGrid::default();
     pf_net.world_mut().insert_resource(PPNetwork(net));
     pf_net.init_pf_net();
-    
+
     // Warmup
     pf_net.run_pf();
-    
-    let res = pf_net
-        .world()
-        .get_resource::<PowerFlowResult>()
-        .unwrap();
-    
+
+    let res = pf_net.world().get_resource::<PowerFlowResult>().unwrap();
+
     if !res.converged {
         println!("{} did not converge!", name);
         return;

@@ -163,11 +163,11 @@ fn extract_res_line(
         Some(agg) => &agg.expand_mat_v.cast() * v,
         None => v,
     };
-    
+
     q.iter().for_each(|(e, children, from, to, params)| {
         let mut data = LineResultData::default();
         let p_port = Port2::new(from.0, to.0);
-        
+
         let v_from = v[p_port[0] as usize];
         let v_to = v[p_port[1] as usize];
 

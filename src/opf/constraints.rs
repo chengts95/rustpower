@@ -24,10 +24,10 @@ pub fn opf_consfcn(
     data: &OPFData,
     x: &[f64],
 ) -> (
-    Vec<f64>,          // g
-    Vec<f64>,          // h
-    CscMatrix<f64>,    // dg (nx × 2nb, transposed Jacobian)
-    CscMatrix<f64>,    // dh (nx × 2nl2, transposed Jacobian)
+    Vec<f64>,       // g
+    Vec<f64>,       // h
+    CscMatrix<f64>, // dg (nx × 2nb, transposed Jacobian)
+    CscMatrix<f64>, // dh (nx × 2nl2, transposed Jacobian)
 ) {
     let nb = data.nb;
     let nl = data.nl;
@@ -56,7 +56,12 @@ pub fn opf_consfcn(
     let nl2 = nl;
 
     let (d_sf_d_va, d_sf_d_vm, d_st_d_va, d_st_d_vm, sf, st) = dSbr_dV(
-        &data.yf, &data.yt, &data.f_buses, &data.t_buses, &v, &v_norm,
+        &data.yf,
+        &data.yt,
+        &data.f_buses,
+        &data.t_buses,
+        &v,
+        &v_norm,
     );
 
     let mut h = vec![0.0f64; 2 * nl2];
@@ -68,11 +73,7 @@ pub fn opf_consfcn(
     // ── Jacobians ────────────────────────────────────────────────────────────
     let (d_sbus_d_vm, d_sbus_d_va) = dSbus_dV(&data.ybus, &v, &v_norm);
 
-    let dg_t = build_dg_transposed(
-        nb, ng, nx,
-        &d_sbus_d_va, &d_sbus_d_vm,
-        &data.cg,
-    );
+    let dg_t = build_dg_transposed(nb, ng, nx, &d_sbus_d_va, &d_sbus_d_vm, &data.cg);
 
     let dh_t = {
         let (d_af_d_va, d_af_d_vm, d_at_d_va, d_at_d_vm) =
@@ -192,14 +193,26 @@ fn build_dh_transposed(
 
     // From-flow constraints (cols 0..nl2)
     append_flow_cols(
-        &mut col_offsets, &mut row_indices, &mut values,
-        dAf_dVa, dAf_dVm, nb, nl2, 0,
+        &mut col_offsets,
+        &mut row_indices,
+        &mut values,
+        dAf_dVa,
+        dAf_dVm,
+        nb,
+        nl2,
+        0,
     );
 
     // To-flow constraints (cols nl2..2nl2)
     append_flow_cols(
-        &mut col_offsets, &mut row_indices, &mut values,
-        dAt_dVa, dAt_dVm, nb, nl2, nl2,
+        &mut col_offsets,
+        &mut row_indices,
+        &mut values,
+        dAt_dVa,
+        dAt_dVm,
+        nb,
+        nl2,
+        nl2,
     );
 
     CscMatrix::try_from_csc_data(nx, 2 * nl2, col_offsets, row_indices, values).unwrap()
@@ -264,7 +277,6 @@ fn csc_to_row_lists_complex(m: &CscMatrix<Complex64>) -> Vec<Vec<(usize, Complex
     }
     rows
 }
-
 
 #[inline]
 fn sort_col(ri: &mut [usize], v: &mut [f64]) {

@@ -27,7 +27,9 @@ use super::components::BranchFlowLimit;
 /// from-bus entity's `VNominal`. Lines with `max_i_ka == 0` are treated as
 /// unconstrained and get **no** component attached.
 pub fn attach_line_flow_limits(world: &mut World, net: &Network) {
-    let Some(lines) = net.line.as_deref() else { return };
+    let Some(lines) = net.line.as_deref() else {
+        return;
+    };
 
     let line_ents: Vec<Entity> = {
         let map = world
@@ -82,7 +84,9 @@ pub fn attach_line_flow_limits(world: &mut World, net: &Network) {
 /// rate_a_pu = `sn_mva * parallel * max_loading_percent / 100 / sn_mva_sys`.
 /// Transformers with no `max_loading_percent` use the pandapower default of 100%.
 pub fn attach_trafo_flow_limits(world: &mut World, net: &Network) {
-    let Some(trafos) = net.trafo.as_deref() else { return };
+    let Some(trafos) = net.trafo.as_deref() else {
+        return;
+    };
 
     let trafo_ents: Vec<Entity> = {
         let map = world
@@ -105,8 +109,7 @@ pub fn attach_trafo_flow_limits(world: &mut World, net: &Network) {
             continue;
         }
         let loading_pct = trafo.max_loading_percent.unwrap_or(100.0);
-        let rate_pu =
-            trafo.sn_mva * (trafo.parallel as f64) * loading_pct * 0.01 / sn_mva_sys;
+        let rate_pu = trafo.sn_mva * (trafo.parallel as f64) * loading_pct * 0.01 / sn_mva_sys;
         if rate_pu == 0.0 {
             continue;
         }
@@ -119,10 +122,10 @@ pub fn attach_trafo_flow_limits(world: &mut World, net: &Network) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::basic::ecs::network::{DataOps, PowerGrid};
-    use crate::io::pandapower::load_csv_zip;
-    use crate::io::pandapower::ecs_net_conv::LoadPandapowerNet;
     use crate::basic::ecs::elements::bus_systems::init_node_lookup;
+    use crate::basic::ecs::network::{DataOps, PowerGrid};
+    use crate::io::pandapower::ecs_net_conv::LoadPandapowerNet;
+    use crate::io::pandapower::load_csv_zip;
     use bevy_ecs::system::RunSystemOnce;
 
     #[test]
@@ -154,15 +157,27 @@ mod tests {
             } else {
                 let bfl = comp.unwrap_or_else(|| panic!("line {i} missing limit"));
                 // Spot check the formula against the from-bus vbase
-                let bus_idx = net.bus.iter().position(|b| b.index == line.from_bus).unwrap();
+                let bus_idx = net
+                    .bus
+                    .iter()
+                    .position(|b| b.index == line.from_bus)
+                    .unwrap();
                 let vbase = net.bus[bus_idx].vn_kv;
                 let expect = line.max_i_ka.unwrap_or(0.0) * vbase * 3f64.sqrt() / net.sn_mva;
-                assert!((bfl.rate_a_pu - expect).abs() < 1e-12,
-                    "line {i}: got {:.6}, expected {:.6}", bfl.rate_a_pu, expect);
+                assert!(
+                    (bfl.rate_a_pu - expect).abs() < 1e-12,
+                    "line {i}: got {:.6}, expected {:.6}",
+                    bfl.rate_a_pu,
+                    expect
+                );
                 n_attached += 1;
             }
         }
-        println!("IEEE118: {} of {} lines got BranchFlowLimit", n_attached, lines.len());
+        println!(
+            "IEEE118: {} of {} lines got BranchFlowLimit",
+            n_attached,
+            lines.len()
+        );
         assert!(n_attached > 0);
     }
 
@@ -188,7 +203,10 @@ mod tests {
 
         let mut n_attached = 0usize;
         for (i, trafo) in trafos.iter().enumerate() {
-            let comp = pf_net.world().entity(trafo_ents[i]).get::<BranchFlowLimit>();
+            let comp = pf_net
+                .world()
+                .entity(trafo_ents[i])
+                .get::<BranchFlowLimit>();
             if !trafo.in_service {
                 assert!(comp.is_none(), "trafo {i} oos got a limit but shouldn't");
                 continue;
@@ -200,11 +218,19 @@ mod tests {
                 continue;
             }
             let bfl = comp.unwrap_or_else(|| panic!("trafo {i} missing limit"));
-            assert!((bfl.rate_a_pu - expect).abs() < 1e-12,
-                "trafo {i}: got {:.6}, expected {:.6}", bfl.rate_a_pu, expect);
+            assert!(
+                (bfl.rate_a_pu - expect).abs() < 1e-12,
+                "trafo {i}: got {:.6}, expected {:.6}",
+                bfl.rate_a_pu,
+                expect
+            );
             n_attached += 1;
         }
-        println!("IEEE118: {} of {} trafos got BranchFlowLimit", n_attached, trafos.len());
+        println!(
+            "IEEE118: {} of {} trafos got BranchFlowLimit",
+            n_attached,
+            trafos.len()
+        );
     }
 
     #[test]
@@ -226,7 +252,10 @@ mod tests {
             .query::<&BranchFlowLimit>()
             .iter(pf_net.world())
             .count();
-        println!("IEEE118 combined: {} branch entities carry BranchFlowLimit", n_branches_with_limit);
+        println!(
+            "IEEE118 combined: {} branch entities carry BranchFlowLimit",
+            n_branches_with_limit
+        );
         assert!(n_branches_with_limit > 0);
     }
 }

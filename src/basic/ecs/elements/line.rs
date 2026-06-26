@@ -7,8 +7,8 @@ use crate::basic;
 use crate::io::pandapower::Line;
 use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
-use rustpower_proc_marco::DeferBundle;
 use derive_more::From;
+use rustpower_proc_marco::DeferBundle;
 
 use super::bus::{OutOfService, SnaptShotRegGroup};
 use bevy_ecs::name::Name;

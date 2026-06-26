@@ -168,18 +168,14 @@ pub fn fill_jacobian_v2(
         let diag_offset = pattern.diag_ptrs[k] - y_start;
 
         let j_ptr = j_values.as_mut_ptr();
-        let out_j11 = unsafe {
-            std::slice::from_raw_parts_mut(j_ptr.add(pattern.j11_starts[k]), active_end)
-        };
-        let out_j21 = unsafe {
-            std::slice::from_raw_parts_mut(j_ptr.add(pattern.j21_starts[k]), pq_end)
-        };
-        let out_j12 = unsafe {
-            std::slice::from_raw_parts_mut(j_ptr.add(pattern.j12_starts[k]), active_end)
-        };
-        let out_j22 = unsafe {
-            std::slice::from_raw_parts_mut(j_ptr.add(pattern.j22_starts[k]), pq_end)
-        };
+        let out_j11 =
+            unsafe { std::slice::from_raw_parts_mut(j_ptr.add(pattern.j11_starts[k]), active_end) };
+        let out_j21 =
+            unsafe { std::slice::from_raw_parts_mut(j_ptr.add(pattern.j21_starts[k]), pq_end) };
+        let out_j12 =
+            unsafe { std::slice::from_raw_parts_mut(j_ptr.add(pattern.j12_starts[k]), active_end) };
+        let out_j22 =
+            unsafe { std::slice::from_raw_parts_mut(j_ptr.add(pattern.j22_starts[k]), pq_end) };
 
         // PQ-row slice: writes J11+J21 and J12+J22 (full participation).
         for offset in 0..pq_end {
@@ -247,12 +243,10 @@ pub fn fill_jacobian_v2(
         let diag_offset = pattern.diag_ptrs[k] - y_start;
 
         let j_ptr = j_values.as_mut_ptr();
-        let out_j11 = unsafe {
-            std::slice::from_raw_parts_mut(j_ptr.add(pattern.j11_starts[k]), active_end)
-        };
-        let out_j21 = unsafe {
-            std::slice::from_raw_parts_mut(j_ptr.add(pattern.j21_starts[k]), pq_end)
-        };
+        let out_j11 =
+            unsafe { std::slice::from_raw_parts_mut(j_ptr.add(pattern.j11_starts[k]), active_end) };
+        let out_j21 =
+            unsafe { std::slice::from_raw_parts_mut(j_ptr.add(pattern.j21_starts[k]), pq_end) };
 
         // PQ-row slice: writes J11 + J21.
         for offset in 0..pq_end {

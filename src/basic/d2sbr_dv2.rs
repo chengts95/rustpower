@@ -244,9 +244,9 @@ pub fn d2Sbr_dV2(
 pub fn d2ASbr_dV2(
     dSbr_dVa: &CscMatrix<Complex64>, // nl × nb
     dSbr_dVm: &CscMatrix<Complex64>, // nl × nb
-    Sbr: &DVector<Complex64>,         // nl
-    Cbr: &CscMatrix<Complex64>,       // nb × nl
-    Ybr: &CscMatrix<Complex64>,       // nl × nb
+    Sbr: &DVector<Complex64>,        // nl
+    Cbr: &CscMatrix<Complex64>,      // nb × nl
+    Ybr: &CscMatrix<Complex64>,      // nl × nb
     v: &DVector<Complex64>,
     lam: &DVector<f64>, // nl real multipliers (mu_f or mu_t)
 ) -> (
@@ -316,10 +316,7 @@ pub fn d2ASbr_dV2(
 
 /// Sparse matrix-matrix product (CSC × CSC → CSC), complex.
 /// Uses a dense accumulator (column-by-column), suitable for nb ≤ ~10k.
-pub(crate) fn spgemm(
-    a: &CscMatrix<Complex64>,
-    b: &CscMatrix<Complex64>,
-) -> CscMatrix<Complex64> {
+pub(crate) fn spgemm(a: &CscMatrix<Complex64>, b: &CscMatrix<Complex64>) -> CscMatrix<Complex64> {
     let m = a.nrows();
     let n = b.ncols();
     assert_eq!(a.ncols(), b.nrows());
@@ -414,8 +411,7 @@ pub(crate) fn csc_transpose_cx(a: &CscMatrix<Complex64>) -> CscMatrix<Complex64>
     for i in 0..m {
         let s = t_cp[i];
         let e = t_cp[i + 1];
-        let mut pairs: Vec<(usize, Complex64)> =
-            (s..e).map(|p| (t_ri[p], t_v[p])).collect();
+        let mut pairs: Vec<(usize, Complex64)> = (s..e).map(|p| (t_ri[p], t_v[p])).collect();
         pairs.sort_unstable_by_key(|&(c, _)| c);
         for (p, (col, val)) in (s..e).zip(pairs) {
             t_ri[p] = col;
@@ -548,11 +544,7 @@ fn subtract_diags(
     // For each diagonal position j, add -(d[j] + e[j]) to mat[j,j] (if present)
     // or insert a new entry.
     for j in 0..nb {
-        let delta = if negate_e {
-            -d[j] + e[j]
-        } else {
-            -d[j] - e[j]
-        };
+        let delta = if negate_e { -d[j] + e[j] } else { -d[j] - e[j] };
         if delta == Complex64::new(0.0, 0.0) {
             continue;
         }
@@ -571,11 +563,7 @@ fn subtract_diags(
 }
 
 /// Row-scale a CSC complex matrix: result[l, j] = lam[l] * a[l, j]   (or conj(a[l,j]) if conjugate).
-fn row_scale_cx(
-    a: &CscMatrix<Complex64>,
-    lam: &[f64],
-    conjugate: bool,
-) -> CscMatrix<Complex64> {
+fn row_scale_cx(a: &CscMatrix<Complex64>, lam: &[f64], conjugate: bool) -> CscMatrix<Complex64> {
     let ri = a.row_indices();
     let vals: Vec<Complex64> = a
         .values()

@@ -94,11 +94,14 @@ impl OPFData {
 
     /// Reconstruct complex voltage vector from x = [Va; Vm; ...]
     pub fn v_from_x(&self, x: &[f64]) -> DVector<Complex64> {
-        DVector::from_iterator(self.nb, (0..self.nb).map(|i| {
-            let va = x[i];
-            let vm = x[self.nb + i];
-            Complex64::from_polar(vm, va)
-        }))
+        DVector::from_iterator(
+            self.nb,
+            (0..self.nb).map(|i| {
+                let va = x[i];
+                let vm = x[self.nb + i];
+                Complex64::from_polar(vm, va)
+            }),
+        )
     }
 
     /// Compute net power injection Sbus = Cg·(Pg+jQg) - Sload
@@ -224,9 +227,18 @@ impl OPFData {
 
         // Run Newton-Raphson power flow
         let mut solver = DefaultSolver::default();
-        let v_p = match newton_pf(&ybus_p, &sbus_p, &v_init_p, npv, npq, None, None, &mut solver) {
+        let v_p = match newton_pf(
+            &ybus_p,
+            &sbus_p,
+            &v_init_p,
+            npv,
+            npq,
+            None,
+            None,
+            &mut solver,
+        ) {
             Ok((v, _)) => v,
-            Err((_, v,_)) => v,
+            Err((_, v, _)) => v,
         };
 
         // Unpermute: original bus b is at permuted index inv_perm[b]
@@ -267,8 +279,12 @@ impl OPFData {
         // Clamp to variable bounds
         let (xmin, xmax) = self.bounds();
         for i in 0..self.nx() {
-            if xmin[i].is_finite() { x0[i] = x0[i].max(xmin[i]); }
-            if xmax[i].is_finite() { x0[i] = x0[i].min(xmax[i]); }
+            if xmin[i].is_finite() {
+                x0[i] = x0[i].max(xmin[i]);
+            }
+            if xmax[i].is_finite() {
+                x0[i] = x0[i].min(xmax[i]);
+            }
         }
 
         x0
