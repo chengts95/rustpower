@@ -201,7 +201,7 @@ pub(crate) fn assemble_f_v2(
         .zip_apply(&mis.rows_range(0..npq), |a, b| *a = b.simd_imaginary());
 }
 #[inline(always)]
-fn fill_f_from_ibus<const SPEC_MINUS_CALC: bool>(
+pub(crate) fn fill_f_from_ibus<const SPEC_MINUS_CALC: bool>(
     v: &[Complex64],
     ibus: &[Complex64],
     sbus: &[Complex64],
@@ -249,7 +249,7 @@ fn fill_f_from_ibus<const SPEC_MINUS_CALC: bool>(
 }
 
 #[inline(always)]
-fn csc_matvec_complex(
+pub(crate) fn csc_matvec_complex(
     col_ptrs: &[usize],
     row_idx: &[usize],
     y_vals: &[Complex64],
