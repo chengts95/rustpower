@@ -1,4 +1,3 @@
-use super::new_dsdvbus2::JacobianPattern2;
 use nalgebra_sparse::CscMatrix;
 use num_complex::Complex64;
 
@@ -14,14 +13,28 @@ macro_rules! jslice {
 ///
 /// Optimizes by taking S_calc (V * conj(I)) directly to handle diagonal corrections,
 /// potentially avoiding passing the full 'ibus' vector if not needed elsewhere.
-#[allow(non_snake_case)]
+///
+/// Quadrant starts are computed inline from `j_col_ptrs` and the segment
+/// lengths — no per-quadrant tables:
+///   J11 = col(k),  J21 = J11 + active_end,  J12 = col(n_active+k),  J22 = J12 + active_end.
+///
+/// `FLAT = false`: block view, `j_values` is the J block itself and column c
+/// starts at `j_col_ptrs[c]`.
+/// `FLAT = true`: flat LM view (KKT `[μI+H Jᵀ; J −I]` as one global CSC);
+/// δ-column c is `[H col c | J col c]` where the H segment starts at
+/// `2·j_col_ptrs[c]`, so the J segment starts at `2·j_col_ptrs[c] + L_k`
+/// with `L_k = active_ends[k] + pq_ends[k]` the full column length of bus k.
+#[allow(non_snake_case, clippy::too_many_arguments)]
 #[inline(always)]
-pub fn fill_jacobian_v3(
+pub fn fill_jacobian_v3<const FLAT: bool>(
     Ybus: &CscMatrix<Complex64>,
     v: &[Complex64],
     Vnorm: &[Complex64],
     scalc: &[Complex64], // V * conj(I)
-    pattern: &JacobianPattern2,
+    j_col_ptrs: &[usize],
+    pq_ends: &[usize],
+    active_ends: &[usize],
+    diag_ptrs: &[usize],
     npv: usize,
     npq: usize,
     j_values: &mut [f64],
@@ -33,8 +46,8 @@ pub fn fill_jacobian_v3(
 
     for k in 0..npq {
         let y_start = y_col_offsets[k];
-        let pq_end = pattern.pq_ends[k];
-        let active_end = pattern.active_ends[k];
+        let pq_end = pq_ends[k];
+        let active_end = active_ends[k];
 
         let ek = v[k].re;
         let fk = v[k].im;
@@ -47,24 +60,26 @@ pub fn fill_jacobian_v3(
         let pk = scalc[k].re;
         let qk = scalc[k].im;
 
-        // Re-deriving diag terms from ibus:
-        // J11_diag: dP/dth = -Q_calc = ek*Iimk - fk*Irek
-        // J21_diag: dQ/dth = P_calc = ek*Irek + fk*Iimk
-        // J12_diag: dP/dVm = (P_calc + |V|^2*G)/Vm ... wait, simpler to just use ibus elements?
-        // Actually, if we have scalc, we can't easily get ibus[k] without dividing by V.
-        // But ibus[k] = conj(scalc[k] / v[k])
-        // let ik_conj = scalc[k] / v[k];
-        // let Ire_k = ik_conj.re;
-        // let Iim_k = -ik_conj.im;
         let vmag = ek * enk + fk * fnk;
         let inv_vmag = 1.0 / vmag;
-        let diag_offset = pattern.diag_ptrs[k] - y_start;
+        let diag_offset = diag_ptrs[k] - y_start;
         let j_ptr = j_values.as_mut_ptr();
 
-        let out_j11 = jslice!(j_ptr, pattern.j11_starts[k], active_end);
-        let out_j21 = jslice!(j_ptr, pattern.j21_starts[k], pq_end);
-        let out_j12 = jslice!(j_ptr, pattern.j12_starts[k], active_end);
-        let out_j22 = jslice!(j_ptr, pattern.j22_starts[k], pq_end);
+        // 本列自己的四个象限起始，从 cs 和段长现算（PQ 母线四个象限都存在）。
+        let seg_len = active_end + pq_end; // L_k：bus k 的整列长度
+        let (j11_col, j12_col) = if FLAT {
+            // δ-列 = [H 段 | J 段]，H 段起于 2·cs[c]
+            (2 * j_col_ptrs[k] + seg_len, 2 * j_col_ptrs[n_active + k] + seg_len)
+        } else {
+            (j_col_ptrs[k], j_col_ptrs[n_active + k])
+        };
+        let j21_col = j11_col + active_end;
+        let j22_col = j12_col + active_end;
+
+        let out_j11 = jslice!(j_ptr, j11_col, active_end);
+        let out_j21 = jslice!(j_ptr, j21_col, pq_end);
+        let out_j12 = jslice!(j_ptr, j12_col, active_end);
+        let out_j22 = jslice!(j_ptr, j22_col, pq_end);
         // 第一部分：处理 offset 在 [0, pq_end) 范围内的情况
         // 所有四个输出数组都需要写入
         for offset in 0..pq_end {
@@ -115,25 +130,30 @@ pub fn fill_jacobian_v3(
 
         // Diagonal corrections
         unsafe {
-            slot!(j_values, pattern.j11_starts[k] + diag_offset) += -qk;
-            slot!(j_values, pattern.j21_starts[k] + diag_offset) += pk;
-            slot!(j_values, pattern.j12_starts[k] + diag_offset) += pk * inv_vmag;
-            slot!(j_values, pattern.j22_starts[k] + diag_offset) += qk * inv_vmag;
+            slot!(j_values, j11_col + diag_offset) += -qk;
+            slot!(j_values, j21_col + diag_offset) += pk;
+            slot!(j_values, j12_col + diag_offset) += pk * inv_vmag;
+            slot!(j_values, j22_col + diag_offset) += qk * inv_vmag;
         }
     }
 
     for k in npq..n_active {
         let y_start = y_col_offsets[k];
-        let pq_end = pattern.pq_ends[k];
-        let active_end = pattern.active_ends[k];
+        let pq_end = pq_ends[k];
+        let active_end = active_ends[k];
         let ek = v[k].re;
         let fk = v[k].im;
         let qk = scalc[k].im;
-        let diag_offset = pattern.diag_ptrs[k] - y_start;
+        let diag_offset = diag_ptrs[k] - y_start;
         let j_ptr = j_values.as_mut_ptr();
 
-        let out_j11 = jslice!(j_ptr, pattern.j11_starts[k], active_end);
-        let out_j21 = jslice!(j_ptr, pattern.j21_starts[k], pq_end);
+        // PV 母线只有 θ 列：只算 j11/j21 两个起始（|V| 列 n_active+k 不存在）。
+        let seg_len = active_end + pq_end;
+        let j11_col = if FLAT { 2 * j_col_ptrs[k] + seg_len } else { j_col_ptrs[k] };
+        let j21_col = j11_col + active_end;
+
+        let out_j11 = jslice!(j_ptr, j11_col, active_end);
+        let out_j21 = jslice!(j_ptr, j21_col, pq_end);
         // 第一部分：处理 offset 在 [0, pq_end) 范围内的情况
         // 这里两个数组都需要写入
         for offset in 0..pq_end {
@@ -160,7 +180,6 @@ pub fn fill_jacobian_v3(
             let i = y_row_indices[y_ptr];
             let Y_ik = y_vals[y_ptr];
 
-            // 复数乘法部分
             let Va_re = Y_ik.re * ek - Y_ik.im * fk;
             let Va_im = Y_ik.re * fk + Y_ik.im * ek;
 
@@ -171,7 +190,7 @@ pub fn fill_jacobian_v3(
             out_j11[offset] = fi * Va_re - ei * Va_im;
         }
         unsafe {
-            slot!(j_values, pattern.j11_starts[k] + diag_offset) += -qk;
+            slot!(j_values, j11_col + diag_offset) += -qk;
         }
     }
 }

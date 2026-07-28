@@ -203,7 +203,6 @@ use crate::basic::new_dsdvbus3::fill_jacobian_v3;
 struct LmCase {
     ybus: CscMatrix<Complex64>,
     pat: KktPattern,
-    jp2: JacobianPattern2,
     v: DVector<Complex64>,
     sbus: Vec<Complex64>,
     n_pv: usize,
@@ -217,7 +216,6 @@ fn lm_case(fixture: fn() -> (CscMatrix<Complex64>, usize, usize)) -> LmCase {
     let n_act = n_pv + n_pq;
     let n_state = n_act + n_pq;
     let pat = KktPattern::build(&ybus, n_pv, n_pq);
-    let jp2 = JacobianPattern2::build_from_permuted(ybus.col_offsets(), ybus.row_indices(), n_pv, n_pq);
 
     let nb = ybus.ncols();
     // Reference point (defines the injections) and evaluation point.
@@ -235,7 +233,7 @@ fn lm_case(fixture: fn() -> (CscMatrix<Complex64>, usize, usize)) -> LmCase {
             .collect(),
     );
 
-    LmCase { ybus, pat, jp2, v, sbus, n_pv, n_pq, n_act, n_state }
+    LmCase { ybus, pat, v, sbus, n_pv, n_pq, n_act, n_state }
 }
 
 /// Reduced residual r = [P mis (n_act); Q mis (n_pq)].
@@ -252,8 +250,8 @@ fn mismatch(case: &LmCase, v: &DVector<Complex64>) -> Vec<f64> {
     r
 }
 
-/// J block values via the production v3 kernel (its layout is the graph pattern).
-fn jacobian_at(case: &LmCase, v: &DVector<Complex64>) -> Vec<f64> {
+/// `Vnorm` and `scalc = V·conj(I)` at `v` (the v3 kernel's per-bus inputs).
+fn vnorm_scalc(case: &LmCase, v: &DVector<Complex64>) -> (Vec<Complex64>, Vec<Complex64>) {
     let ibus = &case.ybus * v;
     let scalc: Vec<Complex64> = (0..v.len()).map(|i| v[i] * ibus[i].conj()).collect();
     let vnorm: Vec<Complex64> = (0..v.len())
@@ -262,13 +260,22 @@ fn jacobian_at(case: &LmCase, v: &DVector<Complex64>) -> Vec<f64> {
             if m > 1e-12 { v[i] / m } else { Complex64::new(1.0, 0.0) }
         })
         .collect();
-    let mut j_vals = vec![0.0; case.jp2.nnz_j];
-    fill_jacobian_v3(
+    (vnorm, scalc)
+}
+
+/// J block values via the production v3 kernel (its layout is the graph pattern).
+fn jacobian_at(case: &LmCase, v: &DVector<Complex64>) -> Vec<f64> {
+    let (vnorm, scalc) = vnorm_scalc(case, v);
+    let mut j_vals = vec![0.0; case.pat.graph.nnz];
+    fill_jacobian_v3::<false>(
         &case.ybus,
         v.as_slice(),
         &vnorm,
         &scalc,
-        &case.jp2,
+        &case.pat.graph.col_starts,
+        case.pat.cache.pq_ends(),
+        case.pat.cache.active_ends(),
+        case.pat.cache.diag_ptrs(),
         case.n_pv,
         case.n_pq,
         &mut j_vals,
@@ -308,9 +315,9 @@ fn phase1_fd_gate(fixture: fn() -> (CscMatrix<Complex64>, usize, usize)) {
 
     let j_vals = jacobian_at(&case, &case.v);
     let mut jt_vals = vec![0.0; case.pat.graph.nnz];
-    fill_jt(&case.ybus, &case.pat, &j_vals, &mut jt_vals);
+    fill_jt::<false>(&case.ybus, &case.pat, j_vals.as_ptr(), jt_vals.as_mut_ptr());
     let mut h_vals = vec![0.0; case.pat.graph.nnz];
-    fill_h(&case.ybus, &case.pat, case.v.as_slice(), &r, &mut h_vals);
+    fill_h::<false>(&case.ybus, &case.pat, case.v.as_slice(), &r, &mut h_vals);
 
     let dj = dense_block(&case.pat.graph, &j_vals, n);
     let djt = dense_block(&case.pat.graph, &jt_vals, n);
@@ -380,11 +387,11 @@ fn apply_mu_delta_touches_only_diag_slots() {
     let case = lm_case(fixture_3bus);
     let r = mismatch(&case, &case.v);
     let mut h_vals = vec![0.0; case.pat.graph.nnz];
-    fill_h(&case.ybus, &case.pat, case.v.as_slice(), &r, &mut h_vals);
+    fill_h::<false>(&case.ybus, &case.pat, case.v.as_slice(), &r, &mut h_vals);
 
     let before = h_vals.clone();
     let dmu = 0.125;
-    apply_mu_delta(&case.pat, &mut h_vals, dmu);
+    apply_mu_delta::<false>(&case.pat, &mut h_vals, dmu);
 
     let cache = &case.pat.cache;
     let cs = &case.pat.graph.col_starts;
@@ -402,4 +409,114 @@ fn apply_mu_delta_touches_only_diag_slots() {
             assert_eq!(h_vals[idx], before[idx], "slot {idx} must be untouched");
         }
     }
+}
+
+// ─── Phase 2 gate (doc §6): flat view ───────────────────────────────────────
+//
+// * the global CSC passes solver-format validation (nalgebra constructor);
+// * block view and flat view agree entry-by-entry on the assembled global
+//   matrix, before and after an apply_mu_delta step;
+// * the constant −I block, stamped once, is never rewritten by any fill;
+// * a μ update moves exactly the n_state diagonal slots, nothing else.
+
+use super::flat::{fill_kkt, fill_kkt_flat, FlatLayout};
+
+/// Dense `2n × 2n` expansion of the flat global CSC.
+fn dense_flat(flat: &FlatLayout, vals: &[f64]) -> Vec<f64> {
+    let n2 = 2 * flat.n_state;
+    let mut d = vec![0.0; n2 * n2];
+    for c in 0..n2 {
+        for p in flat.col_offsets[c]..flat.col_offsets[c + 1] {
+            d[flat.row_indices[p] * n2 + c] = vals[p];
+        }
+    }
+    d
+}
+
+/// Dense `2n × 2n` assembly of the block view `[J | H | Jᵀ | −I]`.
+fn dense_block_view(case: &LmCase, vals: &[f64]) -> Vec<f64> {
+    let n = case.n_state;
+    let n2 = 2 * n;
+    let nnz = case.pat.graph.nnz;
+    let mut d = vec![0.0; n2 * n2];
+    let dj = dense_block(&case.pat.graph, &vals[0..nnz], n);
+    let dh = dense_block(&case.pat.graph, &vals[nnz..2 * nnz], n);
+    let djt = dense_block(&case.pat.graph, &vals[2 * nnz..3 * nnz], n);
+    for a in 0..n {
+        for b in 0..n {
+            d[a * n2 + b] = dh[a * n + b]; // top-left: H
+            d[a * n2 + (n + b)] = djt[a * n + b]; // top-right: Jᵀ
+            d[(n + a) * n2 + b] = dj[a * n + b]; // bottom-left: J
+        }
+        d[(n + a) * n2 + (n + a)] = vals[3 * nnz + a]; // bottom-right: −I
+    }
+    d
+}
+
+fn phase2_gate(fixture: fn() -> (CscMatrix<Complex64>, usize, usize)) {
+    let case = lm_case(fixture);
+    let flat = FlatLayout::build(&case.pat);
+    let n2 = 2 * case.n_state;
+    let r = mismatch(&case, &case.v);
+    let (vnorm, scalc) = vnorm_scalc(&case, &case.v);
+
+    // Solver-format validation by the nalgebra constructor (offsets monotone,
+    // row indices sorted per column and in range).
+    let csc = CscMatrix::try_from_csc_data(
+        n2,
+        n2,
+        flat.col_offsets.clone(),
+        flat.row_indices.clone(),
+        vec![0.0; flat.nnz_flat],
+    )
+    .expect("flat CSC fails nalgebra format validation");
+    assert_eq!(csc.nnz(), flat.nnz_flat);
+
+    // Fill both views at the same point.
+    let mut block_vals = vec![0.0; case.pat.nnz_total];
+    fill_kkt(&case.ybus, &case.pat, case.v.as_slice(), &vnorm, &scalc, &r, &mut block_vals);
+
+    let mut flat_vals = vec![0.0; flat.nnz_flat];
+    flat.stamp_neg_i(&mut flat_vals);
+    fill_kkt_flat(&case.ybus, &case.pat, &flat, case.v.as_slice(), &vnorm, &scalc, &r, &mut flat_vals);
+
+    // The −I slots survive the three fills untouched.
+    for c in 0..case.n_state {
+        let p = flat.col_offsets[case.n_state + c + 1] - 1;
+        assert_eq!(flat_vals[p], -1.0, "−I slot of s-column {c} rewritten by a fill");
+    }
+
+    // Entry-by-entry agreement.
+    let db = dense_block_view(&case, &block_vals);
+    let df = dense_flat(&flat, &flat_vals);
+    assert_eq!(db, df, "block/flat views disagree");
+
+    // A μ step in both views still agrees and moves only the diagonal.
+    let dmu = 0.0625;
+    apply_mu_delta::<false>(&case.pat, &mut block_vals[case.pat.h_base..case.pat.jt_base], dmu);
+    apply_mu_delta::<true>(&case.pat, &mut flat_vals, dmu);
+    let db2 = dense_block_view(&case, &block_vals);
+    let df2 = dense_flat(&flat, &flat_vals);
+    assert_eq!(db2, df2, "block/flat views disagree after μ update");
+
+    let mut n_diff = 0;
+    for a in 0..n2 {
+        for b in 0..n2 {
+            if db2[a * n2 + b] != db[a * n2 + b] {
+                assert_eq!(a, b, "μ moved an off-diagonal entry ({a},{b})");
+                n_diff += 1;
+            }
+        }
+    }
+    assert_eq!(n_diff, case.n_state, "μ should move exactly the n_state diagonal slots");
+}
+
+#[test]
+fn phase2_flat_gate_3bus() {
+    phase2_gate(fixture_3bus);
+}
+
+#[test]
+fn phase2_flat_gate_14bus() {
+    phase2_gate(fixture_14bus);
 }

@@ -251,7 +251,7 @@ Deliberate and sanctioned:
 |---|---|---|
 | 0 ✅ | `YbusAnalysisCache` + shared `graph` BlockDesc + `KktPattern::build` (polar) | starts tables match hand-computed values on 3-bus and 14-bus fixtures; `base + col_starts[k] + diag_off[k]` matches a direct search of every diagonal quadrant; `graph` identical to `JacobianPattern2` entry-by-entry |
 | 1 ✅ | `fill_h` (polar, off-diag pass + diag pass) + `fill_jt` kernels | finite-difference checks: J vs FD ≤ 1e-8; H(r) vs residual-weighted J-difference ≤ 1e-8; H exactly symmetric; Jᵀ reconstruction == Jᵀ exactly |
-| 2 | `fill_kkt` dispatcher + flat-view global CSC assembly | global CSC passes solver-format validation; block/flat views agree entry-by-entry |
+| 2 ✅ | `fill_kkt` dispatcher + flat-view global CSC assembly | global CSC passes solver-format validation; block/flat views agree entry-by-entry |
 | 3 | Exact-LM driver (dense factorization prototype) | convergence window reproduced (α ∈ [1.15, 1.2]: only exact LM converges); infeasibility stall beyond nose |
 | 4 | Wall-clock benchmark suite: symbolic fill vs dynamic-assembly reference implementation | assembly time, allocation count, pattern-rebuild count (PV↔PQ switching cost) reported per iteration |
 

@@ -115,12 +115,15 @@ pub fn newton_pf<Solver: Solve>(
     for it in 0..max_iter {
         // let s_calc = v.component_mul(&ibus.map(|e| e.conj()));
 
-        fill_jacobian_v3(
+        fill_jacobian_v3::<false>(
             Ybus,
             v.as_slice(),
             v_norm.as_slice(),
             s_calc.as_slice(),
-            &j_pattern,
+            &j_pattern.j_col_ptrs,
+            &j_pattern.pq_ends,
+            &j_pattern.active_ends,
+            &j_pattern.diag_ptrs,
             npv,
             npq,
             &mut j_values,
