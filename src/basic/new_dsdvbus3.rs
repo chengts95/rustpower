@@ -1,4 +1,3 @@
-use super::new_dsdvbus2::JacobianPattern2;
 use nalgebra_sparse::CscMatrix;
 use num_complex::Complex64;
 
@@ -16,12 +15,15 @@ macro_rules! jslice {
 /// potentially avoiding passing the full 'ibus' vector if not needed elsewhere.
 #[allow(non_snake_case)]
 #[inline(always)]
-pub fn fill_jacobian_v3(
+pub fn fill_jacobian_v3<const FLAT: bool>(
     Ybus: &CscMatrix<Complex64>,
     v: &[Complex64],
     Vnorm: &[Complex64],
     scalc: &[Complex64], // V * conj(I)
-    pattern: &JacobianPattern2,
+    j_col_ptrs: &[usize],
+    pq_ends: &[usize],
+    active_ends: &[usize],
+    diag_ptrs: &[usize],
     npv: usize,
     npq: usize,
     j_values: &mut [f64],
@@ -33,8 +35,8 @@ pub fn fill_jacobian_v3(
 
     for k in 0..npq {
         let y_start = y_col_offsets[k];
-        let pq_end = pattern.pq_ends[k];
-        let active_end = pattern.active_ends[k];
+        let pq_end = pq_ends[k];
+        let active_end = active_ends[k];
 
         let ek = v[k].re;
         let fk = v[k].im;
@@ -58,13 +60,22 @@ pub fn fill_jacobian_v3(
         // let Iim_k = -ik_conj.im;
         let vmag = ek * enk + fk * fnk;
         let inv_vmag = 1.0 / vmag;
-        let diag_offset = pattern.diag_ptrs[k] - y_start;
+        let diag_offset = diag_ptrs[k] - y_start;
         let j_ptr = j_values.as_mut_ptr();
+        let seg_len = active_end + pq_end;
+        let (j11_col, j12_col) = if FLAT {
+            (2 * j_col_ptrs[k] + seg_len, 2 * j_col_ptrs[n_active + k] + seg_len)
+        } else {
+            (j_col_ptrs[k], j_col_ptrs[n_active + k])
+        };
+        let j21_col = j11_col + active_end;
+        let j22_col = j12_col + active_end;
 
-        let out_j11 = jslice!(j_ptr, pattern.j11_starts[k], active_end);
-        let out_j21 = jslice!(j_ptr, pattern.j21_starts[k], pq_end);
-        let out_j12 = jslice!(j_ptr, pattern.j12_starts[k], active_end);
-        let out_j22 = jslice!(j_ptr, pattern.j22_starts[k], pq_end);
+
+        let out_j11 = jslice!(j_ptr, j11_col, active_end);
+        let out_j21 = jslice!(j_ptr, j21_col, pq_end);
+        let out_j12 = jslice!(j_ptr, j12_col, active_end);
+        let out_j22 = jslice!(j_ptr, j22_col, pq_end);
 
         // 第一部分：处理 offset 在 [0, pq_end) 范围内的情况
         // 所有四个输出数组都需要写入
@@ -117,25 +128,29 @@ pub fn fill_jacobian_v3(
 
         // Diagonal corrections
         unsafe {
-            slot!(j_values, pattern.j11_starts[k] + diag_offset) += -qk;
-            slot!(j_values, pattern.j21_starts[k] + diag_offset) += pk;
-            slot!(j_values, pattern.j12_starts[k] + diag_offset) += pk * inv_vmag;
-            slot!(j_values, pattern.j22_starts[k] + diag_offset) += qk * inv_vmag;
+            slot!(j_values, j11_col + diag_offset) += -qk;
+            slot!(j_values, j21_col + diag_offset) += pk;
+            slot!(j_values, j12_col + diag_offset) += pk * inv_vmag;
+            slot!(j_values, j22_col + diag_offset) += qk * inv_vmag;
         }
     }
 
     for k in npq..n_active {
         let y_start = y_col_offsets[k];
-        let pq_end = pattern.pq_ends[k];
-        let active_end = pattern.active_ends[k];
+        let pq_end = pq_ends[k];
+        let active_end = active_ends[k];
         let ek = v[k].re;
         let fk = v[k].im;
         let qk = scalc[k].im;
-        let diag_offset = pattern.diag_ptrs[k] - y_start;
+        let diag_offset = diag_ptrs[k] - y_start;
         let j_ptr = j_values.as_mut_ptr();
+        let seg_len = active_end + pq_end;
+        let j11_col = if FLAT { 2 * j_col_ptrs[k] + seg_len } else { j_col_ptrs[k] };
+        let j21_col = j11_col + active_end;
 
-        let out_j11 = jslice!(j_ptr, pattern.j11_starts[k], active_end);
-        let out_j21 = jslice!(j_ptr, pattern.j21_starts[k], pq_end);
+
+        let out_j11 = jslice!(j_ptr, j11_col, active_end);
+        let out_j21 = jslice!(j_ptr, j21_col, pq_end);
 
         // 第一部分：处理 offset 在 [0, pq_end) 范围内的情况
         // 这里两个数组都需要写入
@@ -177,7 +192,7 @@ pub fn fill_jacobian_v3(
             }
         }
         unsafe {
-            slot!(j_values, pattern.j11_starts[k] + diag_offset) += -qk;
+            slot!(j_values, j11_col + diag_offset) += -qk;
         }
     }
 }

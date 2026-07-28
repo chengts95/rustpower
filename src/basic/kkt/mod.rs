@@ -11,6 +11,10 @@
 //! | 0 | [`cache::YbusAnalysisCache`] | every offset derived from the Ybus CSC |
 //! | 1 | [`block::BlockDesc`] | one block matrix, identified by its `base` |
 //! | — | [`pattern::KktPattern`] | the four blocks of the LM augmented system |
+//! | 2 | [`flat::FlatLayout`] | the flat global CSC triple (direct-solver view) |
+//!
+//! The numeric kernels take a `FLAT` const generic selecting the storage
+//! view; both views share one traversal and one set of formulas (doc §3.3).
 //!
 //! Retention conventions (architecture doc §1.6): the reduced PF/LM system
 //! cuts each Ybus column at `pq_end` / `active_end`; the full-retention OPF
@@ -19,11 +23,13 @@
 
 pub mod block;
 pub mod cache;
+pub mod flat;
 pub mod kernels;
 pub mod pattern;
 
 pub use block::BlockDesc;
 pub use cache::YbusAnalysisCache;
+pub use flat::{fill_kkt, fill_kkt_flat, FlatLayout};
 pub use kernels::{apply_mu_delta, fill_h, fill_jt};
 pub use pattern::KktPattern;
 

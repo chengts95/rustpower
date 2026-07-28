@@ -53,12 +53,15 @@ pub fn run_newton_pf<S: Solve>(
             return Ok((v, it));
         }
 
-        fill_jacobian_v3(
+        fill_jacobian_v3::<false>(
             ybus,
             v.as_slice(),
             v_norm.as_slice(),
             s_calc.as_slice(),
-            &j_pattern,
+            &j_pattern.j_col_ptrs,
+            &j_pattern.pq_ends,
+            &j_pattern.active_ends,
+            &j_pattern.diag_ptrs,
             npv,
             npq,
             &mut j_values,
