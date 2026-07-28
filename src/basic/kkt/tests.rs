@@ -185,3 +185,221 @@ fn rows_sorted_unique_and_reduced_14bus() {
     assert_eq!(pat.d_base, 3 * pat.graph.nnz);
     assert_eq!(pat.nnz_total, pat.d_base + n_state);
 }
+
+// ─── Phase 1 gate (doc §6): fill_h + fill_jt ────────────────────────────────
+//
+// * J vs finite differences ≤ 1e-8 (the existing v3 kernel on the graph layout);
+// * H(r) vs residual-weighted J-differences ≤ 1e-8;
+// * H exactly symmetric;
+// * Jᵀ reconstruction == Jᵀ exactly (bitwise transpose);
+// * apply_mu_delta touches only the aa/vv diagonal slots.
+
+use nalgebra::DVector;
+
+use super::kernels::{apply_mu_delta, fill_h, fill_jt};
+use super::BlockDesc;
+use crate::basic::new_dsdvbus3::fill_jacobian_v3;
+
+struct LmCase {
+    ybus: CscMatrix<Complex64>,
+    pat: KktPattern,
+    jp2: JacobianPattern2,
+    v: DVector<Complex64>,
+    sbus: Vec<Complex64>,
+    n_pv: usize,
+    n_pq: usize,
+    n_act: usize,
+    n_state: usize,
+}
+
+fn lm_case(fixture: fn() -> (CscMatrix<Complex64>, usize, usize)) -> LmCase {
+    let (ybus, n_pv, n_pq) = fixture();
+    let n_act = n_pv + n_pq;
+    let n_state = n_act + n_pq;
+    let pat = KktPattern::build(&ybus, n_pv, n_pq);
+    let jp2 = JacobianPattern2::build_from_permuted(ybus.col_offsets(), ybus.row_indices(), n_pv, n_pq);
+
+    let nb = ybus.ncols();
+    // Reference point (defines the injections) and evaluation point.
+    let v_ref = DVector::from_vec(vec![Complex64::new(1.0, 0.0); nb]);
+    let ibus_ref = &ybus * &v_ref;
+    let sbus: Vec<Complex64> = (0..nb).map(|i| v_ref[i] * ibus_ref[i].conj()).collect();
+
+    let v = DVector::from_vec(
+        (0..nb)
+            .map(|k| {
+                let ang = 0.03 * (1.3 * k as f64).sin() - 0.01 * k as f64;
+                let mag = 1.0 + 0.004 * (2.1 * k as f64).cos();
+                Complex64::from_polar(mag, ang)
+            })
+            .collect(),
+    );
+
+    LmCase { ybus, pat, jp2, v, sbus, n_pv, n_pq, n_act, n_state }
+}
+
+/// Reduced residual r = [P mis (n_act); Q mis (n_pq)].
+fn mismatch(case: &LmCase, v: &DVector<Complex64>) -> Vec<f64> {
+    let ibus = &case.ybus * v;
+    let mut r = vec![0.0; case.n_state];
+    for i in 0..case.n_act {
+        let s = v[i] * ibus[i].conj() - case.sbus[i];
+        r[i] = s.re;
+        if i < case.n_pq {
+            r[case.n_act + i] = s.im;
+        }
+    }
+    r
+}
+
+/// J block values via the production v3 kernel (its layout is the graph pattern).
+fn jacobian_at(case: &LmCase, v: &DVector<Complex64>) -> Vec<f64> {
+    let ibus = &case.ybus * v;
+    let scalc: Vec<Complex64> = (0..v.len()).map(|i| v[i] * ibus[i].conj()).collect();
+    let vnorm: Vec<Complex64> = (0..v.len())
+        .map(|i| {
+            let m = v[i].norm();
+            if m > 1e-12 { v[i] / m } else { Complex64::new(1.0, 0.0) }
+        })
+        .collect();
+    let mut j_vals = vec![0.0; case.jp2.nnz_j];
+    fill_jacobian_v3(
+        &case.ybus,
+        v.as_slice(),
+        &vnorm,
+        &scalc,
+        &case.jp2,
+        case.n_pv,
+        case.n_pq,
+        &mut j_vals,
+    );
+    j_vals
+}
+
+/// Dense `n × n` expansion of a graph-layout block.
+fn dense_block(graph: &BlockDesc, vals: &[f64], n: usize) -> Vec<f64> {
+    let mut d = vec![0.0; n * n];
+    for c in 0..graph.n_cols {
+        for (pos, &row) in graph.col_rows(c).iter().enumerate() {
+            d[row * n + c] = vals[graph.col_range(c).start + pos];
+        }
+    }
+    d
+}
+
+/// Perturb state `c` by exactly `d`: θ states rotate the bus voltage by `d`
+/// radians, |V| states add `d` to the magnitude. Slack is never a state.
+fn perturbed(case: &LmCase, c: usize, d: f64) -> DVector<Complex64> {
+    let mut vp = case.v.clone();
+    if c < case.n_act {
+        vp[c] *= Complex64::from_polar(1.0, d);
+    } else {
+        let k = c - case.n_act;
+        let m = vp[k].norm();
+        vp[k] *= (m + d) / m;
+    }
+    vp
+}
+
+fn phase1_fd_gate(fixture: fn() -> (CscMatrix<Complex64>, usize, usize)) {
+    let case = lm_case(fixture);
+    let n = case.n_state;
+    let r = mismatch(&case, &case.v);
+
+    let j_vals = jacobian_at(&case, &case.v);
+    let mut jt_vals = vec![0.0; case.pat.graph.nnz];
+    fill_jt(&case.ybus, &case.pat, &j_vals, &mut jt_vals);
+    let mut h_vals = vec![0.0; case.pat.graph.nnz];
+    fill_h(&case.ybus, &case.pat, case.v.as_slice(), &r, &mut h_vals);
+
+    let dj = dense_block(&case.pat.graph, &j_vals, n);
+    let djt = dense_block(&case.pat.graph, &jt_vals, n);
+    let dh = dense_block(&case.pat.graph, &h_vals, n);
+
+    let eps = 1e-6;
+    let mut max_j = 0.0f64;
+    let mut max_h = 0.0f64;
+    for c in 0..n {
+        let vp = perturbed(&case, c, eps);
+        let vm = perturbed(&case, c, -eps);
+        let fp = mismatch(&case, &vp);
+        let fm = mismatch(&case, &vm);
+        let jp = dense_block(&case.pat.graph, &jacobian_at(&case, &vp), n);
+        let jm = dense_block(&case.pat.graph, &jacobian_at(&case, &vm), n);
+        for row in 0..n {
+            max_j = max_j.max(((fp[row] - fm[row]) / (2.0 * eps) - dj[row * n + c]).abs());
+        }
+        // H(m,c) = Σ_row r_row · ∂J[row,m]/∂x_c
+        for m in 0..n {
+            let mut hn = 0.0;
+            for row in 0..n {
+                hn += r[row] * (jp[row * n + m] - jm[row * n + m]);
+            }
+            max_h = max_h.max((hn / (2.0 * eps) - dh[m * n + c]).abs());
+        }
+    }
+    assert!(max_j < 1e-8, "J vs FD: {max_j:e}");
+    assert!(max_h < 1e-8, "H vs r-weighted J-difference: {max_h:e}");
+
+    // H exactly symmetric.
+    let mut max_sym = 0.0f64;
+    for a in 0..n {
+        for b in 0..n {
+            max_sym = max_sym.max((dh[a * n + b] - dh[b * n + a]).abs());
+        }
+    }
+    assert!(max_sym < 1e-12, "H not symmetric: {max_sym:e}");
+
+    // Jᵀ is a bitwise transpose of J (values are copied, not recomputed).
+    let mut n_bad = 0;
+    for a in 0..n {
+        for b in 0..n {
+            if djt[a * n + b] != dj[b * n + a] {
+                if n_bad < 10 {
+                    println!("Jᵀ mismatch at ({a},{b}): jt={:e} j={:e}", djt[a * n + b], dj[b * n + a]);
+                }
+                n_bad += 1;
+            }
+        }
+    }
+    assert_eq!(n_bad, 0, "{n_bad} Jᵀ mismatches");
+}
+
+#[test]
+fn phase1_fd_gate_3bus() {
+    phase1_fd_gate(fixture_3bus);
+}
+
+#[test]
+fn phase1_fd_gate_14bus() {
+    phase1_fd_gate(fixture_14bus);
+}
+
+#[test]
+fn apply_mu_delta_touches_only_diag_slots() {
+    let case = lm_case(fixture_3bus);
+    let r = mismatch(&case, &case.v);
+    let mut h_vals = vec![0.0; case.pat.graph.nnz];
+    fill_h(&case.ybus, &case.pat, case.v.as_slice(), &r, &mut h_vals);
+
+    let before = h_vals.clone();
+    let dmu = 0.125;
+    apply_mu_delta(&case.pat, &mut h_vals, dmu);
+
+    let cache = &case.pat.cache;
+    let cs = &case.pat.graph.col_starts;
+    let mut mu_slots = std::collections::HashSet::new();
+    for k in 0..case.n_act {
+        mu_slots.insert(cs[k] + cache.diag_off()[k]);
+        if k < case.n_pq {
+            mu_slots.insert(cs[case.n_act + k] + cache.active_ends()[k] + cache.diag_off()[k]);
+        }
+    }
+    for idx in 0..h_vals.len() {
+        if mu_slots.contains(&idx) {
+            assert_eq!(h_vals[idx], before[idx] + dmu, "slot {idx}");
+        } else {
+            assert_eq!(h_vals[idx], before[idx], "slot {idx} must be untouched");
+        }
+    }
+}

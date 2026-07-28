@@ -19,10 +19,12 @@
 
 pub mod block;
 pub mod cache;
+pub mod kernels;
 pub mod pattern;
 
 pub use block::BlockDesc;
 pub use cache::YbusAnalysisCache;
+pub use kernels::{apply_mu_delta, fill_h, fill_jt};
 pub use pattern::KktPattern;
 
 #[cfg(test)]
