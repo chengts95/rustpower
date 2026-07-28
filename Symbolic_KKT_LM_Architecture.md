@@ -1,13 +1,15 @@
 # Symbolic-Pattern KKT/LM Assembly Architecture
 
 **Design document — from mathematical principles to top-level implementation logic**
-Scope: second-order power flow (Chebyshev two-step) and exact Levenberg–Marquardt with assembled Hessian, sharing one Ybus-derived symbolic pattern. Parallelism is out of scope for this document; the architecture is designed so that it becomes a later addition without structural changes.
+Scope: exact Levenberg–Marquardt with an assembled polar Hessian, sharing one Ybus-derived symbolic pattern with the production Jacobian (`JacobianPattern2`) and the OPF KKT path — the LM (1,1) block and the OPF interior-point (1,1) block are the same machine. The Chebyshev two-step is **out of scope**: its exactness is a rectangular-coordinate property (Section 1.2); if ever revived, it enters through a coordinate transform, not this pattern. Parallelism is out of scope for this document; the architecture is designed so that it becomes a later addition without structural changes.
 
 ---
 
 ## 1. Mathematical Foundations
 
-### 1.1 Quadratic structure in rectangular coordinates
+### 1.1 Quadratic structure in rectangular coordinates (background)
+
+*This subsection motivates the (out-of-scope) rect Chebyshev path and the `ext_ref` prototype. The LM path itself is polar (Section 1.4); only consequence 3 — every block lives on the Ybus graph — is load-bearing here.*
 
 Let the complex bus voltage be `v = e + i f` and the network admittance matrix `Y = G + iB`. The complex power injection is
 
@@ -32,7 +34,9 @@ F(v + δ) = F(v) + J(v)·δ + q(δ),    q(δ) = δ ⊙ conj(Y·δ)
 
 3. The sparsity graph of every Hessian equals the Ybus graph (1-hop neighborhood per bus).
 
-### 1.2 Second-order Newton (Chebyshev two-step)
+### 1.2 Second-order Newton (Chebyshev two-step) — out of scope
+
+**Dropped.** The exact truncation below is a rectangular-coordinate property: in polar form `F` contains `sin/cos` and is not quadratic, so `q(δ₁)` ceases to be the exact residual and the cubic-convergence monitor dies. If a second-order step is ever wanted, the plan is a coordinate transform into rect, not a second pattern family. The prototype remains in `ext_ref/second_order_pf`; its only surviving role here is the numerical evidence that exact LM dominates in the ill-conditioned window (Section 1.3).
 
 ```
 J·δ₁ = −F(v)          one LU factorization
@@ -40,8 +44,6 @@ q  = q(δ₁)            one Ybus SpMV + elementwise product (stencil, matrix ne
 J·δ₂ = −q             reuse of the same factorization (back-substitution only)
 v ← v + δ₁ + δ₂
 ```
-
-Local cubic convergence: `‖v⁺ − v*‖ = O(‖v − v*‖³)`. The vector `q(δ₁)` is exactly the residual after a pure Newton step — it doubles as a zero-cost convergence monitor. Verified: exact-residual identity holds to machine precision (≈ 6e-15).
 
 ### 1.3 Exact Levenberg–Marquardt
 
@@ -248,11 +250,10 @@ Deliberate and sanctioned:
 | Phase | Deliverable | Gate |
 |---|---|---|
 | 0 ✅ | `YbusAnalysisCache` + shared `graph` BlockDesc + `KktPattern::build` (polar) | starts tables match hand-computed values on 3-bus and 14-bus fixtures; `base + col_starts[k] + diag_off[k]` matches a direct search of every diagonal quadrant; `graph` identical to `JacobianPattern2` entry-by-entry |
-| 1 | `fill_h` (polar, off-diag pass + diag pass) + `fill_jt` kernels | finite-difference checks: J vs FD ≤ 1e-8; H(r) vs residual-weighted J-difference ≤ 1e-8; H exactly symmetric; Jᵀ reconstruction == Jᵀ exactly |
+| 1 ✅ | `fill_h` (polar, off-diag pass + diag pass) + `fill_jt` kernels | finite-difference checks: J vs FD ≤ 1e-8; H(r) vs residual-weighted J-difference ≤ 1e-8; H exactly symmetric; Jᵀ reconstruction == Jᵀ exactly |
 | 2 | `fill_kkt` dispatcher + flat-view global CSC assembly | global CSC passes solver-format validation; block/flat views agree entry-by-entry |
-| 3 | Chebyshev two-step driver on the new kernels | cubic convergence reproduced (e_{k+1}/e_k³ ≈ const); exact-residual identity ≤ 1e-13 |
-| 4 | Exact-LM driver (dense factorization prototype) | convergence window reproduced (α ∈ [1.15, 1.2]: only exact LM converges); infeasibility stall beyond nose |
-| 5 | Wall-clock benchmark suite: symbolic fill vs dynamic-assembly reference implementation | assembly time, allocation count, pattern-rebuild count (PV↔PQ switching cost) reported per iteration |
+| 3 | Exact-LM driver (dense factorization prototype) | convergence window reproduced (α ∈ [1.15, 1.2]: only exact LM converges); infeasibility stall beyond nose |
+| 4 | Wall-clock benchmark suite: symbolic fill vs dynamic-assembly reference implementation | assembly time, allocation count, pattern-rebuild count (PV↔PQ switching cost) reported per iteration |
 
 Each gate is a hard stop: no phase starts with the previous gate red.
 
@@ -262,12 +263,13 @@ Each gate is a hard stop: no phase starts with the previous gate red.
 
 1. **Finite-difference harness** for every kernel against the analytic mismatch function (J) and against residual-weighted J-differences (H).
 2. **Structural assertions**: exact symmetry of `H(r)`; exact transpose relation of `Jᵀ`; write-once coverage audit (debug-only counter instrumentation).
-3. **Algorithmic oracles**: cubic convergence ratio; exact-residual identity `F(v+δ₁) = q(δ₁)`; LM convergence window table.
+3. **Algorithmic oracles**: LM convergence window table (α ∈ [1.15, 1.2]: only exact LM converges); least-squares stall beyond the nose (infeasibility diagnostic).
 
 ---
 
 ## 8. Parked Items (post-paper)
 
+- Chebyshev two-step (rect) via coordinate transform — prototype in `ext_ref/second_order_pf`; the exact-residual monitor does not survive polar conversion (Section 1.2).
 - Craig/CG matrix-free solve of the augmented system (research question: iteration counts on power-grid graphs, preconditioner choice).
 - Augmented 1-hop LDLᵀ path with constrained ordering (s-variables last).
 - μ strategy refinement (Nielsen update, Gershgorin lower bound from `H(r)` diagonal blocks).
