@@ -30,3 +30,6 @@ __pycache__/
 
 # Local reproductions for GitHub issues
 /issue solving/
+
+# Python package metadata
+/src/rustpower.egg-info/
