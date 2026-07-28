@@ -207,23 +207,32 @@ pub fn fill_jt(
     let jt = jt_vals.as_mut_ptr();
 
     for i in 0..n_act {
+        // 源 θ 列 i 自己的偏移，循环开头一次算好。
         let (pq_end, active_end) = (pq_ends[i], active_ends[i]);
+        let src_theta = cs[i];
         for t in 0..active_end {
             let p = y_cp[i] + t;
             let k = y_ri[p];
             let tm = y_trans[p] - y_cp[k];
+            // 目标 θ 列 k 自己的基址（graph 的行都是 active，k < n_act 恒成立）。
+            let dst_theta = cs[k];
             unsafe {
-                *jt.add(cs[k] + tm) = *j.add(cs[i] + t);
+                *jt.add(dst_theta + tm) = *j.add(src_theta + t);
                 if t < pq_end {
-                    *jt.add(cs[n_act + k] + tm) = *j.add(cs[i] + active_end + t);
+                    // 行 k 是 PQ：目标 Q 列 n_act+k 才存在，在这里算它自己的基址。
+                    let dst_q = cs[n_act + k];
+                    *jt.add(dst_q + tm) = *j.add(src_theta + active_end + t);
                 }
                 if i < npq {
-                    // Target is column k's |V| segment: its start is column
-                    // k's own θ-segment length, not the loop column's.
-                    *jt.add(cs[k] + active_ends[k] + tm) = *j.add(cs[n_act + i] + t);
+                    // 源 |V| 列 n_act+i 只为 PQ 母线存在，在这里算它自己的基址；
+                    // 目标 |V| 段起点是列 k 自己的 θ 段长。
+                    let src_vmag = cs[n_act + i];
+                    let dst_vmag = active_ends[k];
+                    *jt.add(dst_theta + dst_vmag + tm) = *j.add(src_vmag + t);
                     if t < pq_end {
-                        *jt.add(cs[n_act + k] + active_ends[k] + tm) =
-                            *j.add(cs[n_act + i] + active_end + t);
+                        let dst_q = cs[n_act + k];
+                        *jt.add(dst_q + dst_vmag + tm) =
+                            *j.add(src_vmag + active_end + t);
                     }
                 }
             }
