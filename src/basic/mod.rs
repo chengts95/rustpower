@@ -8,6 +8,7 @@ pub mod kkt;
 pub(crate) mod new_dsdvbus; // kept only for test_jacobian_pattern
 pub(crate) mod new_dsdvbus2;
 pub(crate) mod new_dsdvbus3;
+pub(crate) mod new_dsdvbus4;
 pub mod newtonpf;
 pub(crate) mod pf_old_impl;
 
