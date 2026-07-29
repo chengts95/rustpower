@@ -24,8 +24,10 @@
 pub mod block;
 pub mod cache;
 pub mod flat;
+pub mod gn_flat;
 pub mod kernels;
 pub mod pattern;
+pub mod residual;
 
 pub use block::BlockDesc;
 pub use cache::YbusAnalysisCache;
