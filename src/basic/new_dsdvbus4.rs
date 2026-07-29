@@ -524,7 +524,7 @@ mod tests {
         let (v, vnorm, scalc) = eval_inputs(nb, ybus);
 
         let mut j_v3 = vec![0.0; pat.nnz_j];
-        fill_jacobian_v3(ybus, &v, &vnorm, &scalc, &pat, npv, npq, &mut j_v3);
+        fill_jacobian_v3::<false>(ybus, &v, &vnorm, &scalc, &pat.j_col_ptrs, &pat.pq_ends, &pat.active_ends, &pat.diag_ptrs, npv, npq, &mut j_v3);
         let mut j_v4 = vec![0.0; pat.nnz_j];
         fill_v4_block(ybus, &pat, &v, &vnorm, &scalc, npv, npq, &mut j_v4);
 
@@ -583,7 +583,7 @@ mod tests {
             .collect();
 
         let mut j_v3 = vec![0.0; pat.nnz_j];
-        fill_jacobian_v3(ybus, &v, &vnorm, &scalc, &pat, npv, npq, &mut j_v3);
+        fill_jacobian_v3::<false>(ybus, &v, &vnorm, &scalc, &pat.j_col_ptrs, &pat.pq_ends, &pat.active_ends, &pat.diag_ptrs, npv, npq, &mut j_v3);
         let mut j_v4 = vec![0.0; pat.nnz_j];
         fill_v4_block(ybus, &pat, &v, &vnorm, &scalc, npv, npq, &mut j_v4);
 
@@ -621,7 +621,7 @@ mod tests {
         let mut j = vec![0.0; pat.nnz_j];
         println!("--- IEEE118 Jacobian fill: V3 (stored tables) vs V4 (inline) ---");
         let avg_v3 = timeit("V3 fill_jacobian_v3", repeats, | |
-            fill_jacobian_v3(ybus, &v, &vnorm, &scalc, &pat, npv, npq, &mut j)
+            fill_jacobian_v3::<false>(ybus, &v, &vnorm, &scalc, &pat.j_col_ptrs, &pat.pq_ends, &pat.active_ends, &pat.diag_ptrs, npv, npq, &mut j)
         );
         let avg_v4 = timeit("V4 fill_jacobian_v4", repeats, | |
             fill_v4_block(ybus, &pat, &v, &vnorm, &scalc, npv, npq, &mut j)
