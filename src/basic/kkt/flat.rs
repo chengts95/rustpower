@@ -23,7 +23,7 @@ use nalgebra_sparse::CscMatrix;
 
 use super::kernels::{fill_h, fill_jt};
 use super::pattern::KktPattern;
-use crate::basic::new_dsdvbus3::fill_jacobian_v3;
+use crate::basic::new_dsdvbus4::fill_jacobian_v4;
 
 /// The global CSC of the LM augmented system, symbolic part.
 pub struct FlatLayout {
@@ -103,7 +103,7 @@ pub fn fill_kkt(
     let (h_vals, rest) = rest.split_at_mut(nnz);
     let (jt_vals, d_vals) = rest.split_at_mut(nnz);
 
-    fill_jacobian_v3::<false>(
+    fill_jacobian_v4::<false>(
         ybus, v, vnorm, scalc,
         cs, cache.pq_ends(), cache.active_ends(), cache.diag_ptrs(),
         npv, npq, j_vals,
@@ -134,7 +134,7 @@ pub fn fill_kkt_flat(
     let (npq, npv) = (cache.n_pq(), cache.n_active() - cache.n_pq());
     let cs = &pat.graph.col_starts;
 
-    fill_jacobian_v3::<true>(
+    fill_jacobian_v4::<true>(
         ybus, v, vnorm, scalc,
         cs, cache.pq_ends(), cache.active_ends(), cache.diag_ptrs(),
         npv, npq, values,
