@@ -198,7 +198,7 @@ use nalgebra::DVector;
 
 use super::kernels::{apply_mu_delta, fill_h, fill_jt};
 use super::BlockDesc;
-use crate::basic::new_dsdvbus3::fill_jacobian_v3;
+use crate::basic::new_dsdvbus4::fill_jacobian_v4;
 
 struct LmCase {
     ybus: CscMatrix<Complex64>,
@@ -263,11 +263,11 @@ fn vnorm_scalc(case: &LmCase, v: &DVector<Complex64>) -> (Vec<Complex64>, Vec<Co
     (vnorm, scalc)
 }
 
-/// J block values via the production v3 kernel (its layout is the graph pattern).
+/// J block values via the v4 kernel (its block view is the graph pattern).
 fn jacobian_at(case: &LmCase, v: &DVector<Complex64>) -> Vec<f64> {
     let (vnorm, scalc) = vnorm_scalc(case, v);
     let mut j_vals = vec![0.0; case.pat.graph.nnz];
-    fill_jacobian_v3::<false>(
+    fill_jacobian_v4::<false>(
         &case.ybus,
         v.as_slice(),
         &vnorm,
@@ -380,6 +380,83 @@ fn phase1_fd_gate_3bus() {
 #[test]
 fn phase1_fd_gate_14bus() {
     phase1_fd_gate(fixture_14bus);
+}
+
+/// H == the OPF Hessian machine: `fill_h` (folded complex λ, one pass) must
+/// match the production OPF assembly path (`opf_hessfcn`'s gbus part:
+/// two `d2Sbus_dV2` calls with real λp / λq, then Re(Gp) + Im(Gq)) on the
+/// reduced PF state set. This is the identity that lets the OPF KKT reuse
+/// this machine with KKT multipliers in place of residuals.
+fn phase1_h_matches_opf_d2sbus(fixture: fn() -> (CscMatrix<Complex64>, usize, usize)) {
+    use crate::basic::d2sbus_dv2::d2Sbus_dV2;
+
+    let case = lm_case(fixture);
+    let (nb, n_act, npq, n) = (case.ybus.ncols(), case.n_act, case.n_pq, case.n_state);
+    let r = mismatch(&case, &case.v);
+
+    let mut h_vals = vec![0.0; case.pat.graph.nnz];
+    fill_h::<false>(&case.ybus, &case.pat, case.v.as_slice(), &r, &mut h_vals);
+    let dh = dense_block(&case.pat.graph, &h_vals, n);
+
+    // OPF-style reference: real λp / λq, two calls, Re(Gp) + Im(Gq).
+    let lam_p = DVector::from_iterator(
+        nb,
+        (0..nb).map(|k| Complex64::new(if k < n_act { r[k] } else { 0.0 }, 0.0)),
+    );
+    let lam_q = DVector::from_iterator(
+        nb,
+        (0..nb).map(|k| Complex64::new(if k < npq { r[n_act + k] } else { 0.0 }, 0.0)),
+    );
+    let (gpaa, gpav, gpva, gpvv) = d2Sbus_dV2(&case.ybus, &case.v, &lam_p);
+    let (gqaa, gqav, gqva, gqvv) = d2Sbus_dV2(&case.ybus, &case.v, &lam_q);
+
+    // Dense nb×nb real quadrants: d2G_xy[i][k] = Re(Gp_xy[i,k]) + Im(Gq_xy[i,k]).
+    let quad = |gp: &CscMatrix<Complex64>, gq: &CscMatrix<Complex64>| {
+        let mut d = vec![0.0f64; nb * nb];
+        for c in 0..nb {
+            for p in gp.col_offsets()[c]..gp.col_offsets()[c + 1] {
+                let i = gp.row_indices()[p];
+                d[i * nb + c] = gp.values()[p].re + gq.values()[p].im;
+            }
+        }
+        d
+    };
+    let (aa, av, va, vv) = (quad(&gpaa, &gqaa), quad(&gpav, &gqav), quad(&gpva, &gqva), quad(&gpvv, &gqvv));
+
+    // Map onto the reduced states: θ_i ↔ bus i (i < n_act); |V|_i ↔ bus i (i < npq).
+    let mut href = vec![0.0f64; n * n];
+    for k in 0..n_act {
+        for i in 0..n_act {
+            href[i * n + k] = aa[i * nb + k];
+            if i < npq {
+                href[(n_act + i) * n + k] = va[i * nb + k];
+            }
+            if k < npq {
+                href[i * n + n_act + k] = av[i * nb + k];
+                if i < npq {
+                    href[(n_act + i) * n + n_act + k] = vv[i * nb + k];
+                }
+            }
+        }
+    }
+
+    let mut max_d = 0.0f64;
+    for a in 0..n {
+        for b in 0..n {
+            max_d = max_d.max((dh[a * n + b] - href[a * n + b]).abs());
+        }
+    }
+    assert!(max_d < 1e-9, "fill_h vs OPF d2Sbus_dV2 assembly: {max_d:e}");
+}
+
+#[test]
+fn phase1_h_matches_opf_d2sbus_3bus() {
+    phase1_h_matches_opf_d2sbus(fixture_3bus);
+}
+
+#[test]
+fn phase1_h_matches_opf_d2sbus_14bus() {
+    phase1_h_matches_opf_d2sbus(fixture_14bus);
 }
 
 #[test]
