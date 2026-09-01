@@ -335,6 +335,60 @@ pub(crate) mod tests {
         driver.solve_lm(&ybus, &mut solver, &mut v, exact, 1e-10, 200)
     }
 
+    /// 可解性边界探针：从 α=1.0 的解出发热启动连续延拓（Δα=0.005），
+    /// 找到解真正消失的 α*。区分"病态（解存在但难收敛）"与"无解（过了
+    /// 鞍结分岔）"——四家撞同一堵墙只有在后者情况下才是正确行为。
+    #[test]
+    fn phase3_synthetic14_solvability_probe() {
+        let (ybus, n_pv, n_pq, v_star, s_spec) = ill_conditioned_case();
+        let n_act = n_pv + n_pq;
+        // 起点：α=1.0 平启动可解。
+        let mut v = flat_start(&v_star, n_act, n_pq);
+        let mut alpha = 1.0f64;
+        let step = 0.005f64;
+        println!("连续延拓（热启动 NR，Δα={step}）:");
+        loop {
+            let sbus = nalgebra::DVector::from_vec(
+                s_spec.iter().map(|s| s * (alpha + step)).collect::<Vec<_>>(),
+            );
+            let v_init = nalgebra::DVector::from_vec(v.clone());
+            let mut s = KLUSolver::default();
+            let r = crate::basic::newtonpf::newton_pf(
+                &ybus, &sbus, &v_init, n_pv, n_pq, Some(1e-10), Some(50), &mut s,
+            );
+            match r {
+                Ok((v_new, it)) => {
+                    alpha += step;
+                    v = v_new.iter().copied().collect();
+                    println!("  α={alpha:6.3} 可解 (it={it})");
+                }
+                Err(_) => {
+                    println!("  α={:.3} 热启动 NR 也失败 → 可解性边界 α* ∈ ({alpha:.3}, {:.3})",
+                        alpha + step, alpha + step);
+                    break;
+                }
+            }
+            if alpha > 1.5 {
+                println!("  延拓到 1.5 仍未断——边界不在此区间");
+                break;
+            }
+        }
+        // 边界内侧最后一个可解 α 上，四家平启动对照：这才是"病态"窗口。
+        let sbus = nalgebra::DVector::from_vec(s_spec.iter().map(|s| s * alpha).collect::<Vec<_>>());
+        let v_flat = nalgebra::DVector::from_vec(flat_start(&v_star, n_act, n_pq));
+        let mut s1 = KLUSolver::default();
+        let nr = crate::basic::newtonpf::newton_pf(&ybus, &sbus, &v_flat, n_pv, n_pq, Some(1e-10), Some(100), &mut s1);
+        let mut s2 = KLUSolver::default();
+        let iw = crate::basic::iwamoto::newton_pf_iwamoto(&ybus, &sbus, &v_flat, n_pv, n_pq, Some(1e-10), Some(100), &mut s2);
+        let gn = run_alpha(alpha, false);
+        let ex = run_alpha(alpha, true);
+        println!("边界内侧 α={alpha:.3} 平启动: NR={} Iwamoto={} GN-LM={} exact-LM={}",
+            if nr.is_ok() { "✓".into() } else { format!("✗({})", nr.unwrap_err().2) },
+            if iw.is_ok() { "✓".into() } else { format!("✗({})", iw.unwrap_err().2) },
+            if gn.converged { "✓".into() } else { format!("✗({})", gn.iterations) },
+            if ex.converged { "✓".into() } else { format!("✗({})", ex.iterations) });
+    }
+
     /// 同一病态 14 节点上跑生产 newton_pf（用户点名要的对照）。
     #[test]
     fn phase3_synthetic14_production_nr() {
@@ -351,6 +405,250 @@ pub(crate) mod tests {
                 Ok((_, it)) => println!("α={alpha:4.2} | {it:3}"),
                 Err((_, _, it)) => println!("α={alpha:4.2} |   x (it={it})"),
             }
+        }
+    }
+
+    /// 病态14 四家对照：NR / Iwamoto 最优乘子 / GN-LM / exact-LM，
+    /// α 扫描到各自撞墙（同一平起点、同一 KLU、同一 1e-10 容差）。
+    #[test]
+    fn phase3_synthetic14_four_way_sweep() {
+        println!("病态14 α 扫描: [it 或 x=不收敛]");
+        println!("α      |  NR  | Iwamoto | GN-LM | exact-LM");
+        for &alpha in &[1.0f64, 1.05, 1.1, 1.12, 1.14, 1.15, 1.16, 1.2] {
+            let (ybus, n_pv, n_pq, v_star, s_spec) = ill_conditioned_case();
+            let n_act = n_pv + n_pq;
+            let sbus = nalgebra::DVector::from_vec(
+                s_spec.iter().map(|s| s * alpha).collect::<Vec<_>>(),
+            );
+            let v_init = nalgebra::DVector::from_vec(flat_start(&v_star, n_act, n_pq));
+
+            let mut s1 = KLUSolver::default();
+            let nr = crate::basic::newtonpf::newton_pf(
+                &ybus, &sbus, &v_init, n_pv, n_pq, Some(1e-10), Some(100), &mut s1,
+            );
+            let mut s2 = KLUSolver::default();
+            let iw = crate::basic::iwamoto::newton_pf_iwamoto(
+                &ybus, &sbus, &v_init, n_pv, n_pq, Some(1e-10), Some(100), &mut s2,
+            );
+            let gn = run_alpha(alpha, false);
+            let ex = run_alpha(alpha, true);
+
+            let fr = |r: &Result<(nalgebra::DVector<Complex64>, usize), (String, nalgebra::DVector<Complex64>, usize)>| {
+                match r {
+                    Ok((_, it)) => format!("{it:4}"),
+                    Err((_, _, it)) => format!("x({it:2})"),
+                }
+            };
+            let fl = |r: &LmResult| {
+                if r.converged { format!("{:<4}", r.iterations) } else { format!("x({:2})", r.iterations) }
+            };
+            println!(
+                "α={alpha:5.2} | {} | {:7} | {:5} | {}",
+                fr(&nr),
+                fr(&iw),
+                fl(&gn),
+                fl(&ex)
+            );
+        }
+    }
+
+    /// 无解区（α > α*≈1.137）的最小二乘对照：LM 给出的是 f=½‖r‖² 的极小
+    /// 点——"离可行域最近的运行点"，有物理意义、可参考对比。非零残差区
+    /// 正是 H 理论上有收益的岗位（H 的收益 ⇔ 最优处残差非零），此处实测。
+    /// 对照 NR/Iwamoto 烧满 100 步后的残差水平（它们不停认，残差无意义）。
+    #[test]
+    fn phase3_synthetic14_least_squares_beyond_wall() {
+        println!("无解区最小二乘对照（病态14，α*≈1.137）:");
+        println!("α     | GN-LM: it,  res∞,     f      | exact-LM: it, res∞,     f      | 两点 max|ΔV| | NR 100步后 res∞");
+        for &alpha in &[1.14f64, 1.15, 1.16, 1.2, 1.3] {
+            let (ybus, n_pv, n_pq, v_star, s_spec) = ill_conditioned_case();
+            let n_act = n_pv + n_pq;
+            let n = n_act + n_pq;
+            let sbus: Vec<Complex64> = s_spec.iter().map(|s| s * alpha).collect();
+            let nb = ybus.ncols();
+
+            let mut ls = Vec::new();
+            for exact in [false, true] {
+                let mut driver = LmDriver::build(&ybus, n_pv, n_pq, sbus.clone());
+                let mut solver = KLUSolver::default();
+                let mut v = flat_start(&v_star, n_act, n_pq);
+                let r = driver.solve_lm(&ybus, &mut solver, &mut v, exact, 1e-10, 200);
+                assert!(!r.converged, "α={alpha} 应无解");
+                let mut ibus = vec![Complex64::new(0.0, 0.0); nb];
+                let mut rr = vec![0.0; n];
+                let (_, f) = residual(&ybus, &sbus, &mut ibus, n_act, n_pq, &v, &mut rr);
+                ls.push((r, v, f));
+            }
+            // NR 烧满 100 步后的残差水平（对照"不认停"的代价）。
+            let sbus_d = nalgebra::DVector::from_vec(sbus.clone());
+            let v_flat = nalgebra::DVector::from_vec(flat_start(&v_star, n_act, n_pq));
+            let mut s1 = KLUSolver::default();
+            let nr = crate::basic::newtonpf::newton_pf(
+                &ybus, &sbus_d, &v_flat, n_pv, n_pq, Some(1e-10), Some(100), &mut s1,
+            );
+            let nr_res = match &nr {
+                Ok(_) => f64::NAN,
+                Err((_, v_bad, _)) => {
+                    let mut ibus = vec![Complex64::new(0.0, 0.0); nb];
+                    let mut rr = vec![0.0; n];
+                    let vv: Vec<Complex64> = v_bad.iter().copied().collect();
+                    residual(&ybus, &sbus, &mut ibus, n_act, n_pq, &vv, &mut rr).0
+                }
+            };
+
+            let (g, e) = (&ls[0], &ls[1]);
+            let dv = g.1.iter().zip(e.1.iter())
+                .fold(0.0f64, |m, (a, b)| m.max((a - b).norm()));
+            println!(
+                "α={alpha:4.2} | {:3}, {:.2e}, {:.4e} | {:3},  {:.2e}, {:.4e} | {dv:.3e} | {nr_res:.2e}",
+                g.0.iterations, g.0.res_inf, g.2,
+                e.0.iterations, e.0.res_inf, e.2,
+            );
+        }
+    }
+
+    /// 无解区最小二乘 + 性能实测：IEEE39（墙 α*∈(2.10,2.15)）与
+    /// PEGASE 9241（真实大系统，墙未知，先探）。GN-LM vs exact-LM：
+    /// 迭代数、墙钟时间、最小二乘点一致性（f、ΔV）。release 下跑：
+    /// `cargo test --release --features klu infeasible_ls_perf -- --nocapture`
+    #[test]
+    fn phase4_infeasible_ls_perf_real_systems() {
+        use crate::basic::ecs::elements::PPNetwork;
+        use crate::basic::ecs::network::{DataOps, PowerFlow, PowerGrid};
+        use crate::basic::ecs::powerflow::systems::PowerFlowMat;
+        use crate::io::pandapower::{Network, load_csv_zip};
+        use std::time::Instant;
+
+        let load_zip = |name: &str| -> PowerFlowMat {
+            let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+            let net: Network = load_csv_zip(&format!("{dir}/cases/{name}/data.zip")).unwrap();
+            let mut pf = PowerGrid::default();
+            pf.world_mut().insert_resource(PPNetwork(net));
+            pf.init_pf_net();
+            pf.world().get_resource::<PowerFlowMat>().unwrap().clone()
+        };
+
+        // (系统, 起始电压用生产平启动 v_bus_init)
+        for (name, mat) in [("IEEE39", load_ieee39_mat()), ("PEGASE9241", load_zip("pegase9241"))] {
+            let ybus = &mat.y_bus;
+            let (npv, npq) = (mat.npv, mat.npq);
+            let n_act = npv + npq;
+            let n = n_act + npq;
+            let nb = ybus.ncols();
+            println!("=== {name}: nb={nb} npv={npv} npq={npq} 状态数 n={n} ===");
+
+            // 1) NR 探墙：α 逐步上调直到失败。
+            let s_base: Vec<Complex64> = mat.s_bus.iter().copied().collect();
+            let v0: Vec<Complex64> = mat.v_bus_init.iter().copied().collect();
+            let mut alpha = 1.0f64;
+            loop {
+                let sbus = nalgebra::DVector::from_vec(s_base.iter().map(|s| s * alpha).collect::<Vec<_>>());
+                let v_init = nalgebra::DVector::from_vec(v0.clone());
+                let mut s = KLUSolver::default();
+                let t = Instant::now();
+                let r = crate::basic::newtonpf::newton_pf(
+                    ybus, &sbus, &v_init, npv, npq, Some(1e-8), Some(100), &mut s,
+                );
+                match r {
+                    Ok((_, it)) => println!("  NR α={alpha:5.2} ✓ it={it:2} t={:?}", t.elapsed()),
+                    Err(_) => {
+                        println!("  NR α={alpha:5.2} ✗ → 墙在 ({:.2}, {alpha:.2})", alpha - 0.05);
+                        break;
+                    }
+                }
+                alpha += 0.05;
+                if alpha > 3.0 {
+                    println!("  α>3.0 仍可解，此系统此协议下无墙");
+                    break;
+                }
+            }
+
+            // 2) 无解区最小二乘 + 性能对照（墙外三个点）。
+            println!("  α     | GN-LM: it,   t,     f | exact-LM: it,   t,     f | 两点 max|ΔV|");
+            for k in 0..3 {
+                let a = alpha + 0.05 * k as f64;
+                let sbus: Vec<Complex64> = s_base.iter().map(|s| s * a).collect();
+                let mut pts = Vec::new();
+                for exact in [false, true] {
+                    let mut driver = LmDriver::build(ybus, npv, npq, sbus.clone());
+                    let mut solver = KLUSolver::default();
+                    let mut v = v0.clone();
+                    let t = Instant::now();
+                    let r = driver.solve_lm(ybus, &mut solver, &mut v, exact, 1e-8, 200);
+                    let dt = t.elapsed();
+                    let mut ibus = vec![Complex64::new(0.0, 0.0); nb];
+                    let mut rr = vec![0.0; n];
+                    let (_, f) = residual(ybus, &sbus, &mut ibus, n_act, npq, &v, &mut rr);
+                    pts.push((r, v, f, dt));
+                }
+                let (g, e) = (&pts[0], &pts[1]);
+                let dv = g.1.iter().zip(e.1.iter())
+                    .fold(0.0f64, |m, (x, y)| m.max((x - y).norm()));
+                println!(
+                    "  α={a:5.2} | {:3} {:7.?} {:.3e} | {:3}  {:7.?} {:.3e} | {dv:.2e}{}",
+                    g.0.iterations, g.3, g.2,
+                    e.0.iterations, e.3, e.2,
+                    if g.0.converged || e.0.converged { "  (收敛!)" } else { "" },
+                );
+            }
+        }
+    }
+
+    /// 稳态（可解区）可算性验证：PEGASE 9241 在 α=1.0/1.1（NR 确认可解）
+    /// 上跑 GN-LM 与 exact-LM——能不能算、几步、多快、解与 NR 对不对得上。
+    #[test]
+    fn phase4_steady_state_pegase9241() {
+        use crate::basic::ecs::elements::PPNetwork;
+        use crate::basic::ecs::network::{DataOps, PowerFlow, PowerGrid};
+        use crate::basic::ecs::powerflow::systems::PowerFlowMat;
+        use crate::io::pandapower::{Network, load_csv_zip};
+        use std::time::Instant;
+
+        let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        let net: Network = load_csv_zip(&format!("{dir}/cases/pegase9241/data.zip")).unwrap();
+        let mut pf = PowerGrid::default();
+        pf.world_mut().insert_resource(PPNetwork(net));
+        pf.init_pf_net();
+        let mat = pf.world().get_resource::<PowerFlowMat>().unwrap().clone();
+
+        let ybus = &mat.y_bus;
+        let (npv, npq) = (mat.npv, mat.npq);
+        let n_act = npv + npq;
+        let nb = ybus.ncols();
+        println!("PEGASE9241 稳态: nb={nb} npv={npv} npq={npq} n={}", n_act + npq);
+        println!("α    | NR: it, t | GN-LM: it, t, ΔV | exact-LM: it, t, ΔV");
+
+        for &alpha in &[1.0f64, 1.1] {
+            let sbus: Vec<Complex64> = mat.s_bus.iter().map(|s| s * alpha).collect();
+            let v0: Vec<Complex64> = mat.v_bus_init.iter().copied().collect();
+            let sbus_d = nalgebra::DVector::from_vec(sbus.clone());
+            let v_init = nalgebra::DVector::from_vec(v0.clone());
+
+            let mut s0 = KLUSolver::default();
+            let t = Instant::now();
+            let nr = crate::basic::newtonpf::newton_pf(
+                ybus, &sbus_d, &v_init, npv, npq, Some(1e-8), Some(100), &mut s0,
+            );
+            let t_nr = t.elapsed();
+            let (v_nr, it_nr) = nr.expect("NR 在可解区必须收敛");
+
+            let mut line = format!("α={alpha:4.2} | {it_nr:2} {:7.?}", t_nr);
+            for exact in [false, true] {
+                let mut driver = LmDriver::build(ybus, npv, npq, sbus.clone());
+                let mut solver = KLUSolver::default();
+                let mut v = v0.clone();
+                let t = Instant::now();
+                let r = driver.solve_lm(ybus, &mut solver, &mut v, exact, 1e-8, 100);
+                let dt = t.elapsed();
+                let dv = v.iter().zip(v_nr.iter())
+                    .fold(0.0f64, |m, (x, y)| m.max((x - y).norm()));
+                line += &format!(
+                    " | {} {:3} {:7.?} {dv:.1e}",
+                    if r.converged { "✓" } else { "✗" },
+                    r.iterations, dt,
+                );
+            }
+            println!("{line}");
         }
     }
 
