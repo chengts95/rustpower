@@ -344,7 +344,7 @@ pub fn newton_pf_gn<Solver: Solve>(
 #[cfg(all(test, feature = "klu"))]
 mod tests {
     use super::*;
-    use crate::basic::kkt::residual::fixtures::load_ieee39_mat;
+    use crate::lm::residual::fixtures::load_ieee39_mat;
     use crate::basic::solver::KLUSolver;
 
     /// IEEE39 收敛性（与 fat-GN 同数学，同迭代数）。
@@ -364,7 +364,7 @@ mod tests {
             res.iterations,
             res.res_inf,
             driver.gn.nnz_slim,
-            crate::basic::kkt::flat::FlatLayout::build(&driver.pat).nnz_flat
+            crate::lm::flat::FlatLayout::build(&driver.pat).nnz_flat
         );
         assert!(res.converged);
     }

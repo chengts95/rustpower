@@ -1,6 +1,7 @@
 pub mod basic;
 
 #[allow(non_snake_case)]
+pub mod lm;
 pub mod new_opf;
 pub mod new_pf;
 #[allow(non_snake_case)]
