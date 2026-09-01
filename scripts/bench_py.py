@@ -112,7 +112,7 @@ def run_benchmark(net_name, net):
     pp_hot_iters = net._ppc['iterations']
 
     # LS2G GridModel
-    ls_model.unset_changes()
+    
     ls_model.ac_pf(V_init_flat.copy(), MAX_ITER, TOL)
     times_ls2g_hot = []
     for _ in range(NUM_TRIALS_HOT):
