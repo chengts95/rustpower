@@ -368,4 +368,45 @@ mod tests {
         );
         assert!(res.converged);
     }
+
+    /// 非病态标准算例：NR / GN-LM / exact-LM 三家在严格容差（1e-12）下
+    /// 解的逐点一致性——验证 LM 两侧与生产 NR 算的是同一个东西。
+    #[test]
+    fn three_way_matches_nr_tight() {
+        use crate::basic::newtonpf::newton_pf;
+        use crate::lm::exact::driver::newton_pf_lm;
+        let mat = load_ieee39_mat();
+        let ybus = &mat.y_bus;
+        let (npv, npq) = (mat.npv, mat.npq);
+        let sbus = DVector::from_vec(mat.s_bus.iter().copied().collect::<Vec<_>>());
+        let v_init = DVector::from_vec(mat.v_bus_init.iter().copied().collect::<Vec<_>>());
+
+        let mut s_nr = KLUSolver::default();
+        let (v_nr, it_nr) =
+            newton_pf(ybus, &sbus, &v_init, npv, npq, Some(1e-12), Some(100), &mut s_nr)
+                .expect("NR should converge");
+        let mut s_gn = KLUSolver::default();
+        let (v_gn, it_gn) =
+            newton_pf_gn(ybus, &sbus, &v_init, npv, npq, Some(1e-12), Some(100), &mut s_gn)
+                .expect("GN-LM should converge");
+        let mut s_lm = KLUSolver::default();
+        let (v_lm, it_lm) =
+            newton_pf_lm(ybus, &sbus, &v_init, npv, npq, Some(1e-12), Some(100), &mut s_lm)
+                .expect("exact-LM should converge");
+
+        let diff = |a: &DVector<Complex64>, b: &DVector<Complex64>| {
+            a.iter().zip(b.iter()).fold(0.0f64, |m, (x, y)| m.max((x - y).norm()))
+        };
+        println!(
+            "严格容差 1e-12: NR it={it_nr} | GN-LM it={it_gn} | exact-LM it={it_lm}"
+        );
+        println!(
+            "max|ΔV|: GN vs NR = {:.3e} | exact vs NR = {:.3e} | exact vs GN = {:.3e}",
+            diff(&v_gn, &v_nr),
+            diff(&v_lm, &v_nr),
+            diff(&v_lm, &v_gn)
+        );
+        assert!(diff(&v_gn, &v_nr) < 1e-9, "GN-LM and NR disagree at tight tolerance");
+        assert!(diff(&v_lm, &v_nr) < 1e-9, "exact-LM and NR disagree at tight tolerance");
+    }
 }
