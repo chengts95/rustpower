@@ -81,7 +81,7 @@ pub fn newton_pf<Solver: Solve>(
 
     let n_state = npv + 2 * npq;
     let n_active = npv + npq;
-    let n_bus = Ybus.nrows();
+    let n_bus = v.len();
     
     // We will use local variables for pattern and buffers if cache is not available.
     // If cache is available, we will mutably borrow them from the cache.
@@ -93,7 +93,7 @@ pub fn newton_pf<Solver: Solve>(
     let mut local_s_calc = DVector::zeros(0);
 
     let (j_pattern, j_values, ibus, F, s_calc) = if let Some(c) = cache_opt {
-        if c.npv != npv || c.npq != npq || c.j_pattern.is_none() {
+        if c.j_pattern.is_none() {
             c.j_pattern = Some(JacobianPattern2::build_from_permuted(Ybus.col_offsets(), Ybus.row_indices(), npv, npq));
             c.j_values = vec![0.0; c.j_pattern.as_ref().unwrap().nnz_j];
             c.ibus = DVector::zeros(n_bus);
@@ -191,14 +191,14 @@ pub fn newton_pf<Solver: Solve>(
         let dx = &F;
 
         // Angle update: all non-slack buses.
-        v_a.rows_range_mut(0..n_bus)
-            .zip_apply(&dx.rows_range(0..n_bus), |a, b| {
+        v_a.rows_range_mut(0..n_active)
+            .zip_apply(&dx.rows_range(0..n_active), |a, b| {
                 *a -= b;
                 // *a = a;
             });
         // Magnitude update: PQ buses only (at 0..npq in PQ-first ordering).
         let mut vm_pq = v_m.rows_range_mut(0..npq);
-        vm_pq.zip_apply(&dx.rows_range(n_bus..n_state), |a, b| *a -= b);
+        vm_pq.zip_apply(&dx.rows_range(n_active..n_state), |a, b| *a -= b);
 
         v_norm.zip_apply(&v_a, |a, va| *a = Complex64::from_polar(1.0, va));
         v.zip_zip_apply(&v_norm, &v_m, |a, e, vm| *a = vm * e);
@@ -216,7 +216,7 @@ pub fn newton_pf<Solver: Solve>(
             ibus.as_slice(),
             Sbus.as_slice(),
             npq,
-            n_bus, // 如果这里 n_bus = npq + npv，也就是 active bus count
+            n_active,  
             s_calc.as_mut_slice(),
             F.as_mut_slice(),
         );
