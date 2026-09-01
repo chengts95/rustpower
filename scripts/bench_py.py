@@ -78,10 +78,9 @@ def run_benchmark(net_name, net):
 
     # RustPower
     rp_model = rustpower.PowerGrid.from_pandapower(net)
-    rp_model.enable_cache(True)
     report = rp_model.solve(V_init_flat.copy(), max_iter=MAX_ITER, tol=TOL)
     rp_iters = report.iterations
-  
+
     times_rp_cold = []
     for _ in range(NUM_TRIALS_COLD):
         rp_model.init_pf()
