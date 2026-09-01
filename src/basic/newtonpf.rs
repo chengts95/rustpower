@@ -80,13 +80,14 @@ pub fn newton_pf<Solver: Solve>(
     let tol = tolerance.unwrap_or(1e-6);
 
     let n_state = npv + 2 * npq;
-    let n_bus = npv + npq;
+    let n_active = npv + npq;
+    let n_bus = Ybus.nrows();
     
     // We will use local variables for pattern and buffers if cache is not available.
     // If cache is available, we will mutably borrow them from the cache.
     // To satisfy borrow checker cleanly without cloning, we use an enum or mutable references.
     let mut local_j_pattern = None;
-    let mut local_j_values = Vec::new();
+    let mut local_j_values = Vec::new(); 
     let mut local_ibus = DVector::zeros(0);
     let mut local_F = DVector::zeros(0);
     let mut local_s_calc = DVector::zeros(0);
@@ -95,9 +96,9 @@ pub fn newton_pf<Solver: Solve>(
         if c.npv != npv || c.npq != npq || c.j_pattern.is_none() {
             c.j_pattern = Some(JacobianPattern2::build_from_permuted(Ybus.col_offsets(), Ybus.row_indices(), npv, npq));
             c.j_values = vec![0.0; c.j_pattern.as_ref().unwrap().nnz_j];
-            c.ibus = DVector::zeros(n_state);
+            c.ibus = DVector::zeros(n_bus);
             c.F = DVector::zeros(n_state);
-            c.s_calc = DVector::zeros(n_state);
+            c.s_calc = DVector::zeros(n_bus);
             c.npv = npv;
             c.npq = npq;
         }
@@ -111,9 +112,9 @@ pub fn newton_pf<Solver: Solve>(
     } else {
         local_j_pattern = Some(JacobianPattern2::build_from_permuted(Ybus.col_offsets(), Ybus.row_indices(), npv, npq));
         local_j_values = vec![0.0; local_j_pattern.as_ref().unwrap().nnz_j];
-        local_ibus = DVector::zeros(n_state);
+        local_ibus = DVector::zeros(n_bus);
         local_F = DVector::zeros(n_state);
-        local_s_calc = DVector::zeros(n_state);
+        local_s_calc = DVector::zeros(n_bus);
         (
             local_j_pattern.as_ref().unwrap(),
             &mut local_j_values,
@@ -136,7 +137,7 @@ pub fn newton_pf<Solver: Solve>(
         ibus.as_slice(),
         Sbus.as_slice(),
         npq,
-        n_bus,
+        n_active,
         s_calc.as_mut_slice(),
         F.as_mut_slice(),
     );
