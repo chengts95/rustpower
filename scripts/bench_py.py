@@ -8,7 +8,7 @@ import numpy as np
 import pandapower as pp
 import pandapower.networks as pn
 from lightsim2grid.gridmodel import init_from_pandapower
-from lightsim2grid.solver import KLUSolver, SolverType
+from lightsim2grid.solver import KLUSolver, AlgorithmType
 import rustpower
 import lightsim2grid
 
@@ -54,7 +54,7 @@ def run_benchmark(net_name, net):
 
     # LS2G Pure Solver
     ls_model = init_from_pandapower(net)
-    ls_model.change_solver(SolverType.KLUSingleSlack)
+    ls_model.change_solver(AlgorithmType.NRSing_KLU)
     ls_model.ac_pf(V_init_flat.copy(), MAX_ITER, TOL) 
 
     Ybus = ls_model.get_Ybus_solver()
