@@ -21,7 +21,7 @@
 //! `FLAT = false`: block view — `j_values` is the J block's own array,
 //! column c starts at `cs[c]` (identical layout to V3).
 //!
-//! `FLAT = true`: flat LM view (`src::basic::kkt`, architecture doc §3.3) —
+//! `FLAT = true`: flat LM view (`src::lm`, architecture doc §3.3) —
 //! `j_values` is the global KKT values array `[μI+H Jᵀ; J −I]`; δ-column c
 //! is `[H col c | J col c]` with the H segment at `2·cs[c]`, so the J
 //! segment starts at `2·cs[c] + L_c`, `L_c = active_ends + pq_ends`.
@@ -455,7 +455,7 @@ mod tests {
     use crate::basic::ecs::elements::PPNetwork;
     use crate::basic::ecs::network::{DataOps, PowerFlow, PowerGrid};
     use crate::basic::ecs::powerflow::systems::PowerFlowMat;
-    use crate::basic::kkt::{KktPattern, fill_jt};
+    use crate::lm::{KktPattern, fill_jt};
     use crate::basic::new_dsdvbus2::JacobianPattern2;
     use crate::basic::new_dsdvbus3::fill_jacobian_v3;
     use crate::io::pandapower::{Network, load_csv_zip};
