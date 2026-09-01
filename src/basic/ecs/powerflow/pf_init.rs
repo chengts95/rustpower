@@ -35,6 +35,7 @@ pub struct PFInit;
 pub fn cleanup_solver_state(world: &mut World) {
     world.remove_resource::<PowerFlowMat>();
     world.remove_resource::<PowerFlowResult>();
+    world.remove_resource::<crate::basic::newtonpf::NewtonCache>();
     if let Some(mut msgs) = world.get_resource_mut::<bevy_ecs::message::Messages<ParamDiff>>() {
         msgs.clear();
     }

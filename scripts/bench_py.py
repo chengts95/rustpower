@@ -1,108 +1,161 @@
 """
-Final benchmark: pandapower vs lightsim2grid vs rustpower
-Measures solver-core time (NR iterations only, no post-processing).
+Official Performance Benchmark: Pandapower vs LightSim2Grid vs RustPower
 """
+
+import time
+import warnings
+import numpy as np
 import pandapower as pp
 import pandapower.networks as pn
-import time
-import numpy as np
-try:
-    import lightsim2grid
-    from lightsim2grid.gridmodel import init_from_pandapower
-    from lightsim2grid import SolverType
-    LS2G_AVAILABLE = True
-except ImportError:
-    LS2G_AVAILABLE = False
+from lightsim2grid.gridmodel import init_from_pandapower
+from lightsim2grid.solver import KLUSolver, SolverType
+import rustpower
+import lightsim2grid
 
-try:
-    import rustpower
-    RP_AVAILABLE = True
-except ImportError:
-    RP_AVAILABLE = False
+warnings.filterwarnings('ignore')
 
-def benchmark(name, net_func, rp_case_path, iterations=100):
-    print(f"\n{'='*60}")
-    print(f"  {name}  ({iterations} iterations)")
-    print(f"{'='*60}")
-    net = net_func()
+TOL = 1e-6
+MAX_ITER = 20
+NUM_TRIALS_COLD = 10
+NUM_TRIALS_HOT = 20
 
-    # ── Pandapower ──────────────────────────────────────────────
-    pp.runpp(net)  # warmup
-    vm_pp = net.res_bus.vm_pu.values.copy()
-    pp_iters = net._ppc['iterations']
-    pp_times = []
-    for _ in range(iterations):
+
+print("Warming up Pandapower Numba JIT compiler...")
+dummy_net = pn.case39()
+pp.runpp(dummy_net)
+
+def run_benchmark(net_name, net):
+    print(f"\n=========================================================")
+    print(f" BENCHMARKING NETWORK: {net_name} ({len(net.bus)} buses)")
+    print(f"=========================================================")
+    
+    num_buses = len(net.bus)
+    V_init_flat = np.ones(num_buses, dtype=np.complex128)
+
+    # Calculate V_init that satisfies PV and Slack bus magnitude setpoints for LS2G pure solver
+    V_init_compensated = np.ones(num_buses, dtype=np.complex128)
+    for _, row in net.ext_grid.iterrows():
+        V_init_compensated[int(row['bus'])] = row['vm_pu']
+    for _, row in net.gen.iterrows():
+        V_init_compensated[int(row['bus'])] = row['vm_pu']
+
+    # ---------------------------------------------------------
+    # ROUND 1: Cold Start Performance (Includes Symbolic Analysis)
+    # ---------------------------------------------------------
+    
+    # Pandapower
+    times_pp_cold = []
+    for _ in range(NUM_TRIALS_COLD):
         start = time.perf_counter()
-        pp.runpp(net)
-        pp_times.append(time.perf_counter() - start)
-    pp_arr = np.array(pp_times) * 1e3
-    print(f"\n  Pandapower (numpy):        Avg: {pp_arr.mean():>8.3f} ms | "
-          f"Min: {pp_arr.min():>8.3f} ms | NR iters: {pp_iters}")
-    print(f"    Vm range: [{np.min(vm_pp):.4f}, {np.max(vm_pp):.4f}]")
+        pp.runpp(net, init="flat", recycle=False, tolerance_mva=TOL)
+        times_pp_cold.append(time.perf_counter() - start)
+    pp_cold_ms = np.mean(times_pp_cold) * 1000
+    pp_iters = net._ppc['iterations']
 
-    # ── LightSim2Grid ──────────────────────────────────────────
-    if LS2G_AVAILABLE:
-        try:
-            model = init_from_pandapower(net)
-            n_bus = model.total_bus()
-            v_ones = np.ones(n_bus, dtype=np.complex128)
-            model.change_solver(SolverType.KLU)
+    # LS2G Pure Solver
+    ls_model = init_from_pandapower(net)
+    ls_model.change_solver(SolverType.KLUSingleSlack)
+    ls_model.ac_pf(V_init_flat.copy(), MAX_ITER, TOL) 
 
-            # Warmup
-            v_res = model.ac_pf(v_ones.copy(), 10, 1e-8)
-            vm_ls = np.abs(v_res)
+    Ybus = ls_model.get_Ybus_solver()
+    Sbus = ls_model.get_Sbus_solver()
+    slack_ids = ls_model.get_slack_ids_solver()
+    slack_weights = ls_model.get_slack_weights_solver()
+    pv = ls_model.get_pv_solver()
+    pq = ls_model.get_pq_solver()
+    ls_solver = KLUSolver()
 
-            ls_times = []
-            for _ in range(iterations):
-                v_init = v_ones.copy()
-                start = time.perf_counter()
-                model.ac_pf(v_init, 10, 1e-8)
-                ls_times.append(time.perf_counter() - start)
-            ls_arr = np.array(ls_times) * 1e3
-            print(f"\n  LightSim2Grid (KLU):      Avg: {ls_arr.mean():>8.3f} ms | "
-                  f"Min: {ls_arr.min():>8.3f} ms")
-            if len(vm_ls) > 0:
-                print(f"    Vm range: [{np.min(vm_ls):.4f}, {np.max(vm_ls):.4f}]")
-            else:
-                print("    Did not converge")
-        except Exception as e:
-            print(f"\n  LightSim2Grid failed: {e}")
+    # Warmup
+    ls_solver.compute_pf(Ybus, V_init_compensated.copy(), Sbus, slack_ids, slack_weights, pv, pq, MAX_ITER, TOL)
+    ls2g_iters = ls_solver.get_nb_iter()
 
-    # ── RustPower (Python API, with post-processing) ───────────
-    if RP_AVAILABLE and rp_case_path:
-        grid = rustpower.PowerGrid(case_path=rp_case_path)
-        grid.init_pf()
-        n_bus = grid.n_bus
-        v_ones = np.ones(n_bus, dtype=np.complex128)
-        r = grid.solve(v_ones.copy())  # warmup (flat start, forces real NR)
+    times_ls2g_cold = []
+    for _ in range(NUM_TRIALS_COLD):
+        start = time.perf_counter()
+        ls_solver.compute_pf(Ybus, V_init_compensated.copy(), Sbus, slack_ids, slack_weights, pv, pq, MAX_ITER, TOL)
+        times_ls2g_cold.append(time.perf_counter() - start)
+    ls2g_cold_ms = np.mean(times_ls2g_cold) * 1000
 
-        rp_wall = []
-        rp_internal = []
-        for _ in range(iterations):
-            v_init = v_ones.copy()
-            start = time.perf_counter()
-            r = grid.solve(v_init)
-            rp_wall.append((time.perf_counter() - start) * 1e3)
-            rp_internal.append(r.runtime_ms)
+    # RustPower
+    rp_model = rustpower.PowerGrid.from_pandapower(net)
+    rp_model.enable_cache(True)
+    report = rp_model.solve(V_init_flat.copy(), max_iter=MAX_ITER, tol=TOL)
+    rp_iters = report.iterations
+  
+    times_rp_cold = []
+    for _ in range(NUM_TRIALS_COLD):
+        rp_model.init_pf()
+        start = time.perf_counter()
+        rp_model.solve(V_init_flat.copy(), max_iter=MAX_ITER, tol=TOL)
+        times_rp_cold.append(time.perf_counter() - start)
+    rp_cold_ms = np.mean(times_rp_cold) * 1000
 
-        wall_arr = np.array(rp_wall)
-        int_arr = np.array(rp_internal)
-        print(f"\n  RustPower (Python, w/ post-proc):")
-        print(f"    Python wall-clock:      Avg: {wall_arr.mean():>8.3f} ms | "
-              f"Min: {wall_arr.min():>8.3f} ms | NR iters: {r.iterations}")
-        print(f"    Rust internal (SolveReport): Avg: {int_arr.mean():>8.3f} ms | "
-              f"Min: {int_arr.min():>8.3f} ms")
-        print(f"    FFI + Python overhead:  ~{(wall_arr.mean() - int_arr.mean()):>8.3f} ms")
+    print(f"--- COLD START (Iterations: PP={pp_iters}, LS2G={ls2g_iters}, RP={rp_iters}) ---")
+    print(f"[Pandapower] {pp_cold_ms:.3f} ms")
+    print(f"[LS2G (KLU)] {ls2g_cold_ms:.3f} ms")
+    print(f"[RustPower]  {rp_cold_ms:.3f} ms")
 
+    # ---------------------------------------------------------
+    # ROUND 2: Hot Loop Performance (Maximum Cached State)
+    # ---------------------------------------------------------
+    
+    # Pandapower
+    pp.runpp(net, init="flat", recycle=True, tolerance_mva=TOL)
+    times_pp_hot = []
+    for _ in range(NUM_TRIALS_HOT):
+        # Force flat start in PPC to ensure Newton iterations actually run
+        net._ppc['bus'][:, 7] = 1.0 # vm
+        net._ppc['bus'][:, 8] = 0.0 # va
+        start = time.perf_counter()
+        pp.runpp(net, init="flat", recycle=dict(ppc=True, Ybus=True, bus_pq=False, trafo=False, gen=False), tolerance_mva=TOL)
+        times_pp_hot.append(time.perf_counter() - start)
+    pp_hot_ms = np.mean(times_pp_hot) * 1000
+    pp_hot_iters = net._ppc['iterations']
 
-    # ── RustPower Native (from bench_all, for reference) ───────
-    print(f"\n  RustPower Native (bench_all, solver-only, no post-proc):")
-    print(f"    [See `cargo run --release --example bench_all`]")
+    # LS2G GridModel
+    ls_model.unset_changes()
+    ls_model.ac_pf(V_init_flat.copy(), MAX_ITER, TOL)
+    times_ls2g_hot = []
+    for _ in range(NUM_TRIALS_HOT):
+        start = time.perf_counter()
+        ls_model.ac_pf(V_init_flat.copy(), MAX_ITER, TOL)
+        times_ls2g_hot.append(time.perf_counter() - start)
+    ls2g_hot_ms = np.mean(times_ls2g_hot) * 1000
+    ls2g_hot_iters = ls_model.get_solver().get_nb_iter()
 
-    print()
+    # RustPower
+    rp_model.init_pf()
+    rp_model.enable_cache(True)
+    rp_model.solve(V_init_flat.copy(), max_iter=MAX_ITER, tol=TOL)
+    times_rp_hot = []
+    for _ in range(NUM_TRIALS_HOT):
+        start = time.perf_counter()
+        report = rp_model.solve(V_init_flat.copy(), max_iter=MAX_ITER, tol=TOL)
+        times_rp_hot.append(time.perf_counter() - start)
+    rp_hot_ms = np.mean(times_rp_hot) * 1000
+    rp_hot_iters = report.iterations
+
+    print(f"\n--- HOT LOOP (Iterations: PP={pp_hot_iters}, LS2G={ls2g_hot_iters}, RP={rp_hot_iters}) ---")
+    print(f"[Pandapower] {pp_hot_ms:.3f} ms")
+    print(f"[LS2G (KLU)] {ls2g_hot_ms:.3f} ms")
+    print(f"[RustPower]  {rp_hot_ms:.3f} ms")
+
 
 if __name__ == "__main__":
-    benchmark("IEEE 39",      pn.case39,          None,                         iterations=200)
-    benchmark("IEEE 118",     pn.case118,         'cases/IEEE118/data.zip',     iterations=200)
-    benchmark("PEGASE 9241",  pn.case9241pegase,  'cases/pegase9241/data.zip',  iterations=50)
+    print("--- Environment ---")
+    print(f"Pandapower Version: {pp.__version__}")
+    print(f"LightSim2Grid Version: {lightsim2grid.__version__ if hasattr(lightsim2grid, '__version__') else 'Unknown'}")
+    print(f"RustPower Version: {rustpower.version()}")
+    print(f"RustPower Active Features: {rustpower.features()}")
+    
+    cases = {
+        "Case 39": pn.case39,
+        "Case 118": pn.case118,
+        "Case 1354 PEGASE": pn.case1354pegase,
+        "Case 9241 PEGASE": pn.case9241pegase
+    }
+    
+    for name, case_fn in cases.items():
+        net = case_fn()
+        run_benchmark(name, net)
 
