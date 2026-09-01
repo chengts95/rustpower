@@ -454,6 +454,7 @@ mod tests {
     use crate::basic::ecs::network::{DataOps, PowerFlow, PowerGrid};
     use crate::basic::ecs::powerflow::systems::PowerFlowMat;
     use crate::basic::jacobian_cache::JacobianCache;
+    use crate::lm::{KktPattern, fill_jt};
     use crate::basic::new_dsdvbus2::JacobianPattern2;
     use crate::basic::new_dsdvbus3::fill_jacobian_v3;
     use crate::io::pandapower::{Network, load_csv_zip};

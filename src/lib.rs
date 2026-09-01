@@ -1,4 +1,7 @@
 mod basic;
+
+#[allow(non_snake_case)]
+pub mod lm;
 pub mod bevy_cmdbuffer;
 pub mod io;
 pub mod native;

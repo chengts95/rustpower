@@ -15,7 +15,7 @@
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
-use crate::basic::kkt::gn_flat::newton_pf_gn;
+use crate::lm::gn_flat::newton_pf_gn;
 
 use super::network::{PowerFlowSolver, SolverStage};
 use super::plugin::{CustomSolverActive, DefaultSolverSet, PowerFlowSolverSet};

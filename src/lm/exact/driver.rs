@@ -24,10 +24,10 @@ use nalgebra::DVector;
 use nalgebra_sparse::CscMatrix;
 use num_complex::Complex64;
 
-use crate::basic::kkt::flat::{FlatLayout, fill_kkt_flat};
-use crate::basic::kkt::kernels::{apply_mu_delta, fill_jt};
-use crate::basic::kkt::pattern::KktPattern;
-use crate::basic::kkt::residual::residual;
+use crate::lm::flat::{FlatLayout, fill_kkt_flat};
+use crate::lm::kernels::{apply_mu_delta, fill_jt};
+use crate::lm::pattern::KktPattern;
+use crate::lm::residual::residual;
 use crate::basic::new_dsdvbus4::fill_jacobian_v4;
 use crate::basic::solver::Solve;
 
@@ -322,7 +322,7 @@ pub fn newton_pf_lm<Solver: Solve>(
 #[cfg(all(test, feature = "klu"))]
 pub(crate) mod tests {
     use super::*;
-    use crate::basic::kkt::residual::fixtures::*;
+    use crate::lm::residual::fixtures::*;
     use crate::basic::solver::KLUSolver;
     use nalgebra_sparse::CscMatrix;
 
@@ -728,7 +728,7 @@ pub(crate) mod tests {
     /// μ 槽在列头。（从 gn_flat 挪来：它是 exact 侧的对照测试。）
     #[test]
     fn slim_matches_fat_gn() {
-        use crate::basic::kkt::gn_flat::GnDriver;
+        use crate::lm::gn_flat::GnDriver;
         let (ybus, n_pv, n_pq, _v_star, s_spec) = ill_conditioned_case();
         let mut fat = LmDriver::build(&ybus, n_pv, n_pq, s_spec.clone());
         let mut slim = GnDriver::build(&ybus, n_pv, n_pq, s_spec);
