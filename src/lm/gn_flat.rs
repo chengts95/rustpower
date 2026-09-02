@@ -107,6 +107,11 @@ pub struct GnDriver {
     n_act: usize,
     npq: usize,
     n_state: usize,
+    // Profiling (ns), same convention as `normal_eq::NeDriver`: the slim
+    // fill (J + Jᵀ kernels + column copies) and the solver calls.
+    pub prof_fill_ns: u64,
+    pub prof_solve_ns: u64,
+    pub n_solves: u64,
 }
 
 /// Outcome of one GN-LM run (same shape as the exact-LM driver's result).
@@ -148,13 +153,23 @@ impl GnDriver {
             n_act: n_pv + n_pq,
             npq: n_pq,
             n_state,
+            prof_fill_ns: 0,
+            prof_solve_ns: 0,
+            n_solves: 0,
         }
+    }
+
+    pub fn reset_prof(&mut self) {
+        self.prof_fill_ns = 0;
+        self.prof_solve_ns = 0;
+        self.n_solves = 0;
     }
 
     /// One slim fill at `v`: block J + block Jᵀ (existing kernels), then one
     /// column-wise copy into the slim CSC. The μ diagonal slots and the −I
     /// slots are not touched (μ is stamped by the inner loop).
     fn fill(&mut self, ybus: &CscMatrix<Complex64>, v: &[Complex64]) {
+        let t_prof = std::time::Instant::now();
         let nb = ybus.ncols();
         for i in 0..nb {
             self.scalc[i] = v[i] * self.ibus[i].conj();
@@ -182,6 +197,7 @@ impl GnDriver {
             let l = gp[n + c + 1] - gp[n + c] - 1;
             self.values[gp[n + c]..gp[n + c] + l].copy_from_slice(&self.jt_block[cs[c]..cs[c] + l]);
         }
+        self.prof_fill_ns += t_prof.elapsed().as_nanos() as u64;
     }
 
     /// `g = Jᵀ·r` from the slim CSC: δ-column c's trailing segment is J
@@ -240,6 +256,7 @@ impl GnDriver {
                 for i in 0..n {
                     self.b[n + i] = -self.r[i];
                 }
+                let t_solve = std::time::Instant::now();
                 let solve_ok = solver
                     .solve(
                         &mut self.gn.col_offsets,
@@ -249,6 +266,8 @@ impl GnDriver {
                         2 * n,
                     )
                     .is_ok();
+                self.prof_solve_ns += t_solve.elapsed().as_nanos() as u64;
+                self.n_solves += 1;
                 let delta = &self.b[..n];
                 let finite = solve_ok && delta.iter().all(|x| x.is_finite());
                 if !finite {

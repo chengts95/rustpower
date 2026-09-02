@@ -21,6 +21,7 @@
 //! system is the degenerate case `n_pq = n_active = n_bus` where the cuts
 //! resolve to whole columns.
 
+pub mod baseline;
 pub mod block;
 pub mod cache;
 pub mod exact;
