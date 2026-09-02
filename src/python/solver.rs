@@ -53,7 +53,7 @@ impl NewtonSolver {
         }
     }
 
-    /// Optimized context setup using the Double-Transpose trick.
+    /// Optimized context setup using the transpose trick.
     /// Converts the provided Y-bus matrix from CSR to CSC format, applies the given permutations,
     ///
     /// y_indptr, y_indices, y_data: CSR representation of the Y-bus matrix.
@@ -88,11 +88,12 @@ impl NewtonSolver {
             .iter()
             .map(|&x| x as usize)
             .collect();
-        let data = y_data.readonly().as_slice()?.to_vec();
+        let y_data_ro = y_data.readonly();
+        let data = y_data_ro.as_slice()?;
 
         // Use the ultra-fast O(NNZ) sort-free permutation utility
         let y_perm_csc = crate::basic::sparse::utils::permute_csr_to_csc_sort_free(
-            n, &indptr, &indices, &data, &p_vec, &p_inv,
+            n, &indptr, &indices, data, &p_vec, &p_inv,
         );
 
         let s_raw = DVector::from_vec(s_bus.readonly().as_slice()?.to_vec());
@@ -112,7 +113,7 @@ impl NewtonSolver {
             v_bus_init: v_perm,
             npv,
             npq,
-            reorder: CsrMatrix::from(&CscMatrix::from(&CooMatrix::new(n, n))),
+            reorder: CsrMatrix::zeros(n, n),
             to_perm: p_vec.clone(),
             from_perm: p_inv.clone(),
         });
