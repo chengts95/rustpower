@@ -1,14 +1,14 @@
 //! Classical Gauss–Newton LM power flow as an ECS plugin — the same swap-in
 //! pattern as [`super::plugin::IwamotoPlugin`]: a `*_run_pf` system plus a
-//! plugin that takes over the solve stage when `CustomSolverActive` is
-//! present (the default NR system is bypassed by its `run_if`).
+//! plugin that takes over the solve stage when [`ActiveSolver`] selects it
+//! (the default NR system only runs for `ActiveSolver::NewtonRaphson`).
 //!
 //! Pure-Rust usage:
 //! ```ignore
 //! let mut app = default_app();
 //! app.add_plugins(GnPlugin);
 //! app.world_mut().insert_resource(PPNetwork(net));
-//! app.world_mut().insert_resource(CustomSolverActive);
+//! app.world_mut().insert_resource(ActiveSolver::GaussNewtonLm);
 //! app.update();
 //! ```
 
@@ -17,16 +17,24 @@ use bevy_ecs::prelude::*;
 
 use crate::lm::gn_flat::newton_pf_gn;
 
-use super::network::{PowerFlowSolver, SolverStage};
-use super::plugin::{CustomSolverActive, DefaultSolverSet, PowerFlowSolverSet};
+use super::network::SolverStage;
+use super::plugin::{ActiveSolver, PowerFlowSolverSet};
 use super::powerflow::systems::{PowerFlowConfig, PowerFlowMat, PowerFlowResult};
+use crate::basic::solver::DefaultLmSolver;
+
+/// Solver state owned by [`GnPlugin`]; see [`super::lm_plugin::LmSolverState`]
+/// for why the LM family does not share the NR path's `PowerFlowSolver`.
+#[derive(Resource, Default)]
+pub struct GnSolverState {
+    pub solver: DefaultLmSolver,
+}
 
 /// ECS system: classical Gauss–Newton LM (no Hessian term).
 pub fn gn_run_pf(
     mut cmd: Commands,
     mat: Res<PowerFlowMat>,
     cfg: Res<PowerFlowConfig>,
-    mut solver: ResMut<PowerFlowSolver>,
+    mut state: ResMut<GnSolverState>,
 ) {
     if mat.npv + mat.npq >= mat.v_bus_init.len() {
         cmd.insert_resource(PowerFlowResult {
@@ -45,7 +53,7 @@ pub fn gn_run_pf(
         mat.npq,
         cfg.tol,
         cfg.max_it,
-        &mut solver.solver,
+        &mut state.solver,
     );
 
     match v {
@@ -72,16 +80,13 @@ pub struct GnPlugin;
 
 impl Plugin for GnPlugin {
     fn build(&self, app: &mut App) {
-        app.configure_sets(
-            Update,
-            DefaultSolverSet.run_if(not(resource_exists::<CustomSolverActive>)),
-        );
+        app.init_resource::<GnSolverState>();
         app.add_systems(
             Update,
             gn_run_pf
                 .in_set(SolverStage::Solve)
                 .in_set(PowerFlowSolverSet)
-                .run_if(resource_exists::<CustomSolverActive>),
+                .run_if(resource_equals(ActiveSolver::GaussNewtonLm)),
         );
     }
 }
@@ -101,7 +106,7 @@ mod tests {
         let mut app_gn = default_app();
         app_gn.add_plugins(GnPlugin);
         app_gn.world_mut().insert_resource(PPNetwork(net));
-        app_gn.world_mut().insert_resource(CustomSolverActive);
+        app_gn.world_mut().insert_resource(ActiveSolver::GaussNewtonLm);
         app_gn.update();
         let r_gn = app_gn
             .world()

@@ -86,10 +86,22 @@ pub fn event_update(
 }
 
 pub fn reset_solvers(world: &mut World) {
+    use crate::basic::ecs::gn_plugin::GnSolverState;
+    use crate::basic::ecs::lm_plugin::LmSolverState;
     use crate::basic::solver::*;
 
     if let Some(mut solver) = world.get_resource_mut::<PowerFlowSolver>() {
         solver.solver.reset();
+    }
+    // LM-family plugins own their solver state; their cached symbolics die
+    // with any structure change too. (Each solver additionally self-detects
+    // pattern changes, so this reset is the cheap intended path, not the
+    // only correct one.)
+    if let Some(mut state) = world.get_resource_mut::<LmSolverState>() {
+        state.solver.reset();
+    }
+    if let Some(mut state) = world.get_resource_mut::<GnSolverState>() {
+        state.solver.reset();
     }
 }
 /// Re-syncs the full `s_bus` vector in [`PowerFlowMat`] from the `SBusInjPu`
@@ -129,9 +141,21 @@ pub fn structure_update(world: &mut World) {
     if !world.contains_resource::<PowerFlowMat>() {
         return;
     }
-    if flags.structure_dirty || flags.admit_dirty {
-        //TODO: this should only update ybus or node structure
+    if flags.structure_dirty {
+        // Node-type change (PV↔PQ): npv/npq move, the Jacobian's cut
+        // positions shift — the reduced-system PATTERN really changes, so
+        // cached symbolic factorizations must be dropped.
         world.run_system_cached(reset_solvers).unwrap();
+        world.run_system_cached(init_states).unwrap();
+        world.run_system_cached(apply_permutation).unwrap();
+    } else if flags.admit_dirty {
+        // Admittance-value change only (tap, line parameters): the pattern
+        // is a function of topology, not values — Ybus and
+        // Jacobian sparsity structures are untouched. Do NOT reset solvers:
+        // their cached symbolics stay valid and the next solve is a pure
+        // refactor. (No event currently sets admit_dirty; this branch keeps
+        // the semantics ready for it.)
+        //TODO: this should only update ybus values, not the full init_states
         world.run_system_cached(init_states).unwrap();
         world.run_system_cached(apply_permutation).unwrap();
     } else {
