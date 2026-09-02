@@ -694,25 +694,58 @@ impl PowerGrid {
         self.reset_state_impl();
     }
 
-    /// Enable or disable the Iwamoto optimal multiplier solver dynamically at runtime.
-    #[pyo3(signature = (enable=true))]
-    fn enable_iwamoto(&mut self, enable: bool) {
-        if enable {
-            let app = self.inner.app_mut();
-            if !app.is_plugin_added::<crate::basic::ecs::plugin::IwamotoPlugin>() {
-                app.add_plugins(crate::basic::ecs::plugin::IwamotoPlugin);
+    /// Select the power flow solver: "nr" (default Newton-Raphson), "iwamoto"
+    /// (optimal multiplier), "gn_lm" (Gauss-Newton LM), "exact_lm"
+    /// (second-order exact LM). Custom solvers are ECS plugins; the matching
+    /// plugin is added automatically on first use. The selection is a
+    /// resource, so it can be changed between solves at runtime.
+    fn set_solver(&mut self, solver: &str) -> PyResult<()> {
+        use crate::basic::ecs::gn_plugin::GnPlugin;
+        use crate::basic::ecs::lm_plugin::LmPlugin;
+        use crate::basic::ecs::plugin::{ActiveSolver, IwamotoPlugin};
+
+        let sel = match solver {
+            "nr" => ActiveSolver::NewtonRaphson,
+            "iwamoto" => ActiveSolver::Iwamoto,
+            "gn_lm" => ActiveSolver::GaussNewtonLm,
+            "exact_lm" => ActiveSolver::ExactLm,
+            other => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "unknown solver '{other}': expected one of nr | iwamoto | gn_lm | exact_lm"
+                )));
             }
-            self.inner
-                .world_mut()
-                .insert_resource(crate::basic::ecs::plugin::CustomSolverActive);
-            self.inner
-                .world_mut()
-                .remove_resource::<crate::basic::ecs::dcpf::DcpfSolverActive>();
-        } else {
-            self.inner
-                .world_mut()
-                .remove_resource::<crate::basic::ecs::plugin::CustomSolverActive>();
+        };
+        {
+            let app = self.inner.app_mut();
+            match sel {
+                ActiveSolver::Iwamoto => {
+                    if !app.is_plugin_added::<IwamotoPlugin>() {
+                        app.add_plugins(IwamotoPlugin);
+                    }
+                }
+                ActiveSolver::GaussNewtonLm => {
+                    if !app.is_plugin_added::<GnPlugin>() {
+                        app.add_plugins(GnPlugin);
+                    }
+                }
+                ActiveSolver::ExactLm => {
+                    if !app.is_plugin_added::<LmPlugin>() {
+                        app.add_plugins(LmPlugin);
+                    }
+                }
+                ActiveSolver::NewtonRaphson => {}
+            }
         }
+        self.inner.world_mut().remove_resource::<crate::basic::ecs::dcpf::DcpfSolverActive>();
+        self.inner.world_mut().insert_resource(sel);
+        Ok(())
+    }
+
+    /// Enable or disable the Iwamoto optimal multiplier solver dynamically at
+    /// runtime. Deprecated alias for `set_solver("iwamoto" | "nr")`.
+    #[pyo3(signature = (enable=true))]
+    fn enable_iwamoto(&mut self, enable: bool) -> PyResult<()> {
+        self.set_solver(if enable { "iwamoto" } else { "nr" })
     }
 
     /// Enable or disable the DCPF-initialized Newton-Raphson solver dynamically at runtime.
@@ -734,7 +767,7 @@ impl PowerGrid {
                 world.insert_resource(crate::basic::ecs::dcpf::DcpfWorkspace::default());
             }
             world.insert_resource(crate::basic::ecs::dcpf::DcpfSolverActive);
-            world.remove_resource::<crate::basic::ecs::plugin::CustomSolverActive>();
+            world.insert_resource(crate::basic::ecs::plugin::ActiveSolver::NewtonRaphson);
         } else {
             let world = self.inner.world_mut();
             world.remove_resource::<crate::basic::ecs::dcpf::DcpfSolverActive>();

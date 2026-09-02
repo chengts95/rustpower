@@ -46,9 +46,22 @@ pub struct DefaultSolverSet;
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub struct PowerFlowSolverSet;
 
-/// Marker resource to flag that a custom solver is active and the default one should be bypassed.
-#[derive(Resource, Default)]
-pub struct CustomSolverActive;
+/// Selector resource: which solver drives the `SolverStage::Solve` stage.
+///
+/// Exactly one solver system runs per `update()`: the default NR when
+/// `NewtonRaphson`, otherwise the custom plugin matching the variant.
+/// Replaces the old `CustomSolverActive` boolean, which could not
+/// distinguish multiple custom solvers (adding two LM plugins ran both).
+/// Writable at runtime (e.g. from a time-series event closure) to switch
+/// solver between frames.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ActiveSolver {
+    #[default]
+    NewtonRaphson,
+    Iwamoto,
+    GaussNewtonLm,
+    ExactLm,
+}
 
 impl Plugin for BasePFPlugin {
     /// Builds the base power flow plugin by setting up essential resources and systems.
@@ -61,6 +74,7 @@ impl Plugin for BasePFPlugin {
             tol: None,
         });
         app.world_mut().insert_resource(PowerFlowSolver::default());
+        app.world_mut().insert_resource(ActiveSolver::default());
         app.configure_sets(
             Update,
             (
@@ -70,6 +84,10 @@ impl Plugin for BasePFPlugin {
             )
                 .into_configs()
                 .chain(),
+        );
+        app.configure_sets(
+            Update,
+            DefaultSolverSet.run_if(resource_equals(ActiveSolver::NewtonRaphson)),
         );
         app.add_systems(
             Update,
@@ -267,16 +285,12 @@ pub struct IwamotoPlugin;
 
 impl Plugin for IwamotoPlugin {
     fn build(&self, app: &mut bevy_app::App) {
-        app.configure_sets(
-            Update,
-            DefaultSolverSet.run_if(not(resource_exists::<CustomSolverActive>)),
-        );
         app.add_systems(
             Update,
             iwamoto_run_pf
                 .in_set(SolverStage::Solve)
                 .in_set(PowerFlowSolverSet)
-                .run_if(resource_exists::<CustomSolverActive>),
+                .run_if(resource_equals(ActiveSolver::Iwamoto)),
         );
     }
 }

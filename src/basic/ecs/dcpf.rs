@@ -5,7 +5,7 @@ use nalgebra::DVector;
 use crate::basic::dcpf::{newton_pf_dcpf_serial, DcpfModel};
 use crate::basic::ecs::elements::*;
 use crate::basic::ecs::network::{PowerFlowSolver, SolverStage};
-use crate::basic::ecs::plugin::{CustomSolverActive, DefaultSolverSet, PowerFlowSolverSet};
+use crate::basic::ecs::plugin::{ActiveSolver, DefaultSolverSet, PowerFlowSolverSet};
 use crate::basic::ecs::powerflow::systems::{PowerFlowConfig, PowerFlowMat, PowerFlowResult};
 use crate::basic::newtonpf::NewtonCache;
 use crate::basic::solver::DefaultSolver;
@@ -141,7 +141,7 @@ impl Plugin for DcpfNewtonPfPlugin {
         app.configure_sets(
             Update,
             DefaultSolverSet.run_if(
-                not(resource_exists::<CustomSolverActive>)
+                resource_equals(ActiveSolver::NewtonRaphson)
                     .and_then(not(resource_exists::<DcpfSolverActive>)),
             ),
         );
@@ -150,10 +150,12 @@ impl Plugin for DcpfNewtonPfPlugin {
             (
                 ensure_dcpf_model.run_if(
                     resource_exists::<DcpfSolverActive>
+                        .and_then(resource_equals(ActiveSolver::NewtonRaphson))
                         .and_then(not(resource_exists::<DcpfModel>)),
                 ),
                 ecs_run_dcpf_pf.run_if(
                     resource_exists::<DcpfSolverActive>
+                        .and_then(resource_equals(ActiveSolver::NewtonRaphson))
                         .and_then(resource_exists::<DcpfModel>),
                 ),
             )
