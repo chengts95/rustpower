@@ -52,8 +52,8 @@ def test_newton_solver_api():
         Ybus.data,
         Sbus,
         v_init.copy(),
-        p_vec.tolist(),
-        p_inv.tolist(),
+        p_vec,
+        p_inv,
         len(pv),
         len(pq)
     )

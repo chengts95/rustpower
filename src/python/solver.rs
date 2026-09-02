@@ -61,7 +61,7 @@ impl NewtonSolver {
     /// v_init: Initial voltage guess.
     /// p_vec, p_inv: Permutation vectors.
     /// npv, npq: Number of PV and PQ buses.
-    #[pyo3(signature = (y_indptr, y_indices, y_data, s_bus, v_init, p_vec, p_inv, npv, npq))]
+    #[pyo3(signature = (y_indptr, y_indices, y_data, s_bus, v_init, p_vec_in, p_inv_in, npv, npq))]
     fn setup_context(
         &mut self,
         y_indptr: Bound<'_, numpy::PyArray1<i32>>,
@@ -69,12 +69,15 @@ impl NewtonSolver {
         y_data: Bound<'_, numpy::PyArray1<num_complex::Complex64>>,
         s_bus: Bound<'_, numpy::PyArray1<num_complex::Complex64>>,
         v_init: Bound<'_, numpy::PyArray1<num_complex::Complex64>>,
-        p_vec: Vec<usize>,
-        p_inv: Vec<usize>,
+        p_vec_in: Bound<'_, numpy::PyArray1<i64>>,
+        p_inv_in: Bound<'_, numpy::PyArray1<i64>>,
         npv: usize,
         npq: usize,
     ) -> PyResult<()> {
         let n = v_init.len()?;
+
+        let p_vec: Vec<usize> = p_vec_in.readonly().as_slice()?.iter().map(|&x| x as usize).collect();
+        let p_inv: Vec<usize> = p_inv_in.readonly().as_slice()?.iter().map(|&x| x as usize).collect();
 
         let indptr: Vec<usize> = y_indptr
             .readonly()
