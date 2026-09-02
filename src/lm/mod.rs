@@ -27,6 +27,7 @@ pub mod cache;
 pub mod exact;
 pub mod flat;
 pub mod gn_flat;
+pub mod gn_triu;
 pub mod kernels;
 pub mod ldl_vs_klu;
 pub mod normal_eq;
