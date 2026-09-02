@@ -28,7 +28,7 @@ mod tests {
     use crate::lm::gn_flat::GnDriver;
     use crate::lm::normal_eq::NeDriver;
     use crate::lm::residual::fixtures::load_ieee39_mat;
-    use nalgebra_sparse::CscMatrix;
+    use nalgebra_sparse::{CooMatrix, CscMatrix};
     use num_complex::Complex64;
     use std::time::Instant;
 
@@ -236,5 +236,96 @@ mod tests {
         }
         println!("AUG-FS vs v4 reduced-J max|Δ| = {max_diff:.3e}");
         assert!(max_diff < 1e-9, "AUG-FS full-J disagrees with v4 kernel");
+    }
+
+    /// Same cross-validation as `aug_fs_j_matches_v4` but on PEGASE9241 and
+    /// sparse (dense would need 2.3 GB). Reports the worst entries so a
+    /// systematic difference can be localized by (row, col) pattern.
+    #[test]
+    fn aug_fs_j_matches_v4_pegase9241() {
+        use crate::basic::new_dsdvbus4::fill_jacobian_v4;
+        use crate::lm::pattern::KktPattern;
+        let Some(c) = load_zip_case("PEGASE9241", "cases/pegase9241/data.zip") else {
+            println!("skipped (archive missing)");
+            return;
+        };
+        let ybus = &c.ybus;
+        let (npv, npq) = (c.npv, c.npq);
+        let nb = ybus.ncols();
+        let n_state = npv + 2 * npq;
+
+        let pat = KktPattern::build(ybus, npv, npq);
+        // Non-trivial voltage with real angle spread.
+        let v: Vec<Complex64> = (0..nb)
+            .map(|k| {
+                let ang = 0.3 * (1.3 * k as f64).sin() - 0.02 * k as f64;
+                let mag = 1.05 + 0.04 * (2.1 * k as f64).cos();
+                Complex64::from_polar(mag, ang)
+            })
+            .collect();
+        let mut ibus = vec![Complex64::new(0.0, 0.0); nb];
+        for j in 0..nb {
+            for p in ybus.col_offsets()[j]..ybus.col_offsets()[j + 1] {
+                ibus[ybus.row_indices()[p]] += ybus.values()[p] * v[j];
+            }
+        }
+        let scalc: Vec<Complex64> = (0..nb).map(|i| v[i] * ibus[i].conj()).collect();
+        let vnorm: Vec<Complex64> = (0..nb)
+            .map(|i| {
+                let m = v[i].norm();
+                if m > 1e-12 { v[i] / m } else { Complex64::new(1.0, 0.0) }
+            })
+            .collect();
+        let cache = &pat.cache;
+        let mut j_ref = vec![0.0; pat.graph.nnz];
+        fill_jacobian_v4::<false>(
+            ybus, &v, &vnorm, &scalc,
+            &pat.graph.col_starts, cache.pq_ends(), cache.active_ends(), cache.diag_ptrs(),
+            npv, npq, &mut j_ref,
+        );
+
+        let mut fs = AugFsDriver::build(ybus, npv, npq, c.sbus.clone());
+        let full = fs.full_j_coo_pub(ybus, &v);
+        // Filtered reduced triplets → CSC (sparse comparison).
+        let mut red_coo = CooMatrix::new(n_state, n_state);
+        for k in 0..full.nnz() {
+            let (rr, cc) = (fs.map_row(full.row_indices()[k]), fs.map_col(full.col_indices()[k]));
+            if rr != usize::MAX && cc != usize::MAX {
+                red_coo.push(rr, cc, full.values()[k]);
+            }
+        }
+        let red = CscMatrix::from(&red_coo);
+
+        let mut cs = pat.graph.col_starts.clone();
+        cs.push(pat.graph.nnz);
+        let mut worst: Vec<(f64, usize, usize, f64, f64)> = Vec::new();
+        for cc in 0..n_state {
+            let (mut p, mut q) = (cs[cc], red.col_offsets()[cc]);
+            let (pe, qe) = (cs[cc + 1], red.col_offsets()[cc + 1]);
+            while p < pe || q < qe {
+                let rr_ref = if p < pe { pat.graph.row_indices[p] } else { usize::MAX };
+                let rr_fs = if q < qe { red.row_indices()[q] } else { usize::MAX };
+                if rr_ref == rr_fs {
+                    let d = (j_ref[p] - red.values()[q]).abs();
+                    if d > 1e-9 {
+                        worst.push((d, rr_ref, cc, j_ref[p], red.values()[q]));
+                    }
+                    p += 1;
+                    q += 1;
+                } else if rr_ref < rr_fs {
+                    worst.push((j_ref[p].abs(), rr_ref, cc, j_ref[p], 0.0));
+                    p += 1;
+                } else {
+                    worst.push((red.values()[q].abs(), rr_fs, cc, 0.0, red.values()[q]));
+                    q += 1;
+                }
+            }
+        }
+        worst.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        println!("PEGASE9241: entries with |Δ|>1e-9: {}", worst.len());
+        for (d, r, cc, a, b) in worst.iter().take(10) {
+            println!("  row={r} col={cc} ref={a:.6e} fs={b:.6e} |Δ|={d:.3e}");
+        }
+        assert!(worst.is_empty(), "AUG-FS full-J disagrees with v4 on PEGASE9241");
     }
 }
