@@ -1,0 +1,13 @@
+[package]
+name = "rustpower-ldl-sys"
+version = "0.1.0"
+edition = "2021"
+description = "Auto generated bindings for the SuiteSparse LDL library (with AMD ordering)."
+license = "MPL-2.0"
+repository = "https://github.com/chengts95/rustpower"
+
+[features]
+static = []
+
+[build-dependencies]
+bindgen = "^0.72.1"

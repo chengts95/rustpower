@@ -8,6 +8,16 @@ mod klu;
 #[cfg(any(feature = "klu", feature = "klu_dyn"))]
 pub use klu::*;
 
+#[cfg(feature = "ldl")]
+mod ldl;
+#[cfg(feature = "ldl")]
+pub use ldl::*;
+
+#[cfg(feature = "qdldl")]
+mod qdldl;
+#[cfg(feature = "qdldl")]
+pub use qdldl::*;
+
 #[cfg(feature = "rsparse")]
 mod rsparse;
 #[cfg(feature = "rsparse")]
@@ -26,6 +36,21 @@ pub type DefaultSolver = KLUSolver;
 
 #[cfg(all(not(feature = "klu"), not(feature = "klu_dyn"), feature = "faer"))]
 pub type DefaultSolver = FaerSolver;
+
+/// Default backend for the LM-family augmented KKT system.
+///
+/// The augmented system `[μI Jᵀ; J −I]` is symmetric indefinite: a general
+/// LU (`DefaultSolver`) solves it but wastes the symmetry, so the LM path
+/// defaults to an LDLᵀ factorization instead. SuiteSparse LDL (feature
+/// `ldl`) wins when available; otherwise pure-Rust QDLDL (in the default
+/// feature set — no external libraries, no SuiteSparse). With both off the
+/// alias degrades to the global `DefaultSolver`.
+#[cfg(feature = "ldl")]
+pub type DefaultLmSolver = LDLSolver;
+#[cfg(all(not(feature = "ldl"), feature = "qdldl"))]
+pub type DefaultLmSolver = QDLDLSolver;
+#[cfg(all(not(feature = "ldl"), not(feature = "qdldl")))]
+pub type DefaultLmSolver = DefaultSolver;
 
 #[allow(non_snake_case)]
 /// A trait for solving sparse linear systems.

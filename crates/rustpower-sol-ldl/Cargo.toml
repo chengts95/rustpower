@@ -1,0 +1,13 @@
+[package]
+name = "rustpower-sol-ldl"
+version = "0.1.0"
+edition = "2021"
+description = "A very basic SuiteSparse-LDL-based sparse symmetric (quasi-definite) solver unsafe wrapper."
+license = "MPL-2.0"
+repository = "https://github.com/chengts95/rustpower"
+
+[features]
+static = ["rustpower-ldl-sys/static"]
+
+[dependencies]
+rustpower-ldl-sys = { path = "./rustpower-ldl-sys", version = "^0.1.0" }
