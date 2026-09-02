@@ -9,7 +9,8 @@
 //! | AUG-FS   | full 2n_bus J (all quadrants, slack/PV waste) + slice + COO stack | fresh solver every μ try |
 //! | NE-COO   | COO→CSC J, spgemm JᵀJ pattern+values every iteration (`dumb_mode`) | per outer iteration |
 //! | AUG-COO  | COO push + sort/convert of `[μI Jᵀ; J −I]` every μ try | fresh solver every μ try |
-//! | AUG-SDF  | direct CSC fill from Ybus offsets (`GnDriver`) | once, numeric-only after |
+//! | AUG-SDF  | direct CSC fill from Ybus offsets (`GnDriver`), full symmetric slim | once, numeric-only after |
+//! | AUG-SDF-TRIU | row-oriented direct fill of the upper triangle only (`GnTriuDriver`) | once, numeric-only after |
 //!
 //! Run (release, klu for the IEEE39 fixture loader):
 //! ```text
@@ -26,6 +27,7 @@ mod tests {
     use crate::lm::baseline::aug_coo::AugCooDriver;
     use crate::lm::baseline::full_slice::AugFsDriver;
     use crate::lm::gn_flat::GnDriver;
+    use crate::lm::gn_triu::GnTriuDriver;
     use crate::lm::normal_eq::NeDriver;
     use crate::lm::residual::fixtures::load_ieee39_mat;
     use nalgebra_sparse::{CooMatrix, CscMatrix};
@@ -78,6 +80,24 @@ mod tests {
             d.n_solves,
         );
         assert!(res.converged, "AUG-SDF must converge on {}", c.name);
+    }
+
+    fn run_aug_sdf_triu(c: &Case) {
+        let mut d = GnTriuDriver::build(&c.ybus, c.npv, c.npq, c.sbus.clone());
+        let mut s = QDLDLSolver::default();
+        let mut v = c.v_init.clone();
+        let t = Instant::now();
+        let res = d.solve_gn(&c.ybus, &mut s, &mut v, 1e-8, 100);
+        let wall = t.elapsed();
+        let its = res.iterations.max(1) as f64;
+        println!(
+            "  AUG-SDF-TRIU | it={:<3} conv={:<5} wall={:>9.3?} | fill={:.3}ms ({:.1}µs/it) solve={:.3}ms ({:.1}µs/solve, {} solves)",
+            res.iterations, res.converged, wall,
+            d.prof_fill_ns as f64 / 1e6, d.prof_fill_ns as f64 / 1e3 / its,
+            d.prof_solve_ns as f64 / 1e6, d.prof_solve_ns as f64 / 1e3 / d.n_solves.max(1) as f64,
+            d.n_solves,
+        );
+        assert!(res.converged, "AUG-SDF-TRIU must converge on {}", c.name);
     }
 
     fn run_aug_coo(c: &Case) {
@@ -151,6 +171,7 @@ mod tests {
         for c in &cases {
             println!("=== {} (n_bus={}, npv={}, npq={}) ===", c.name, c.ybus.ncols(), c.npv, c.npq);
             run_aug_sdf(c);
+            run_aug_sdf_triu(c);
             run_aug_fs(c);
             run_aug_coo(c);
             run_ne_coo(c);
