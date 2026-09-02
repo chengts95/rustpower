@@ -37,6 +37,12 @@ pub struct AugFsDriver {
     /// cols: θ of active (j), |V| of PQ (nb + j).
     row_map: Vec<usize>,
     col_map: Vec<usize>,
+    /// Ybus transpose (CSC of Yᵀ = row-wise view of Y). Built once at
+    /// symbolic time: the full-J walk needs `Y_ij` per *row* i, and our CSC
+    /// only serves columns. Required for correctness on phase-shifter cases
+    /// where Ybus is numerically asymmetric (PEGASE9241); walking column i
+    /// as "row i" silently substitutes `Y_ji` there.
+    ybus_t: CscMatrix<Complex64>,
     // Scratch.
     ibus: Vec<Complex64>,
     r: Vec<f64>,
@@ -86,6 +92,7 @@ impl AugFsDriver {
             n_state,
             row_map,
             col_map,
+            ybus_t: ybus.transpose(),
             ibus: vec![Complex64::new(0.0, 0.0); nb],
             r: vec![0.0; n_state],
             rt: vec![0.0; n_state],
@@ -129,7 +136,14 @@ impl AugFsDriver {
             }
         }
         let mut coo = CooMatrix::new(2 * nb, 2 * nb);
-        let (y_cp, y_ri, y_v) = (ybus.col_offsets(), ybus.row_indices(), ybus.values());
+        // Walk ROW i via the transpose: entries (i, j, Y_ij). (Walking
+        // column i of Ybus would silently substitute Y_ji — wrong for
+        // phase-shifter branches where Ybus is numerically asymmetric.)
+        let (y_cp, y_ri, y_v) = (
+            self.ybus_t.col_offsets(),
+            self.ybus_t.row_indices(),
+            self.ybus_t.values(),
+        );
         for i in 0..nb {
             let (mi, thi) = v[i].to_polar();
             let si = v[i] * self.ibus[i].conj(); // P_i + jQ_i
@@ -270,6 +284,9 @@ impl AugFsDriver {
                 let pred: f64 = -0.5
                     * self.g.iter().zip(delta.iter()).map(|(g, d)| g * d).sum::<f64>();
                 let rho = if pred > 0.0 { (f - f_new) / pred } else { -1.0 };
+                if std::env::var("RUSTPOWER_LM_DEBUG").is_ok() {
+                    eprintln!("it={it} tryμ={mu:.3e} res={res_inf:.3e} f={f:.4e} f_new={f_new:.4e} pred={pred:.4e} ρ={rho:.4}");
+                }
                 if rho > 1e-4 {
                     v.copy_from_slice(&self.vt);
                     if rho > 0.75 {
