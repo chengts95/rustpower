@@ -6,3 +6,6 @@ pub mod network;
 pub mod plugin;
 pub mod post_processing;
 pub mod powerflow;
+
+#[cfg(all(test, feature = "klu"))]
+mod perf_pf;
