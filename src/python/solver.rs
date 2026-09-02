@@ -54,9 +54,9 @@ impl NewtonSolver {
     }
 
     /// Optimized context setup using the Double-Transpose trick.
-    /// Maps Y_csc -> Y_t_csr, permutes in CSR, then swaps back to CSC for KLU.
+    /// Converts the provided Y-bus matrix from CSR to CSC format, applies the given permutations,
     ///
-    /// y_indptr, y_indices, y_data: CSC representation of the Y-bus matrix.
+    /// y_indptr, y_indices, y_data: CSR representation of the Y-bus matrix.
     /// s_bus: Complex power injections.
     /// v_init: Initial voltage guess.
     /// p_vec, p_inv: Permutation vectors.
@@ -140,9 +140,15 @@ impl NewtonSolver {
     }
 
     /// Run the solver. Returns True if converged.
-    fn solve(&mut self) -> PyResult<bool> {
+    #[pyo3(signature = (max_iter=10, tol=1e-6))]
+    fn solve(&mut self, max_iter: usize, tol: f64) -> PyResult<bool> {
         use bevy_ecs::prelude::*;
         use bevy_ecs::system::RunSystemOnce;
+
+        // Update the resource
+        let mut cfg = self.app.world_mut().get_resource_or_insert_with(|| PowerFlowConfig::default());
+        cfg.max_it = Some(max_iter);
+        cfg.tol = Some(tol);
 
         let converged = self.app.world_mut().run_system_once(
             |mut mat: ResMut<PowerFlowMat>,
@@ -198,6 +204,16 @@ impl NewtonSolver {
             // Since v_perm[i] = v_orig[p_vec[i]]
             v_final[self.p_vec[i]] = val;
         }
+
         Ok(v_final.into_pyarray(py))
+    }
+
+    /// Get the number of iterations taken by the solver.
+    fn get_iterations(&self) -> PyResult<usize> {
+        let world = self.app.world();
+        let res = world.get_resource::<PowerFlowResult>().ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Solve has not been run")
+        })?;
+        Ok(res.iterations)
     }
 }
