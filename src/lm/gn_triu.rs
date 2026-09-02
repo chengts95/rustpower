@@ -24,10 +24,13 @@
 //! `triu_matches_flat_*` tests assert exactly this).
 //!
 //! KLU-class full-matrix solvers cannot consume this layout; they keep using
-//! [`super::gn_flat::GnFlatLayout`]. Feature pairing lives in
-//! `crate::basic::solver::DefaultLmSolver` (LDLᵀ backends) — the triu driver
-//! is only compiled with `qdldl` or `ldl`.
+//! [`super::gn_flat::GnFlatLayout`]. Neither can SuiteSparse LDL — it reads
+//! the upper triangle of the **permuted** PAP′ and therefore needs the full
+//! symmetric pattern. Pure-Rust QDLDL is the one backend that takes the
+//! plain upper triangle; the pairing lives in
+//! [`super::newton_pf_gn_default`]'s feature ladder.
 
+use nalgebra::DVector;
 use nalgebra_sparse::CscMatrix;
 use num_complex::Complex64;
 
@@ -378,6 +381,40 @@ impl GnTriuDriver {
         let (n_act, npq) = (self.n_act, self.npq);
         let (res_inf, _) = residual(ybus, &self.sbus, &mut self.ibus, n_act, npq, v, &mut self.r);
         GnTriuResult { iterations: maxit, converged: res_inf < tol, res_inf }
+    }
+}
+
+/// Classical GN-LM power flow with the same contract as
+/// [`crate::basic::newtonpf::newton_pf`] — the ECS-plugin entry point on the
+/// triu-slim layout. QDLDL only (it consumes the plain upper triangle);
+/// SuiteSparse LDL needs the full symmetric pattern (permuted-triangle
+/// access), and KLU-class LU backends need the full matrix — both must use
+/// [`super::gn_flat::newton_pf_gn`].
+#[allow(clippy::too_many_arguments)]
+pub fn newton_pf_gn_triu<Solver: Solve>(
+    ybus: &CscMatrix<Complex64>,
+    sbus: &DVector<Complex64>,
+    v_init: &DVector<Complex64>,
+    npv: usize,
+    npq: usize,
+    tolerance: Option<f64>,
+    max_iter: Option<usize>,
+    solver: &mut Solver,
+) -> Result<(DVector<Complex64>, usize), (String, DVector<Complex64>, usize)> {
+    let tol = tolerance.unwrap_or(1e-6);
+    let maxit = max_iter.unwrap_or(100);
+    let mut driver = GnTriuDriver::build(ybus, npv, npq, sbus.iter().copied().collect());
+    let mut v: Vec<Complex64> = v_init.iter().copied().collect();
+    let res = driver.solve_gn(ybus, solver, &mut v, tol, maxit);
+    let dv = DVector::from_vec(v);
+    if res.converged {
+        Ok((dv, res.iterations))
+    } else {
+        Err((
+            format!("GN-LM(triu) did not converge (res_inf = {:.3e})", res.res_inf),
+            dv,
+            res.iterations,
+        ))
     }
 }
 

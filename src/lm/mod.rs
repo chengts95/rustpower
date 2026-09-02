@@ -41,5 +41,20 @@ pub use flat::{fill_kkt, fill_kkt_flat, FlatLayout};
 pub use kernels::{apply_mu_delta, fill_h, fill_jt};
 pub use pattern::KktPattern;
 
+/// Default GN-LM entry point for the selected LM backend. Mirrors the
+/// [`crate::basic::solver::DefaultLmSolver`] feature ladder exactly:
+///
+/// * pure-Rust QDLDL (and no `ldl`) consumes the plain upper triangle, so
+///   the plugin fills it directly — row-oriented, half the storage;
+/// * SuiteSparse LDL accesses the upper triangle of the **permuted** PAP′,
+///   so it must see the full symmetric pattern — triu-only input silently
+///   drops entries that become upper after AMD permutation (caught by
+///   `gn_plugin_ieee39_standard_case`);
+/// * LU backends (KLU family) likewise need the full symmetric slim layout.
+#[cfg(all(not(feature = "ldl"), feature = "qdldl"))]
+pub use gn_triu::newton_pf_gn_triu as newton_pf_gn_default;
+#[cfg(any(feature = "ldl", not(feature = "qdldl")))]
+pub use gn_flat::newton_pf_gn as newton_pf_gn_default;
+
 #[cfg(test)]
 mod tests;
