@@ -3,6 +3,10 @@
 //! plugin that takes over the solve stage when [`ActiveSolver`] selects it
 //! (the default NR system only runs for `ActiveSolver::NewtonRaphson`).
 //!
+//! The assembly layout follows the LM backend ([`crate::lm::newton_pf_gn_default`]):
+//! pure-Rust QDLDL gets the row-oriented upper-triangle fill; SuiteSparse LDL
+//! and LU backends (KLU family) get the full symmetric slim fill.
+//!
 //! Pure-Rust usage:
 //! ```ignore
 //! let mut app = default_app();
@@ -15,7 +19,7 @@
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
-use crate::lm::gn_flat::newton_pf_gn;
+use crate::lm::newton_pf_gn_default;
 
 use super::network::SolverStage;
 use super::plugin::{ActiveSolver, PowerFlowSolverSet};
@@ -45,7 +49,7 @@ pub fn gn_run_pf(
         return;
     }
 
-    let v = newton_pf_gn(
+    let v = newton_pf_gn_default(
         &mat.y_bus,
         &mat.s_bus,
         &mat.v_bus_init,
@@ -95,7 +99,6 @@ impl Plugin for GnPlugin {
 mod tests {
     use super::*;
     use crate::basic::ecs::elements::PPNetwork;
-    use crate::basic::ecs::network::PowerFlow;
     use crate::basic::ecs::plugin::default_app;
     use crate::io::pandapower::Network;
 
