@@ -13,4 +13,6 @@
 #[cfg(feature = "qdldl")]
 pub mod aug_coo;
 #[cfg(feature = "qdldl")]
+pub mod full_slice;
+#[cfg(feature = "qdldl")]
 mod bench;
