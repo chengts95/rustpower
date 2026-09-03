@@ -65,52 +65,54 @@ pub fn fill_jacobian_v3(
         let out_j21 = jslice!(j_ptr, pattern.j21_starts[k], pq_end);
         let out_j12 = jslice!(j_ptr, pattern.j12_starts[k], active_end);
         let out_j22 = jslice!(j_ptr, pattern.j22_starts[k], pq_end);
+
         // 第一部分：处理 offset 在 [0, pq_end) 范围内的情况
         // 所有四个输出数组都需要写入
         for offset in 0..pq_end {
             let y_ptr = y_start + offset;
-            let i = y_row_indices[y_ptr];
-            let Y_ik = y_vals[y_ptr];
+            let i = *unsafe { y_row_indices.get_unchecked(y_ptr) };
+            let Y_ik = *unsafe { y_vals.get_unchecked(y_ptr) };
 
             // 第一组复数乘法: Va
             let Va_re = Y_ik.re * ek - Y_ik.im * fk;
             let Va_im = Y_ik.re * fk + Y_ik.im * ek;
 
-            let ei = v[i].re;
-            let fi = v[i].im;
+            let vi = unsafe { *v.get_unchecked(i) };
+            let ei = vi.re;
+            let fi = vi.im;
 
-            // 第二组复数乘法: Vm
-            let Vm_re = Y_ik.re * enk - Y_ik.im * fnk;
-            let Vm_im = Y_ik.re * fnk + Y_ik.im * enk;
+            let j11 = fi * Va_re - ei * Va_im;
+            let j21 = -(ei * Va_re + fi * Va_im);
 
-            // 写入所有四个输出
-            out_j11[offset] = fi * Va_re - ei * Va_im;
-            out_j21[offset] = -(ei * Va_re + fi * Va_im);
-            out_j12[offset] = ei * Vm_re + fi * Vm_im;
-            out_j22[offset] = fi * Vm_re - ei * Vm_im;
+            unsafe {
+                *out_j11.get_unchecked_mut(offset) = j11;
+                *out_j21.get_unchecked_mut(offset) = j21;
+                *out_j12.get_unchecked_mut(offset) = -j21 * inv_vmag;
+                *out_j22.get_unchecked_mut(offset) = j11 * inv_vmag;
+            }
         }
 
         // 第二部分：处理 offset 在 [pq_end, active_end) 范围内的情况
         // 只写入 out_j11 和 out_j12，out_j21 和 out_j22 不写入
         for offset in pq_end..active_end {
             let y_ptr = y_start + offset;
-            let i = y_row_indices[y_ptr];
-            let Y_ik = y_vals[y_ptr];
+            let i = *unsafe { y_row_indices.get_unchecked(y_ptr) };
+            let Y_ik = *unsafe { y_vals.get_unchecked(y_ptr) };
 
-            // 第一组复数乘法: Va
             let Va_re = Y_ik.re * ek - Y_ik.im * fk;
             let Va_im = Y_ik.re * fk + Y_ik.im * ek;
 
-            let ei = v[i].re;
-            let fi = v[i].im;
+            let vi = unsafe { *v.get_unchecked(i) };
+            let ei = vi.re;
+            let fi = vi.im;
 
-            // 第二组复数乘法: Vm
-            let Vm_re = Y_ik.re * enk - Y_ik.im * fnk;
-            let Vm_im = Y_ik.re * fnk + Y_ik.im * enk;
+            let j11 = fi * Va_re - ei * Va_im;
+            let j21 = -(ei * Va_re + fi * Va_im);
 
-            // 只写入两个输出
-            out_j11[offset] = fi * Va_re - ei * Va_im;
-            out_j12[offset] = ei * Vm_re + fi * Vm_im;
+            unsafe {
+                *out_j11.get_unchecked_mut(offset) = j11;
+                *out_j12.get_unchecked_mut(offset) = -j21 * inv_vmag;
+            }
         }
 
         // Diagonal corrections
@@ -134,41 +136,45 @@ pub fn fill_jacobian_v3(
 
         let out_j11 = jslice!(j_ptr, pattern.j11_starts[k], active_end);
         let out_j21 = jslice!(j_ptr, pattern.j21_starts[k], pq_end);
+
         // 第一部分：处理 offset 在 [0, pq_end) 范围内的情况
         // 这里两个数组都需要写入
         for offset in 0..pq_end {
             let y_ptr = y_start + offset;
-            let i = y_row_indices[y_ptr];
-            let Y_ik = y_vals[y_ptr];
+            let i = *unsafe { y_row_indices.get_unchecked(y_ptr) };
+            let Y_ik = *unsafe { y_vals.get_unchecked(y_ptr) };
 
-            // 复数乘法部分
             let Va_re = Y_ik.re * ek - Y_ik.im * fk;
             let Va_im = Y_ik.re * fk + Y_ik.im * ek;
 
-            let ei = v[i].re;
-            let fi = v[i].im;
+            let vi = unsafe { *v.get_unchecked(i) };
+            let ei = vi.re;
+            let fi = vi.im;
 
-            // 两个输出都需要计算
-            out_j11[offset] = fi * Va_re - ei * Va_im;
-            out_j21[offset] = -(ei * Va_re + fi * Va_im);
+            unsafe {
+                *out_j11.get_unchecked_mut(offset) = fi * Va_re - ei * Va_im;
+                *out_j21.get_unchecked_mut(offset) = -(ei * Va_re + fi * Va_im);
+            }
         }
 
         // 第二部分：处理 offset 在 [pq_end, active_end) 范围内的情况
-        // 这里只需要写入 out_j11，out_j21 不需要写入（或保持原值）
+        // 这里只需要写入 out_j11
         for offset in pq_end..active_end {
             let y_ptr = y_start + offset;
-            let i = y_row_indices[y_ptr];
-            let Y_ik = y_vals[y_ptr];
+            let i = *unsafe { y_row_indices.get_unchecked(y_ptr) };
+            let Y_ik = *unsafe { y_vals.get_unchecked(y_ptr) };
 
             // 复数乘法部分
             let Va_re = Y_ik.re * ek - Y_ik.im * fk;
             let Va_im = Y_ik.re * fk + Y_ik.im * ek;
 
-            let ei = v[i].re;
-            let fi = v[i].im;
+            let vi = unsafe { *v.get_unchecked(i) };
+            let ei = vi.re;
+            let fi = vi.im;
 
-            // 只写入 out_j11
-            out_j11[offset] = fi * Va_re - ei * Va_im;
+            unsafe {
+                *out_j11.get_unchecked_mut(offset) = fi * Va_re - ei * Va_im;
+            }
         }
         unsafe {
             slot!(j_values, pattern.j11_starts[k] + diag_offset) += -qk;
