@@ -6,6 +6,7 @@ pub(crate) mod new_dsdvbus3;
 pub(crate) mod pf_old_impl;
 pub mod newtonpf;
 pub mod iwamoto;
+pub mod branch;
 
 pub mod ecs;
 pub mod solver;

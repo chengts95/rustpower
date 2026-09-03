@@ -128,24 +128,23 @@ impl SnaptShotRegGroup for LineSnapshotReg {
 }
 
 pub mod line_systems {
-    use nalgebra::{Complex, vector};
+    use nalgebra::{Complex, Matrix2};
 
-    use crate::basic::ecs::{elements::*, network::GND};
+    use crate::basic::ecs::elements::*;
 
     use super::*;
     pub fn setup_line_systems(
         mut commands: Commands,
         q: Query<(Entity, &LineParams, &FromBus, &ToBus), Without<OutOfService>>,
         oos: Query<Entity, (With<LineParams>, With<OutOfService>)>,
-        buses: Query<&VNominal>,
-        lut: Res<NodeLookup>,
         common: Res<PFCommonData>,
     ) {
         // Out-of-service lines contribute nothing to the Y-bus.
         for entity in &oos {
             commands.entity(entity).despawn_related::<Children>();
+            commands.entity(entity).remove::<Port4MatPatch>();
         }
-        for (entity, params, from, to) in &q {
+        for (entity, params, _from, _to) in &q {
             let length = params.length_km;
             let parallel = params.parallel as f64;
             let wbase = common.wbase;
@@ -157,33 +156,23 @@ pub mod line_systems {
             let rl = params.r_ohm_per_km * length / parallel;
             let xl = params.x_ohm_per_km * length / parallel;
             let y_series = 1.0 / Complex::new(rl, xl);
-            let vbase = lut.get_entity(from.0).unwrap();
-            let vbase = buses.get(vbase).unwrap().0.0;
-            // Rebuild admittance children from scratch so re-running setup
-            // (e.g. a second init_pf) does not duplicate branches.
-            commands.entity(entity).despawn_related::<Children>();
-            // Shunt: from and to → GND
-            commands.entity(entity).insert(Line).with_children(|p| {
-                if g != 0.0 || b != 0.0 {
-                    p.spawn(AdmittanceBranch {
-                        y: Admittance(y_shunt),
-                        port: Port2(vector![from.0, GND]),
-                        v_base: VBase(vbase), // 1.0 per unit unless otherwise specified
-                    });
-                    p.spawn(AdmittanceBranch {
-                        y: Admittance(y_shunt),
-                        port: Port2(vector![to.0, GND]),
-                        v_base: VBase(vbase),
-                    });
-                }
 
-                // Series element between from and to
-                p.spawn(AdmittanceBranch {
-                    y: Admittance(y_series),
-                    port: Port2(vector![from.0, to.0]),
-                    v_base: VBase(vbase),
-                });
-            });
+            commands.entity(entity).despawn_related::<Children>();
+
+            // Physical SI 2x2 admittance matrix:
+            // [ [y_series + y_shunt, -y_series],
+            //   [-y_series, y_series + y_shunt] ]
+            let g_mat = Matrix2::new(
+                y_series + y_shunt,
+                -y_series,
+                -y_series,
+                y_series + y_shunt,
+            );
+
+            commands.entity(entity).insert((
+                basic::ecs::elements::Line,
+                Port4MatPatch(g_mat),
+            ));
         }
     }
 }

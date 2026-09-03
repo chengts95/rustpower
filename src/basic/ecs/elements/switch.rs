@@ -198,31 +198,28 @@ pub fn process_switch_state(
 #[allow(dead_code)]
 pub fn process_switch_state_admit(
     mut cmd: Commands,
-    nodes: Res<NodeLookup>,
-    buses: Query<&VNominal>,
     q: Query<(Entity, &Switch, &SwitchState)>,
 ) {
     q.iter().for_each(|(entity, switch, closed)| {
         let _z_ohm = switch.z_ohm;
         match switch.et {
             SwitchType::SwitchTwoBuses if **closed && _z_ohm == 0.0 => {
-                let (node1, node2) = (switch.bus, switch.element);
-                let bus = nodes.get_entity(switch.bus).unwrap();
-                let v_base = *buses.get(bus).unwrap().0;
-                cmd.entity(entity).insert(AdmittanceBranch {
-                    y: Admittance(Complex::new(1e6, 0.0)),
-                    port: Port2(vector![node1, node2]),
-                    v_base: VBase(v_base),
-                });
+                let y = Complex::new(1e6, 0.0);
+                let g = nalgebra::Matrix2::new(y, -y, -y, y);
+                cmd.entity(entity).insert((
+                    FromBus(switch.bus),
+                    ToBus(switch.element),
+                    Port4MatPatch(g),
+                ));
             }
             SwitchType::SwitchTwoBuses if **closed => {
-                let bus = nodes.get_entity(switch.bus).unwrap();
-                let v_base = *buses.get(bus).unwrap().0;
-                cmd.entity(entity).insert(AdmittanceBranch {
-                    y: Admittance(Complex::new(_z_ohm, 0.0)),
-                    port: Port2(vector![switch.bus, switch.element]),
-                    v_base: VBase(v_base),
-                });
+                let y = Complex::new(_z_ohm, 0.0);
+                let g = nalgebra::Matrix2::new(y, -y, -y, y);
+                cmd.entity(entity).insert((
+                    FromBus(switch.bus),
+                    ToBus(switch.element),
+                    Port4MatPatch(g),
+                ));
             }
             _ => {}
         }
