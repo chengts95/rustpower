@@ -220,4 +220,50 @@ impl NewtonSolver {
         })?;
         Ok(res.iterations)
     }
+
+    /// Get the calculated bus power injection vector (S_calc = V * (Ybus * V)^*) in original bus order.
+    /// If NewtonCache is enabled and populated, this extracts S_calc directly without matrix multiplication.
+    /// If cache is empty or not enabled, it performs one matrix multiplication and vector conjugate product.
+    fn get_scalc<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
+        let world = self.app.world();
+        let res = world.get_resource::<PowerFlowResult>().ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Solve has not been run")
+        })?;
+        let mat = world.get_resource::<PowerFlowMat>().ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("PowerFlowMat not initialized")
+        })?;
+
+        let n = res.v.len();
+        let mut s_orig = vec![num_complex::Complex64::new(0.0, 0.0); n];
+
+        if let Some(cache) = world.get_resource::<crate::basic::newtonpf::NewtonCache>() {
+            if cache.s_calc.len() == n {
+                for (i, &val) in cache.s_calc.as_slice().iter().enumerate() {
+                    s_orig[self.p_vec[i]] = val;
+                }
+                return Ok(s_orig.into_pyarray(py));
+            }
+        }
+
+        // Fallback: If cache is empty, do one csc_matvec_and_scalc
+        let mut ibus = vec![num_complex::Complex64::new(0.0, 0.0); n];
+        let mut scalc_perm = vec![num_complex::Complex64::new(0.0, 0.0); n];
+        crate::basic::newtonpf::csc_matvec_and_scalc(
+            mat.y_bus.col_offsets(),
+            mat.y_bus.row_indices(),
+            mat.y_bus.values(),
+            res.v.as_slice(),
+            &mut ibus,
+            &mut scalc_perm,
+        );
+
+        for (i, &val) in scalc_perm.iter().enumerate() {
+            s_orig[self.p_vec[i]] = val;
+        }
+
+        Ok(s_orig.into_pyarray(py))
+    }
 }
