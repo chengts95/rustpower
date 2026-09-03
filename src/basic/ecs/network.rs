@@ -4,7 +4,7 @@ use std::fmt;
 use bevy_app::prelude::*;
 use bevy_ecs::{component::Mutable, prelude::*, world::error::EntityMutableFetchError};
 
-use crate::basic::{newton_pf, newton_pf_iwamoto, solver::DefaultSolver};
+use crate::basic::{newtonpf::NewtonCache, newton_pf, newton_pf_iwamoto, solver::DefaultSolver};
 
 use super::{
     plugin::DefaultPlugins,
@@ -86,7 +86,8 @@ pub fn apply_permutation(mut mat: ResMut<PowerFlowMat>) {
     let p_vec = mat.from_perm.clone();
     let p_inv = mat.to_perm.clone();
 
-    mat.y_bus = crate::basic::sparse::utils::permute_csc_to_csc_local_sort(&mat.y_bus, &p_vec, &p_inv);
+    mat.y_bus =
+        crate::basic::sparse::utils::permute_csc_to_csc_local_sort(&mat.y_bus, &p_vec, &p_inv);
 
     let mut new_s_bus = mat.s_bus.clone();
     let mut new_v_bus = mat.v_bus_init.clone();
@@ -103,7 +104,8 @@ fn apply_inversed_permutation(mut mat: ResMut<PowerFlowMat>) {
     let p_vec = mat.to_perm.clone();
     let p_inv = mat.from_perm.clone();
 
-    mat.y_bus = crate::basic::sparse::utils::permute_csc_to_csc_local_sort(&mat.y_bus, &p_vec, &p_inv);
+    mat.y_bus =
+        crate::basic::sparse::utils::permute_csc_to_csc_local_sort(&mat.y_bus, &p_vec, &p_inv);
 
     let mut new_s_bus = mat.s_bus.clone();
     let mut new_v_bus = mat.v_bus_init.clone();
@@ -125,6 +127,7 @@ pub fn ecs_run_pf(
     mat: Res<PowerFlowMat>,
     cfg: Res<PowerFlowConfig>,
     mut solver: ResMut<PowerFlowSolver>,
+    mut cache: Option<ResMut<NewtonCache>>,
 ) {
     // A grid without buses, or without a slack bus (npv + npq == n), has no
     // valid power flow problem; report non-convergence instead of letting the
@@ -150,6 +153,7 @@ pub fn ecs_run_pf(
         tol,
         max_it,
         &mut solver.solver,
+        cache.as_deref_mut(),
     );
 
     // Handle the results of the power flow calculation.

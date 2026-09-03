@@ -1,4 +1,14 @@
 # Changelog
+
+## [0.5.1] - Fix and Improvement 
+- Fix transformer model error caused by oversight in complex number division, still not same to pandapower's transformer handling but explainable.
+- Fix python solver api docstring and add interface for iterations, tols, max_iter. 
+- Avoid useless memory consumptions in python solver api, use numpy array in setup context.
+- Further optimize the newton_pf and use norm Inf for tolerance check.
+- Add an experimental jacobian cache api to store jacobian and Sbus workspace. 
+- Suppress klu wrapper bindgen warnings and add search path to linux `/usr/lib`.
+- New test scripts to benchmark other opensource pf libs.
+
 ## [0.5.0] - Pre-release
 - Fix KLU wrapper small memory leak.
 - Add intial python wrapper.

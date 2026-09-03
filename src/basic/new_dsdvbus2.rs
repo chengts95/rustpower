@@ -47,7 +47,7 @@ impl JacobianPattern2 {
         let n_j_cols = n_active + npq;
 
         let mut j_col_ptrs = Vec::with_capacity(n_j_cols + 1);
-        let mut j_row_indices = Vec::new();
+        let mut j_row_indices = Vec::with_capacity(y_row_indices.len() * 2);
         j_col_ptrs.push(0);
 
         let mut pq_ends = vec![0; n_active];
@@ -78,16 +78,12 @@ impl JacobianPattern2 {
 
             // J11 (rows = all active rows of col k; J_red row = Ybus row).
             j11_starts[k] = current_nnz;
-            for &r in row_slice.iter().take(idx_active_end) {
-                j_row_indices.push(r);
-            }
+            j_row_indices.extend_from_slice(&row_slice[..idx_active_end]);
             current_nnz += idx_active_end;
 
             // J21 (rows = PQ rows of col k; J_red Q-eq row = n_active + Ybus row).
             j21_starts[k] = current_nnz;
-            for &r in row_slice.iter().take(idx_pq_end) {
-                j_row_indices.push(n_active + r);
-            }
+            j_row_indices.extend(row_slice[..idx_pq_end].iter().map(|&r| n_active + r));
             current_nnz += idx_pq_end;
 
             j_col_ptrs.push(current_nnz);
@@ -102,16 +98,12 @@ impl JacobianPattern2 {
 
             // J12 (rows = all active rows of col k).
             j12_starts[k] = current_nnz;
-            for &r in row_slice.iter().take(idx_active_end) {
-                j_row_indices.push(r);
-            }
+            j_row_indices.extend_from_slice(&row_slice[..idx_active_end]);
             current_nnz += idx_active_end;
 
             // J22 (rows = PQ rows of col k).
             j22_starts[k] = current_nnz;
-            for &r in row_slice.iter().take(idx_pq_end) {
-                j_row_indices.push(n_active + r);
-            }
+            j_row_indices.extend(row_slice[..idx_pq_end].iter().map(|&r| n_active + r));
             current_nnz += idx_pq_end;
 
             j_col_ptrs.push(current_nnz);
