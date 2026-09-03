@@ -1,12 +1,13 @@
 use std::f64::consts::PI;
 
-use nalgebra::{DVector, ComplexField, SimdComplexField};
+use nalgebra::{DVector, SimdComplexField};
 use nalgebra_sparse::CscMatrix;
 use num_complex::Complex64;
 use num_traits::Zero;
 
-use super::new_dsdvbus2::{fill_jacobian_v2, JacobianPattern2};
-use super::newtonpf::assemble_f_v2;
+use super::new_dsdvbus2::JacobianPattern2;
+use super::new_dsdvbus3::fill_jacobian_v3;
+use super::newtonpf::{csc_matvec_complex, fill_f_from_ibus};
 use super::solver::Solve;
 
 /// Newton-Raphson power flow with Iwamoto optimal multiplier step size control.
@@ -25,26 +26,41 @@ pub fn newton_pf_iwamoto<Solver: Solve>(
     let max_iter = max_iter.unwrap_or(100);
     let tol = tolerance.unwrap_or(1e-6);
 
-    let j_pattern = JacobianPattern2::build_from_permuted(
-        Ybus.col_offsets(),
-        Ybus.row_indices(),
-        npv,
-        npq,
-    );
+    let j_pattern =
+        JacobianPattern2::build_from_permuted(Ybus.col_offsets(), Ybus.row_indices(), npv, npq);
     let n_state = npv + 2 * npq;
     let mut j_values = vec![0.0; j_pattern.nnz_j];
 
     let n_bus = npv + npq;
-    let mut mis = &v.component_mul(&(Ybus * &v).conjugate()) - Sbus;
+    let mut ibus = DVector::zeros(v.len());
+    let mut s_calc = DVector::zeros(v.len());
     let mut F = DVector::zeros(n_state);
-    assemble_f_v2(&mut F, n_bus, &mis, n_state, npq);
-    if F.norm() < tol {
+    csc_matvec_complex(
+        Ybus.col_offsets(),
+        Ybus.row_indices(),
+        Ybus.values(),
+        v.as_slice(),
+        ibus.as_mut_slice(),
+    );
+    let norm2 = fill_f_from_ibus::<false>(
+        v.as_slice(),
+        ibus.as_slice(),
+        Sbus.as_slice(),
+        npq,
+        n_bus,
+        s_calc.as_mut_slice(),
+        F.as_mut_slice(),
+    );
+    if norm2 < tol * tol {
         return Ok((v, 0));
     }
 
     let mut v_m = v.map(|e| e.simd_modulus());
     let mut v_a = v.map(|e| e.simd_argument());
     let mut v_norm = v.map(|e| e.simd_signum());
+    let mut dv = DVector::zeros(v.len());
+    let mut ybus_dv = DVector::zeros(v.len());
+    let mut c = DVector::zeros(n_state);
 
     let Ap = unsafe {
         std::slice::from_raw_parts_mut(
@@ -60,13 +76,11 @@ pub fn newton_pf_iwamoto<Solver: Solve>(
     };
 
     for it in 0..max_iter {
-        let ibus = Ybus * &v;
-
-        fill_jacobian_v2(
+        fill_jacobian_v3(
             Ybus,
             v.as_slice(),
             v_norm.as_slice(),
-            ibus.as_slice(),
+            s_calc.as_slice(),
             &j_pattern,
             npv,
             npq,
@@ -76,18 +90,19 @@ pub fn newton_pf_iwamoto<Solver: Solve>(
         // Save original mismatch vector a before solver.solve overwrites it
         let a = F.clone();
 
-        let _ = solver.solve(
+        if let Err(err) = solver.solve(
             Ap,
             Ai,
             j_values.as_mut_slice(),
             F.data.as_mut_slice(),
             n_state,
-        );
+        ) {
+            return Err((format!("Linear solve failed: {err}"), v, it));
+        }
 
         let dx = &F;
 
         // Reconstruct the complex step vector dv for each bus
-        let mut dv = DVector::zeros(v.len());
         for i in 0..v.len() {
             if i < npq {
                 let dx_theta = dx[i];
@@ -106,10 +121,21 @@ pub fn newton_pf_iwamoto<Solver: Solve>(
         }
 
         // Calculate the quadratic term c = dv * (Ybus * dv)*
-        let ybus_dv = Ybus * &dv;
-        let c_complex = dv.component_mul(&ybus_dv.map(|e| e.conjugate()));
-        let mut c = DVector::zeros(n_state);
-        assemble_f_v2(&mut c, n_bus, &c_complex, n_state, npq);
+        csc_matvec_complex(
+            Ybus.col_offsets(),
+            Ybus.row_indices(),
+            Ybus.values(),
+            dv.as_slice(),
+            ybus_dv.as_mut_slice(),
+        );
+        for i in 0..npq {
+            let ci = dv[i] * ybus_dv[i].conj();
+            c[i] = ci.re;
+            c[n_bus + i] = ci.im;
+        }
+        for i in npq..n_bus {
+            c[i] = (dv[i] * ybus_dv[i].conj()).re;
+        }
 
         // Find the optimal multiplier mu
         let mu = solve_iwamoto_multiplier(&a, &c);
@@ -127,11 +153,24 @@ pub fn newton_pf_iwamoto<Solver: Solve>(
         v_norm.zip_apply(&v_a, |a, va| *a = Complex64::from_polar(1.0, va));
         v.zip_zip_apply(&v_norm, &v_m, |a, e, vm| *a = vm * e);
 
-        v.component_mul(&(Ybus * &v).conjugate())
-            .sub_to(Sbus, &mut mis);
-        assemble_f_v2(&mut F, n_bus, &mis, n_state, npq);
+        csc_matvec_complex(
+            Ybus.col_offsets(),
+            Ybus.row_indices(),
+            Ybus.values(),
+            v.as_slice(),
+            ibus.as_mut_slice(),
+        );
+        let norm2 = fill_f_from_ibus::<false>(
+            v.as_slice(),
+            ibus.as_slice(),
+            Sbus.as_slice(),
+            npq,
+            n_bus,
+            s_calc.as_mut_slice(),
+            F.as_mut_slice(),
+        );
 
-        if F.norm() < tol {
+        if norm2 < tol * tol {
             return Ok((v, it + 1));
         }
     }

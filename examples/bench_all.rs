@@ -5,7 +5,7 @@ use ecs::{
 use rustpower::{io::pandapower::*, prelude::*, testcases::case_ieee39::IEEE_39};
 use std::env;
 use std::time::{Duration, Instant};
-
+use newtonpf::NewtonCache;
 #[macro_export]
 macro_rules! timeit {
     ($name:expr, $times:expr, $block:expr) => {{
@@ -43,6 +43,7 @@ macro_rules! timeit {
 fn run_benchmark(name: &str, net: Network, iterations: u32) {
     let mut pf_net = PowerGrid::default();
     pf_net.world_mut().insert_resource(PPNetwork(net));
+    pf_net.world_mut().insert_resource(NewtonCache::default());
     pf_net.init_pf_net();
     
     // Warmup
