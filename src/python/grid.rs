@@ -389,6 +389,7 @@ impl PowerGrid {
         self.sync_bus_to_elements();
     }
 
+
     /// Run the power flow. Fully event-driven: pending FullRebuildEvents
     /// (editor commits, in_service toggles) make structure_update run the
     /// PFInit schedule inside this same update; parameter changes flow
@@ -400,9 +401,17 @@ impl PowerGrid {
     /// id. Pure warm start — PV/slack setpoints are re-pinned afterwards, so
     /// it never alters the physics. The bus-id → solver-ordering permutation
     /// is applied internally.
-    #[pyo3(signature = (v_init=None))]
-    fn solve(&mut self, py: Python<'_>, v_init: Option<Bound<'_, numpy::PyArray1<num_complex::Complex64>>>) -> PyResult<SolveReport> {
-        use crate::basic::ecs::powerflow::structure_update::{FullRebuildEvent, LastStructureAction};
+    #[pyo3(signature = (v_init=None, max_iter=None, tol=None))]
+    fn solve(
+        &mut self,
+        py: Python<'_>,
+        v_init: Option<Bound<'_, numpy::PyArray1<num_complex::Complex64>>>,
+        max_iter: Option<usize>,
+        tol: Option<f64>,
+    ) -> PyResult<SolveReport> {
+        use crate::basic::ecs::powerflow::structure_update::{
+            FullRebuildEvent, LastStructureAction,
+        };
         let t0 = std::time::Instant::now();
 
         let mut sync_full = false;
@@ -426,6 +435,11 @@ impl PowerGrid {
             // First-ever build: nothing has posted a rebuild event yet.
             let _ = self.inner.world_mut().write_message(FullRebuildEvent);
         }
+        
+        self.inner.world_mut().insert_resource(crate::basic::ecs::powerflow::systems::PowerFlowConfig {
+            max_it: max_iter,
+            tol: tol,
+        });
 
         self.inner.run_pf();
 
@@ -451,7 +465,10 @@ impl PowerGrid {
                     "Cannot solve an empty grid: add buses and an ext_grid first",
                 ));
             }
-            let n_slack = world.query_filtered::<Entity, With<SlackBus>>().iter(world).count();
+            let n_slack = world
+                .query_filtered::<Entity, With<SlackBus>>()
+                .iter(world)
+                .count();
             if n_slack == 0 {
                 return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
                     "No slack bus: add an ext_grid to provide the voltage/angle reference",
@@ -489,6 +506,19 @@ impl PowerGrid {
             self.inner.world_mut().insert_resource(crate::basic::ecs::plugin::CustomSolverActive);
         } else {
             self.inner.world_mut().remove_resource::<crate::basic::ecs::plugin::CustomSolverActive>();
+        }
+    }
+
+    /// Enable or disable Jacobian caching for the power grid solver.
+    /// When enabled, it reuses the symbolic factorization across multiple solves.
+    #[pyo3(signature = (enable=true))]
+    fn enable_cache(&mut self, enable: bool) {
+        if enable {
+            if !self.inner.world().contains_resource::<crate::basic::newtonpf::NewtonCache>() {
+                self.inner.world_mut().insert_resource(crate::basic::newtonpf::NewtonCache::default());
+            }
+        } else {
+            self.inner.world_mut().remove_resource::<crate::basic::newtonpf::NewtonCache>();
         }
     }
 

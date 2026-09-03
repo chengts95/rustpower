@@ -2,9 +2,9 @@ use crate::io::pandapower::Transformer;
 use bevy_archive::prelude::SnapshotRegistry;
 
 use bevy_ecs::prelude::*;
-use rustpower_proc_marco::DeferBundle;
 use nalgebra::Complex;
 use nalgebra::Matrix2;
+use rustpower_proc_marco::DeferBundle;
 
 use super::{
     bus::SnaptShotRegGroup,
@@ -239,9 +239,12 @@ pub mod trans_systems {
         let re = z_base * vkr;
         let im = (z.powi(2) - re.powi(2)).sqrt();
         let y = dev.parallel as f64 / Complex::new(re, im);
-        let re_core = z_base * 0.001 * dev.pfe_kw / dev.sn_mva;
-        let im_core = z_base / (0.01 * dev.i0_percent);
-        let z_m = Complex::new(re_core, im_core);
+        let g_m = dev.pfe_kw * 0.001 / (v_base * v_base);
+        let y_0 = (dev.i0_percent * 0.01) * dev.sn_mva / (v_base * v_base);
+        let b_m = (y_0 * y_0 - g_m * g_m).max(0.0).sqrt();
+        let y_m_single = Complex::new(g_m, -b_m);
+        let y_m = dev.parallel as f64 * y_m_single;
+
         let a = tap_m * Complex::from_polar(1.0, dev.shift_degree.to_radians());
         let a = a.recip();
         let t = Matrix2::new(
@@ -251,7 +254,6 @@ pub mod trans_systems {
             Complex::new(1.0, 0.0),
         );
         let mut g = Matrix2::new(y, -y, -y, y);
-        let y_m = dev.parallel as f64 / z_m;
         if y_m.is_finite() {
             g[(0, 0)] += 0.5 * y_m;
             g[(1, 1)] += 0.5 * y_m;
