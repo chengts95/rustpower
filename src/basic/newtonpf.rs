@@ -123,26 +123,23 @@ pub fn newton_pf<Solver: Solve>(
             &mut local_s_calc,
         )
     };
-    csc_matvec_complex(
+    csc_matvec_and_scalc(
         Ybus.col_offsets(),
         Ybus.row_indices(),
         Ybus.values(),
         v.as_slice(),
         ibus.as_mut_slice(),
+        s_calc.as_mut_slice(),
     );
 
-    // let mut mis = &v.component_mul(&(Ybus * &v).conjugate()) - Sbus;
-    let norm = fill_f_from_ibus::<false>(
-        v.as_slice(),
-        ibus.as_slice(),
+    let norm = fill_f_from_scalc::<false>(
+        s_calc.as_slice(),
         Sbus.as_slice(),
         npq,
         n_active,
-        s_calc.as_mut_slice(),
         F.as_mut_slice(),
     );
 
-    // assemble_f_v2(&mut F, n_bus, &mis, n_state, npq);
     if norm < tol {
         return Ok((v, 0));
     }
@@ -165,8 +162,6 @@ pub fn newton_pf<Solver: Solve>(
     };
 
     for it in 0..max_iter {
-        // let s_calc = v.component_mul(&ibus.map(|e| e.conj()));
-
         fill_jacobian_v3(
             Ybus,
             v.as_slice(),
@@ -203,21 +198,20 @@ pub fn newton_pf<Solver: Solve>(
         v_norm.zip_apply(&v_a, |a, va| *a = Complex64::from_polar(1.0, va));
         v.zip_zip_apply(&v_norm, &v_m, |a, e, vm| *a = vm * e);
 
-        csc_matvec_complex(
+        csc_matvec_and_scalc(
             Ybus.col_offsets(),
             Ybus.row_indices(),
             Ybus.values(),
             v.as_slice(),
             ibus.as_mut_slice(),
+            s_calc.as_mut_slice(),
         );
 
-        let norm2 = fill_f_from_ibus::<false>(
-            v.as_slice(),
-            ibus.as_slice(),
+        let norm2 = fill_f_from_scalc::<false>(
+            s_calc.as_slice(),
             Sbus.as_slice(),
             npq,
-            n_active,  
-            s_calc.as_mut_slice(),
+            n_active,
             F.as_mut_slice(),
         );
 
@@ -253,26 +247,21 @@ pub(crate) fn assemble_f_v2(
         .zip_apply(&mis.rows_range(0..npq), |a, b| *a = b.simd_imaginary());
 }
 #[inline(always)]
-pub(crate) fn fill_f_from_ibus<const SPEC_MINUS_CALC: bool>(
-    v: &[Complex64],
-    ibus: &[Complex64],
+pub(crate) fn fill_f_from_scalc<const SPEC_MINUS_CALC: bool>(
+    scalc: &[Complex64],
     sbus: &[Complex64],
     npq: usize,
     n_active: usize,
-    scalc: &mut [Complex64],
     f: &mut [f64],
 ) -> f64 {
     let mut max_norm: f64 = 0.0;
 
     // PQ: P and Q
     for i in 0..npq {
-        let s = v[i] * ibus[i].conj();
-        scalc[i] = s;
-
         let mis = if SPEC_MINUS_CALC {
-            sbus[i] - s
+            sbus[i] - scalc[i]
         } else {
-            s - sbus[i]
+            scalc[i] - sbus[i]
         };
 
         f[i] = mis.re;
@@ -283,13 +272,10 @@ pub(crate) fn fill_f_from_ibus<const SPEC_MINUS_CALC: bool>(
 
     // PV: P only
     for i in npq..n_active {
-        let s = v[i] * ibus[i].conj();
-        scalc[i] = s;
-
         let mis = if SPEC_MINUS_CALC {
-            sbus[i] - s
+            sbus[i] - scalc[i]
         } else {
-            s - sbus[i]
+            scalc[i] - sbus[i]
         };
 
         f[i] = mis.re;
@@ -317,5 +303,21 @@ pub(crate) fn csc_matvec_complex(
             let i = row_idx[p];
             ibus[i] += y_vals[p] * vk;
         }
+    }
+}
+
+#[inline(always)]
+pub(crate) fn csc_matvec_and_scalc(
+    col_ptrs: &[usize],
+    row_idx: &[usize],
+    y_vals: &[Complex64],
+    v: &[Complex64],
+    ibus: &mut [Complex64],
+    scalc: &mut [Complex64],
+) {
+    csc_matvec_complex(col_ptrs, row_idx, y_vals, v, ibus);
+
+    for i in 0..v.len() {
+        scalc[i] = v[i] * ibus[i].conj();
     }
 }
