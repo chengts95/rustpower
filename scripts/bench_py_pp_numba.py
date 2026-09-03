@@ -17,18 +17,18 @@ warnings.filterwarnings('ignore')
 TOL = 1e-6
 MAX_ITER = 20
 NUM_TRIALS_COLD = 10
-NUM_TRIALS_HOT = 20
+NUM_TRIALS_HOT = 100
 
 
 print("Warming up Pandapower Numba JIT compiler...")
 dummy_net = pn.case39()
-pp.runpp(dummy_net)
+
 
 def run_benchmark(net_name, net):
     print(f"\n=========================================================")
     print(f" BENCHMARKING NETWORK: {net_name} ({len(net.bus)} buses)")
     print(f"=========================================================")
-    
+    pp.runpp(net, lightsim2grid=False, numba=True ,init="flat", recycle=False, tolerance_mva=TOL)
     num_buses = len(net.bus)
     V_init_flat = np.ones(num_buses, dtype=np.complex128)
 
@@ -106,7 +106,7 @@ def run_benchmark(net_name, net):
         net._ppc['bus'][:, 7] = 1.0 # vm
         net._ppc['bus'][:, 8] = 0.0 # va
         start = time.perf_counter()
-        pp.runpp(net, init="flat", recycle=dict(ppc=True, Ybus=True, bus_pq=False, trafo=False, gen=False), tolerance_mva=TOL)
+        pp.runpp(net, init="flat", recycle=dict(ppc=True, Ybus=True, bus_pq=True, trafo=True, gen=True), tolerance_mva=TOL)
         times_pp_hot.append(time.perf_counter() - start)
     pp_hot_ms = np.mean(times_pp_hot) * 1000
     pp_hot_iters = net._ppc['iterations']

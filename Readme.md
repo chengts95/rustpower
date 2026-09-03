@@ -2,76 +2,54 @@
 [![Crates.io](https://img.shields.io/crates/v/rustpower.svg)](https://crates.io/crates/rustpower)
 [![Docs.rs](https://docs.rs/rustpower/badge.svg)](https://docs.rs/rustpower)
 [![CI](https://github.com/chengts95/rustpower/actions/workflows/rust.yml/badge.svg)](https://github.com/chengts95/rustpower/actions)
-RustPower is a cutting-edge power flow calculation library written in Rust, specifically designed for steady-state analysis of electrical power systems. With the introduction of **ECS-based architecture** in version 0.2.0, RustPower offers unparalleled modularity and extensibility.
-
----
-## **What's New in 0.5.0**
-- **Massive Performance Breakthrough**: 
-  - **1.6x faster than LightSim2Grid (C++ Native)** on PEGASE 9241 grid.
-  - **3.5x faster than LightSim2Grid** on IEEE 118 grid.
-- **KLU Refactor Integration**: Implemented `klu_l_refactor` support, bypassing expensive symbolic analysis and pivoting for iterations 2-5 of the NR process and subsequent time-series steps.
-- **Zero-Allocation Hot Path**: Optimized the core Newton-Raphson loop to eliminate all heap allocations (`Vec` clones) during iterations via `unsafe` pointer passing.
-- **Bevy 0.19**: Rustpower 0.5 deps on Bevy 0.19, which can iterate ECS archetype tables with true SIMD parallelism.
-
-## **What's New in 0.4.1**
-- **Jacobian Optimization Backport**: Backported the new Jacobian matrix formation from 0.5.0, resulting in a **20-40% speed-up** per Newton-Raphson iteration.
-- **Upgraded Archive System**: Updated `bevy_archive` to 0.3.0 for enhanced ECS state persistence and case file management.
-
-## **What's New in 0.3.0**
-- **New Solvers**:  
-  **faer**: A highly efficient and scalable solver for large-scale power systems.
-- **Inital support for native ECS archive files**
-- **Initali support for time-series simulations**
-
-## **What's New in 0.2.0**
-- **World's First ECS-Based Power Flow Solver**:  
-  RustPower now adopts the **Entity-Component-System (ECS)** architecture using Bevy, enabling modular design and extensibility for domain-specific applications such as:
-  - Time-series simulations.
-  - Real-time monitoring.
-  - Custom plugin development.  
-  The legacy `PFNetwork` is now deprecated but remains available as a demo for the basic Newton-Raphson solver.
-
-- **Post-Processing Trait**:  
-  Added a flexible post-processing trait to manage simulation results, allowing users to handle data as if working with a dataframe. This demonstrates Rust's compositional design philosophy and makes ECS highly effective for handling large datasets.
-
-- **Experimental Switch Handling**:  
-  Introduced two optional methods for modeling switch elements:
-  1. **Admittance-Based Method**: Adjusts admittance matrices.
-  2. **Node-Merging Method**: Merges connected nodes for simplified modeling.  
-  These are implemented as plugins and can be enabled as needed.
-
----
+RustPower is a ECS-based power flow calculation library written in Rust, specifically designed for steady-state analysis of electrical power systems. It also provides experimental python binding and has a solver interface for python libs such as pandapower.
 
 ## **Key Features**
-- High-performance power flow computation with Newton-Raphson.
+- High-performance Newton-Raphson power flow computation.
 - Modular and extensible design using ECS for future-proof applications.
-- Support for `pandapower` JSON network files (with experimental CSV support).
+- Support for `pandapower` format power system data.
 - Handles external grid nodes, transformers, and switch elements.
-- Includes both RSparse and KLU solvers (KLU requires `SUITESPARSE_DIR` on Windows).
+- Includes both  RSparse, Faer and KLU solvers (KLU requires `SUITESPARSE_DIR` on Windows and proper configs on Linux).
 
 ---
 
 ## **Performance Comparison**
 
-RustPower is designed for extreme performance and memory efficiency. Below is a comparison between established industry standards and RustPower (all using the KLU solver where applicable, tested on Intel i7 10700K 4.7GHz with 32GB DDR4 3000 MHz).
+RustPower is designed for extreme performance and memory efficiency. Below is a comparison between established standards and RustPower on the hot loop (caches Ybus and solver data for a invariant topology).
 
-### **Core Solve Time (Newton-Raphson)**
+### **Core Solve Time (Newton-Raphson, Hot Loop)**
+ 
+* Tested on Intel i7-10700K@4.7GHz with 32GB DDR4-3000 under Windows 11 with identical iteration counts at flat start inital condition.
+  
+| Case | Pandapower 3.5.4 (PyPI, Numba) | LightSim2Grid 1.0.0 (PyPI, KLU) | RustPower 0.5.1 (Python, KLU) | **RustPower (Rust Native, KLU)** |
+| --- | --- | --- | --- | --- |
+| **IEEE 39** | 15.1 ms | 0.035 ms | 0.044 ms | **0.023 ms** |
+| **IEEE 118** | 17.1 ms | 0.095 ms | 0.080 ms | **0.059 ms** |
+| **PEGASE 9241** | 244.1 ms | 22.9 ms | 21.0 ms | **20.0 ms** |
 
-| Case | Pandapower 3 (Default) | LightSim2Grid (Native KLU) | **RustPower (KLU)** | Speedup vs Pandapower |
-| :--- | :--- | :--- | :--- | :--- |
-| **IEEE 39** | 38.9 ms | 0.12 ms | **0.04 ms** | **~970x** |
-| **IEEE 118** | 42.8 ms | 0.35 ms | **0.10 ms** | **~420x** |
-| **PEGASE 9241** | 145.5 ms | 51.2 ms | **30.5 ms** | **~4.8x** |
+  
 
-![Performance Comparison](docs/performance_comparison.png)
-*Note: For smaller grids like IEEE 39/118, RustPower is nearly **1000x faster** than traditional Python-based tools and **3x faster** than optimized C++ implementations.*
+  *  On Intel Core Ultra 7 288V@5.1GHz, 32GB LPDDR5X-8533 under CachyOS / Linux 7.x.
+  
+| Case | Pandapower 3.5.4 (PyPI, Numba) | LightSim2Grid 1.0.0 (PyPI, KLU) | RustPower 0.5.1 (Python, KLU) | **RustPower (Rust Native, KLU)** |
+| --- | --- | --- | --- | --- |
+| **IEEE 39** | 4.36 ms | 0.017 ms | 0.021 ms | **0.014 ms** |
+| **IEEE 118** | 5.18 ms | 0.051 ms | 0.040 ms | **0.031 ms** | 
+| **PEGASE 9241** | 147.19 ms | 13.67 ms | 11.53 ms | **11.36 ms** |
+
+
+*Note: Python columns reflect end-to-end execution within the Python runtime using official package builds.*
+
+RustPower achieves native C++-grade performance with sub-millisecond execution on IEEE benchmark grids, scaling to solve the 9241-bus PEGASE system in just 11.3 ms on a modern laptop computer.
 
 ### **Key Advantages**
-- **Extreme Memory Efficiency**: For the 9241-node case, RustPower peaks at only **~34 MB** of memory, while Python-based environments typically require **500+ MB**. This **15x reduction** enables running massive parallel simulations (e.g., N-1 analysis, Monte-Carlo) on standard hardware or cloud/docker containers with high resource utilization.
-- **Zero-Clone Solver Path**: Leveraging Rust's memory safety and our ECS-based architecture, the power flow loop avoids any heap allocations during iterations.
-- **Interoperability**: While RustPower provides a significant speedup for core calculations, it remains friendly to the ecosystem by supporting `pandapower` network formats.
+ 
 
----
+* **Low Memory Footprint**: For the 9,241-bus PEGASE system, RustPower peaks at only ~34 MB of RAM (a **15× reduction** compared to the 500+ MB footprint of pandapower frameworks). This allows thousands of parallel grid simulations (e.g., N-1 screening, Monte Carlo, RL environments) to run concurrently on standard hardware or resource-constrained cloud containers without thrashing memory bandwidth.
+**Memory Safety**: Leveraging Rust's compile-time ownership and memory safety guarantees, RustPower eliminates segmentation faults, data races, and memory leaks by design. Combined with our ECS-based architecture, the core power flow loop operates with zero heap allocations during iterations.
+* **Seamless Ecosystem Interoperability**: Delivers pure-native performance while remaining drop-in compatible with established Python workflows. It provides zero-cost data ingestion directly from standard formats like `pandapower`, eliminating migration friction for existing pipelines.
+
+ 
 
 ### **Advanced Features**
 
@@ -107,7 +85,7 @@ Or by adding the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rustpower = "0.5.0-rc.3"
+rustpower = "0.5.1"
 ```
 
 ---
