@@ -138,6 +138,8 @@ pub struct TapChanger {
 /// ECS bundle representing a transformer entity.
 #[derive(Debug, Clone, DeferBundle)]
 pub struct TransformerBundle {
+    /// tag
+    pub tag: crate::basic::ecs::elements::Transformer,
     /// Transformer device parameters.
     pub device: TransformerDevice,
     /// The high-voltage side connection (from bus).
@@ -153,6 +155,7 @@ pub struct TransformerBundle {
 impl From<&Transformer> for TransformerBundle {
     fn from(t: &Transformer) -> Self {
         Self {
+            tag: crate::basic::ecs::elements::Transformer,
             device: TransformerDevice {
                 df: t.df,
                 i0_percent: t.i0_percent,
@@ -260,6 +263,6 @@ pub mod trans_systems {
         }
 
         let g = t.conjugate() * g * t;
-        commands.entity(parent).insert(Port4MatPatch(g));
+        commands.entity(parent).insert((crate::basic::ecs::elements::Transformer, Port4MatPatch(g)));
     }
 }

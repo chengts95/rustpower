@@ -112,60 +112,91 @@ pub(crate) fn create_permutation_matrix(
 pub(crate) fn create_y_bus(
     common: Res<PFCommonData>,
     node_lookup: Res<NodeLookup>,
+    buses: Query<&VNominal>,
     y_br: Query<(&Admittance, &Port2, &VBase)>,
-    trans: Query<(&Port4MatPatch, &TransformerDevice, &FromBus, &ToBus)>,
+    lines_and_switches: Query<
+        (&Port4MatPatch, &FromBus, &ToBus),
+        (Without<OutOfService>, Without<TransformerDevice>),
+    >,
+    trafos: Query<
+        (&Port4MatPatch, &TransformerDevice, &FromBus, &ToBus),
+        Without<OutOfService>,
+    >,
 ) -> (CsrMatrix<Complex64>, CscMatrix<Complex64>) {
     let nodes = node_lookup.len();
-    let branches = y_br.iter();
     let s_base = common.sbase;
 
-    // Initialize diagonal admittance matrix for branches
-    let mut diag_admit = CsrMatrix::identity(branches.len());
-    let admit_br = diag_admit.values_mut();
-
-    // Initialize incidence matrix in COO format
-    let mut incidence_matrix = CooMatrix::new(nodes, branches.len());
-
-    for (idx, (ad, topo, vbase)) in branches.enumerate() {
-        // Compute branch admittance in per-unit system
-        admit_br[idx] = ad.0 * (vbase.0 * vbase.0) / s_base;
-
-        // Build incidence matrix
-        if topo.0[0] >= 0 {
-            incidence_matrix.push(topo.0[0] as usize, idx, Complex64::one());
-        }
-        if topo.0[1] >= 0 {
-            incidence_matrix.push(topo.0[1] as usize, idx, -Complex64::one());
+    // Cache bus nominal voltage array indexed by bus id
+    let mut bus_vn = vec![1.0; nodes];
+    for (bus_idx, entity) in node_lookup.iter() {
+        if let Ok(vnom) = buses.get(entity) {
+            bus_vn[bus_idx as usize] = vnom.0.0;
         }
     }
 
-    // Convert incidence matrix to CSR format
-    let incidence_matrix = CsrMatrix::from(&incidence_matrix);
+    let mut coo = CooMatrix::new(nodes, nodes);
 
-    // Compute Y-bus matrix: Y = A * diag(admittance) * A^T
-    let y_bus = &incidence_matrix * (diag_admit * incidence_matrix.transpose());
-
-    // Initialize incidence matrix in COO format
-    let mut trans_patch_matrix = CooMatrix::new(nodes, nodes);
-
-    for (patch, trans, from, to) in trans.iter() {
-        let vbase = trans.vn_lv_kv;
-        // Compute branch admittance in per-unit system
-        let p = patch.0.scale((vbase * vbase) / s_base);
-        // Build incidence matrix
-        if from.0 >= 0 {
-            trans_patch_matrix.push(from.0 as usize, from.0 as usize, p[(0, 0)]);
+    // 1. Stamp Lines and Switches (V_base from connecting bus)
+    for (patch, from, to) in lines_and_switches.iter() {
+        let f = from.0;
+        let t = to.0;
+        let vn = if f >= 0 && (f as usize) < nodes {
+            bus_vn[f as usize]
+        } else if t >= 0 && (t as usize) < nodes {
+            bus_vn[t as usize]
+        } else {
+            1.0
+        };
+        let p = patch.0.scale((vn * vn) / s_base);
+        if f >= 0 {
+            coo.push(f as usize, f as usize, p[(0, 0)]);
         }
-        if to.0 >= 0 {
-            trans_patch_matrix.push(to.0 as usize, to.0 as usize, p[(1, 1)]);
+        if t >= 0 {
+            coo.push(t as usize, t as usize, p[(1, 1)]);
         }
-        if from.0 >= 0 && to.0 >= 0 {
-            trans_patch_matrix.push(from.0 as usize, to.0 as usize, p[(0, 1)]);
-            trans_patch_matrix.push(to.0 as usize, from.0 as usize, p[(1, 0)]);
+        if f >= 0 && t >= 0 {
+            coo.push(f as usize, t as usize, p[(0, 1)]);
+            coo.push(t as usize, f as usize, p[(1, 0)]);
         }
     }
-    let y_bus = y_bus + CsrMatrix::from(&trans_patch_matrix);
-    (incidence_matrix, CscMatrix::from(&y_bus))
+
+    // 2. Stamp Transformers (V_base from transformer device vn_lv_kv)
+    for (patch, dev, from, to) in trafos.iter() {
+        let vn = dev.vn_lv_kv;
+        let p = patch.0.scale((vn * vn) / s_base);
+        let f = from.0;
+        let t = to.0;
+        if f >= 0 {
+            coo.push(f as usize, f as usize, p[(0, 0)]);
+        }
+        if t >= 0 {
+            coo.push(t as usize, t as usize, p[(1, 1)]);
+        }
+        if f >= 0 && t >= 0 {
+            coo.push(f as usize, t as usize, p[(0, 1)]);
+            coo.push(t as usize, f as usize, p[(1, 0)]);
+        }
+    }
+
+    // 3. Add ground shunts (EShunt) directly to diagonal
+    for (ad, topo, vbase) in y_br.iter() {
+        let y_pu = ad.0 * (vbase.0 * vbase.0) / s_base;
+        if topo.0[0] >= 0 && topo.0[1] < 0 {
+            coo.push(topo.0[0] as usize, topo.0[0] as usize, y_pu);
+        } else if topo.0[1] >= 0 && topo.0[0] < 0 {
+            coo.push(topo.0[1] as usize, topo.0[1] as usize, y_pu);
+        } else if topo.0[0] >= 0 && topo.0[1] >= 0 {
+            let idx0 = topo.0[0] as usize;
+            let idx1 = topo.0[1] as usize;
+            coo.push(idx0, idx0, y_pu);
+            coo.push(idx1, idx1, y_pu);
+            coo.push(idx0, idx1, -y_pu);
+            coo.push(idx1, idx0, -y_pu);
+        }
+    }
+
+    let y_csc = CscMatrix::from(&coo);
+    (CsrMatrix::zeros(0, 0), y_csc)
 }
 
 /// Initializes the power flow calculation states and inserts necessary resources into the world.

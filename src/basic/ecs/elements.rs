@@ -97,8 +97,12 @@ pub struct AuxNode {
 pub struct Line;
 
 /// Marker component for a transformer element in the power system.
-#[derive(Debug, Component, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Component, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Transformer;
+
+/// Dense flat index of a branch (Line or Trafo) in the BranchCollection pool.
+#[derive(Debug, Component, Copy, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct BranchIndex(pub usize);
 
 /// Marker component for a shunt element in the power system.
 #[derive(Debug, Component, serde::Serialize, serde::Deserialize)]
