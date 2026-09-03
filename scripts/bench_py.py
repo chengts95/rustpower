@@ -76,16 +76,57 @@ def run_benchmark(net_name, net):
         times_ls2g_cold.append(time.perf_counter() - start)
     ls2g_cold_ms = np.mean(times_ls2g_cold) * 1000
 
-    # RustPower
-    rp_model = rustpower.PowerGrid.from_pandapower(net)
-    report = rp_model.solve(V_init_flat.copy(), max_iter=MAX_ITER, tol=TOL)
-    rp_iters = report.iterations
+    # RustPower NewtonSolver API (Pure Solver + Post-Processing scalc)
+    from rustpower.solver import NewtonSolver
+
+    # Extract PPC internal matrices from Pandapower
+    ppci = net['_ppc']
+    internal = ppci['internal']
+    Ybus_csr = internal['Ybus']
+    Sbus_pp = internal['Sbus']
+    pq_idx = internal['pq']
+    pv_idx = internal['pv']
+    ref_idx = internal['ref']
+
+    p_vec = np.concatenate([pq_idx, pv_idx, ref_idx]).astype(np.int64)
+    p_inv = np.zeros(len(p_vec), dtype=np.int64)
+    p_inv[p_vec] = np.arange(len(p_vec), dtype=np.int64)
+
+    rp_solver = NewtonSolver()
+    rp_solver.setup_context(
+        Ybus_csr.indptr,
+        Ybus_csr.indices,
+        Ybus_csr.data,
+        Sbus_pp,
+        V_init_compensated.copy(),
+        p_vec,
+        p_inv,
+        len(pv_idx),
+        len(pq_idx),
+    )
+
+    # Warmup
+    rp_solver.solve(MAX_ITER, TOL)
+    rp_iters = rp_solver.get_iterations()
 
     times_rp_cold = []
     for _ in range(NUM_TRIALS_COLD):
-        rp_model.init_pf()
+        s = NewtonSolver()
+        s.setup_context(
+            Ybus_csr.indptr,
+            Ybus_csr.indices,
+            Ybus_csr.data,
+            Sbus_pp,
+            V_init_compensated.copy(),
+            p_vec,
+            p_inv,
+            len(pv_idx),
+            len(pq_idx),
+        )
         start = time.perf_counter()
-        rp_model.solve(V_init_flat.copy(), max_iter=MAX_ITER, tol=TOL)
+        s.solve(MAX_ITER, TOL)
+        # Extract post-processed bus powers including slack bus
+        _ = s.get_scalc()
         times_rp_cold.append(time.perf_counter() - start)
     rp_cold_ms = np.mean(times_rp_cold) * 1000
 
@@ -123,16 +164,17 @@ def run_benchmark(net_name, net):
     ls2g_hot_iters = ls_model.get_solver().get_nb_iter()
 
     # RustPower
-    rp_model.init_pf()
-    rp_model.enable_cache(True)
-    rp_model.solve(V_init_flat.copy(), max_iter=MAX_ITER, tol=TOL)
+    rp_solver.enable_cache(True)
+    rp_solver.solve(MAX_ITER, TOL) # prime cache
     times_rp_hot = []
     for _ in range(NUM_TRIALS_HOT):
         start = time.perf_counter()
-        report = rp_model.solve(V_init_flat.copy(), max_iter=MAX_ITER, tol=TOL)
+        rp_solver.solve(MAX_ITER, TOL)
+        # Extract post-processed bus powers including slack bus
+        _ = rp_solver.get_scalc()
         times_rp_hot.append(time.perf_counter() - start)
     rp_hot_ms = np.mean(times_rp_hot) * 1000
-    rp_hot_iters = report.iterations
+    rp_hot_iters = rp_solver.get_iterations()
 
     print(f"\n--- HOT LOOP (Iterations: PP={pp_hot_iters}, LS2G={ls2g_hot_iters}, RP={rp_hot_iters}) ---")
     print(f"[Pandapower] {pp_hot_ms:.3f} ms")

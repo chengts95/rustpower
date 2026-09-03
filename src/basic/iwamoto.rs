@@ -7,7 +7,7 @@ use num_traits::Zero;
 
 use super::new_dsdvbus2::JacobianPattern2;
 use super::new_dsdvbus3::fill_jacobian_v3;
-use super::newtonpf::{csc_matvec_complex, fill_f_from_ibus};
+use super::newtonpf::{csc_matvec_and_scalc, csc_matvec_complex, fill_f_from_scalc};
 use super::solver::Solve;
 
 /// Newton-Raphson power flow with Iwamoto optimal multiplier step size control.
@@ -35,20 +35,19 @@ pub fn newton_pf_iwamoto<Solver: Solve>(
     let mut ibus = DVector::zeros(v.len());
     let mut s_calc = DVector::zeros(v.len());
     let mut F = DVector::zeros(n_state);
-    csc_matvec_complex(
+    csc_matvec_and_scalc(
         Ybus.col_offsets(),
         Ybus.row_indices(),
         Ybus.values(),
         v.as_slice(),
         ibus.as_mut_slice(),
+        s_calc.as_mut_slice(),
     );
-    let norm2 = fill_f_from_ibus::<false>(
-        v.as_slice(),
-        ibus.as_slice(),
+    let norm2 = fill_f_from_scalc::<false>(
+        s_calc.as_slice(),
         Sbus.as_slice(),
         npq,
         n_bus,
-        s_calc.as_mut_slice(),
         F.as_mut_slice(),
     );
     if norm2 < tol * tol {
@@ -153,20 +152,19 @@ pub fn newton_pf_iwamoto<Solver: Solve>(
         v_norm.zip_apply(&v_a, |a, va| *a = Complex64::from_polar(1.0, va));
         v.zip_zip_apply(&v_norm, &v_m, |a, e, vm| *a = vm * e);
 
-        csc_matvec_complex(
+        csc_matvec_and_scalc(
             Ybus.col_offsets(),
             Ybus.row_indices(),
             Ybus.values(),
             v.as_slice(),
             ibus.as_mut_slice(),
+            s_calc.as_mut_slice(),
         );
-        let norm2 = fill_f_from_ibus::<false>(
-            v.as_slice(),
-            ibus.as_slice(),
+        let norm2 = fill_f_from_scalc::<false>(
+            s_calc.as_slice(),
             Sbus.as_slice(),
             npq,
             n_bus,
-            s_calc.as_mut_slice(),
             F.as_mut_slice(),
         );
 
