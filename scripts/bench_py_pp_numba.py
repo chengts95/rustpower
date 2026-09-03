@@ -42,12 +42,12 @@ def run_benchmark(net_name, net):
     # ---------------------------------------------------------
     # ROUND 1: Cold Start Performance (Includes Symbolic Analysis)
     # ---------------------------------------------------------
-    
+
     # Pandapower
     times_pp_cold = []
     for _ in range(NUM_TRIALS_COLD):
         start = time.perf_counter()
-        pp.runpp(net, init="flat", recycle=False, tolerance_mva=TOL)
+        pp.runpp(net, lightsim2grid=False, numba=True ,init="flat", recycle=False, tolerance_mva=TOL)
         times_pp_cold.append(time.perf_counter() - start)
     pp_cold_ms = np.mean(times_pp_cold) * 1000
     pp_iters = net._ppc['iterations']
@@ -99,7 +99,7 @@ def run_benchmark(net_name, net):
     # ---------------------------------------------------------
     
     # Pandapower
-    pp.runpp(net, init="flat", recycle=True, tolerance_mva=TOL)
+    pp.runpp(net, lightsim2grid=False, numba=True, init="flat", recycle=True, tolerance_mva=TOL)
     times_pp_hot = []
     for _ in range(NUM_TRIALS_HOT):
         # Force flat start in PPC to ensure Newton iterations actually run
@@ -112,7 +112,7 @@ def run_benchmark(net_name, net):
     pp_hot_iters = net._ppc['iterations']
 
     # LS2G GridModel
-    
+    ls_model.unset_changes()
     ls_model.ac_pf(V_init_flat.copy(), MAX_ITER, TOL)
     times_ls2g_hot = []
     for _ in range(NUM_TRIALS_HOT):

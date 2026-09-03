@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "rustpower"
 description = "A high-performance power system analysis library"
-readme = "README.md"
+readme = "Readme.md"
 requires-python = ">=3.10"
 license = { text = "MPL-2.0" }
 authors = [
