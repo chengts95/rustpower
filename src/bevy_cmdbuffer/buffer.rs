@@ -125,7 +125,7 @@ impl HarvardCommandBuffer {
                             let ptr = unsafe { OwningPtr::new(self.pending_args[i].payload_ptr) };
                             unsafe { drop_fn(ptr) };
                         }
-                        self.pending_args.swap_remove(i);
+                        self.pending_args.remove(i);
                     } else {
                         i += 1;
                     }
@@ -229,6 +229,8 @@ impl HarvardCommandBuffer {
         self.ops.clear();
         self.pending_args.clear();
         self.pending_entity = None;
+        self.meta_bump.reset();
+        self.data_bump.reset();
     }
 
     pub fn insert_bundle<B: DeferBundle>(&mut self, world: &mut World, entity: Entity, bundle: B) {
@@ -263,3 +265,76 @@ impl_defer_bundle!(A, B, C, D, E, F, G);
 impl_defer_bundle!(A, B, C, D, E, F, G, H);
 impl_defer_bundle!(A, B, C, D, E, F, G, H, I);
 impl_defer_bundle!(A, B, C, D, E, F, G, H, I, J);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[derive(Component, Debug, PartialEq, Eq)]
+    struct CompA(u32);
+
+    #[derive(Component, Debug, PartialEq, Eq)]
+    struct CompB(u32);
+
+    #[derive(Component)]
+    struct DropTracker(Arc<AtomicUsize>);
+
+    impl Drop for DropTracker {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn test_dedup_keeps_latest_and_drops_earlier() {
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let mut buffer = HarvardCommandBuffer::new();
+
+        buffer.insert(&mut world, entity, CompA(1));
+        buffer.insert(&mut world, entity, CompB(100));
+        buffer.insert(&mut world, entity, CompA(2));
+        buffer.insert(&mut world, entity, CompA(3));
+
+        buffer.apply(&mut world);
+
+        assert_eq!(world.get::<CompA>(entity), Some(&CompA(3)));
+        assert_eq!(world.get::<CompB>(entity), Some(&CompB(100)));
+    }
+
+    #[test]
+    fn test_dedup_drops_overwritten_components() {
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let mut buffer = HarvardCommandBuffer::new();
+
+        let drop_count = Arc::new(AtomicUsize::new(0));
+
+        buffer.insert(&mut world, entity, DropTracker(drop_count.clone()));
+        buffer.insert(&mut world, entity, DropTracker(drop_count.clone()));
+        buffer.insert(&mut world, entity, DropTracker(drop_count.clone()));
+
+        // Before apply, 2 overwritten DropTrackers should be dropped during flush/apply
+        buffer.apply(&mut world);
+        assert_eq!(drop_count.load(Ordering::SeqCst), 2);
+
+        // Despawn entity, the 3rd one should be dropped
+        world.despawn(entity);
+        assert_eq!(drop_count.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn test_buffer_reuse_after_apply() {
+        let mut world = World::new();
+        let mut buffer = HarvardCommandBuffer::new();
+
+        for i in 0..10 {
+            let entity = world.spawn_empty().id();
+            buffer.insert(&mut world, entity, CompA(i));
+            buffer.apply(&mut world);
+            assert_eq!(world.get::<CompA>(entity), Some(&CompA(i)));
+        }
+    }
+}
