@@ -27,8 +27,10 @@ use crate::basic::ecs::elements::PPNetwork;
 use crate::basic::ecs::network::{DataOps, PowerFlow, PowerGrid};
 use crate::basic::ecs::powerflow::systems::PowerFlowMat;
 use crate::basic::new_dsdvbus2::{JacobianPattern2, fill_jacobian_v2};
+use crate::basic::new_dsdvbus3::fill_jacobian_v3;
 use crate::basic::newtonpf::{
-    JacobianCache, build_jacobian, build_jacobian_cached, newton_pf, newton_pf_old, newton_pf_v0,
+    JacobianCache, build_jacobian, build_jacobian_cached, csc_matvec_and_scalc, newton_pf,
+    newton_pf_old, newton_pf_v0,
 };
 use crate::basic::solver::KLUSolver;
 use crate::io::pandapower::Network;
@@ -119,6 +121,7 @@ fn compare(name: &str, mat: &PowerFlowMat, repeats: usize) {
         None,
         None,
         &mut KLUSolver::default(),
+        None,
     )
     .expect("V2 (newton_pf) did not converge");
 
@@ -169,6 +172,7 @@ fn compare(name: &str, mat: &PowerFlowMat, repeats: usize) {
             None,
             None,
             &mut s2,
+            None,
         );
     });
     println!(
@@ -236,16 +240,67 @@ fn compare_assembly(name: &str, mat: &PowerFlowMat, repeats: usize) {
         );
     });
 
+    let mut ibus_v3 = DVector::zeros(n);
+    let mut scalc_v3 = DVector::zeros(n);
+    let t_spmv_only = timeit("V3  csc_matvec_and_scalc (SpMV)", repeats, || {
+        csc_matvec_and_scalc(
+            mat.y_bus.col_offsets(),
+            mat.y_bus.row_indices(),
+            mat.y_bus.values(),
+            v.as_slice(),
+            ibus_v3.as_mut_slice(),
+            scalc_v3.as_mut_slice(),
+        );
+    });
+    let t_fill3_only = timeit("V3  fill_jacobian_v3 (pure fill)", repeats, || {
+        fill_jacobian_v3(
+            &mat.y_bus,
+            v.as_slice(),
+            v_norm.as_slice(),
+            scalc_v3.as_slice(),
+            &j_pattern,
+            npv,
+            npq,
+            &mut j_values,
+        );
+    });
+    let t_v3 = timeit("V3  fused SpMV + fill_v3 [Current]", repeats, || {
+        csc_matvec_and_scalc(
+            mat.y_bus.col_offsets(),
+            mat.y_bus.row_indices(),
+            mat.y_bus.values(),
+            v.as_slice(),
+            ibus_v3.as_mut_slice(),
+            scalc_v3.as_mut_slice(),
+        );
+        fill_jacobian_v3(
+            &mat.y_bus,
+            v.as_slice(),
+            v_norm.as_slice(),
+            scalc_v3.as_slice(),
+            &j_pattern,
+            npv,
+            npq,
+            &mut j_values,
+        );
+    });
+
     println!(
-        "    assembly speedup:  V0/V2={:.2}x  V0/V1={:.2}x  V1/V2={:.2}x",
+        "    assembly speedup:  V0/V3={:.2}x  V0/V2={:.2}x  V1/V3={:.2}x  V2/V3={:.2}x",
+        t_v0.as_secs_f64() / t_v3.as_secs_f64(),
         t_v0.as_secs_f64() / t_v2.as_secs_f64(),
-        t_v0.as_secs_f64() / t_v1.as_secs_f64(),
-        t_v1.as_secs_f64() / t_v2.as_secs_f64(),
+        t_v1.as_secs_f64() / t_v3.as_secs_f64(),
+        t_v2.as_secs_f64() / t_v3.as_secs_f64(),
     );
     println!(
-        "    symbolic build:    {:.2} μs  ({:.1}x V2 per-iter assembly)\n",
+        "    pure fill vs SpMV: fill={:.2} μs  SpMV={:.2} μs",
+        t_fill3_only.as_secs_f64() * 1e6,
+        t_spmv_only.as_secs_f64() * 1e6,
+    );
+    println!(
+        "    symbolic build:    {:.2} μs  ({:.1}x V3 per-iter assembly)\n",
         t_sym.as_secs_f64() * 1e6,
-        t_sym.as_secs_f64() / t_v2.as_secs_f64(),
+        t_sym.as_secs_f64() / t_v3.as_secs_f64(),
     );
 }
 
@@ -271,6 +326,7 @@ fn compare_klu_breakdown(name: &str, mat: &PowerFlowMat, repeats: usize) {
         None,
         None,
         &mut solver,
+        None,
     )
     .expect("warm-up solve failed");
     let v_norm = v_conv.map(|e| e.simd_signum());
@@ -313,14 +369,55 @@ fn compare_klu_breakdown(name: &str, mat: &PowerFlowMat, repeats: usize) {
             .factor(ap.as_mut_ptr(), ai.as_mut_ptr(), j_values.as_mut_ptr());
     }
 
-    // ── 1. Assembly: SpMV (Ybus * v) + fill_jacobian_v2 ──
-    let t_asm = timeit("Assembly  (SpMV + fill)", repeats, || {
-        let ibus = &mat.y_bus * &v_conv;
-        fill_jacobian_v2(
+    let n = mat.y_bus.ncols();
+    let mut ibus_v3 = DVector::zeros(n);
+    let mut scalc_v3 = DVector::zeros(n);
+    csc_matvec_and_scalc(
+        mat.y_bus.col_offsets(),
+        mat.y_bus.row_indices(),
+        mat.y_bus.values(),
+        v_conv.as_slice(),
+        ibus_v3.as_mut_slice(),
+        scalc_v3.as_mut_slice(),
+    );
+
+    // ── 1. Assembly Breakdown (Fused SpMV + fill_jacobian_v3) ──
+    let _t_spmv = timeit("  - Fused SpMV (Y*v + scalc)  ", repeats, || {
+        csc_matvec_and_scalc(
+            mat.y_bus.col_offsets(),
+            mat.y_bus.row_indices(),
+            mat.y_bus.values(),
+            v_conv.as_slice(),
+            ibus_v3.as_mut_slice(),
+            scalc_v3.as_mut_slice(),
+        );
+    });
+    let _t_fill = timeit("  - Pure fill_jacobian_v3     ", repeats, || {
+        fill_jacobian_v3(
             &mat.y_bus,
             v_conv.as_slice(),
             v_norm.as_slice(),
-            ibus.as_slice(),
+            scalc_v3.as_slice(),
+            &j_pattern,
+            npv,
+            npq,
+            &mut j_values,
+        );
+    });
+    let t_asm = timeit("Assembly (Fused SpMV + fill_v3)", repeats, || {
+        csc_matvec_and_scalc(
+            mat.y_bus.col_offsets(),
+            mat.y_bus.row_indices(),
+            mat.y_bus.values(),
+            v_conv.as_slice(),
+            ibus_v3.as_mut_slice(),
+            scalc_v3.as_mut_slice(),
+        );
+        fill_jacobian_v3(
+            &mat.y_bus,
+            v_conv.as_slice(),
+            v_norm.as_slice(),
+            scalc_v3.as_slice(),
             &j_pattern,
             npv,
             npq,
@@ -379,6 +476,7 @@ fn klu_one_time_costs(name: &str, mat: &PowerFlowMat, repeats: usize) {
         None,
         None,
         &mut solver,
+        None,
     )
     .expect("warm-up solve failed");
     let v_norm = v_conv.map(|e| e.simd_signum());
@@ -463,6 +561,7 @@ fn export_solve_breakdown_csv(path: &str, name: &str, mat: &PowerFlowMat, repeat
         None,
         None,
         &mut solver,
+        None,
     )
     .expect("warm-up");
     let v_norm_conv = v_conv.map(|e| e.simd_signum());
@@ -618,6 +717,7 @@ fn bench_jacobian_fill() {
         let csv = format!("{}/paper/solve_breakdown.csv", dir);
         {
             use std::io::Write as _;
+            let _ = std::fs::create_dir_all(format!("{}/paper", dir));
             let mut f = std::fs::File::create(&csv).expect("cannot create solve_breakdown.csv");
             writeln!(
                 f,
