@@ -28,6 +28,7 @@ pub struct QLimEnv<'w, 's> {
     mat: ResMut<'w, PowerFlowMat>,
     res_convergence: ResMut<'w, ConvergedResult>,
     node_agg: Option<Res<'w, NodeAggRes>>,
+    cache: Option<Res<'w, crate::basic::newtonpf::NewtonCache>>,
     generators:
         Query<'w, 's, (&'static TargetBus, &'static PQLim), (With<TargetPMW>, With<TargetVmPu>)>,
     pf_bus: Query<'w, 's, &'static mut SBusInjPu, With<PVBus>>,
@@ -63,15 +64,27 @@ fn modify_qlim_system(
         mut mat,
         mut res_convergence,
         node_agg,
+        cache,
         generators,
         mut pf_bus,
     } = env;
-    // This system may have trouble since multiple generators can be connected to the same bus.
-    let cv = &res.v;
-    let mis = cv.component_mul(&(&mat.y_bus * cv).conjugate());
-    let mut sbus_res = DVector::zeros(mis.len());
-    for (perm_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
-        sbus_res[orig_idx] = mis[perm_idx];
+
+    let n = res.v.len();
+    let mut sbus_res = DVector::zeros(n);
+    if let Some(c) = cache.as_ref().filter(|c| c.s_calc.len() == n) {
+        for (perm_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
+            sbus_res[orig_idx] = c.s_calc[perm_idx];
+        }
+    } else {
+        // Fallback when NewtonCache is empty or not enabled:
+        let mut v_perm = DVector::zeros(n);
+        for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
+            v_perm[new_idx] = res.v[orig_idx];
+        }
+        let mis_perm = v_perm.component_mul(&(&mat.y_bus * &v_perm).conjugate());
+        for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
+            sbus_res[orig_idx] = mis_perm[new_idx];
+        }
     }
 
     let sbus_res = match &node_agg {
@@ -144,6 +157,7 @@ impl Plugin for QLimPlugin {
             //panic!("QLimPlugin requires StructureUpdatePlugin to be added before it.");
             app.add_plugins(NonLinearSchedulePlugin);
         }
+        app.init_resource::<crate::basic::newtonpf::NewtonCache>();
         app.add_systems(Update, modify_qlim_system.in_set(AfterSolve));
     }
 }
@@ -206,12 +220,15 @@ mod tests_python_composition {
 
         app.world_mut().insert_resource(PPNetwork(net));
         let _ = app.world_mut().try_run_schedule(PFInit); // python init_pf()
-        app.update();                                     // python solve()
+        app.update(); // python solve()
 
         let res = app
             .world()
             .get_resource::<super::super::systems::PowerFlowResult>()
             .unwrap();
-        assert!(res.converged, "qlim with the python plugin set must converge");
+        assert!(
+            res.converged,
+            "qlim with the python plugin set must converge"
+        );
     }
 }
