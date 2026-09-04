@@ -685,6 +685,7 @@ impl PowerGrid {
     }
 
     /// Enable or disable the Iwamoto optimal multiplier solver dynamically at runtime.
+    #[pyo3(signature = (enable=true))]
     fn enable_iwamoto(&mut self, enable: bool) {
         if enable {
             let app = self.inner.app_mut();
@@ -694,10 +695,131 @@ impl PowerGrid {
             self.inner
                 .world_mut()
                 .insert_resource(crate::basic::ecs::plugin::CustomSolverActive);
+            self.inner
+                .world_mut()
+                .remove_resource::<crate::basic::ecs::dcpf::DcpfSolverActive>();
         } else {
             self.inner
                 .world_mut()
                 .remove_resource::<crate::basic::ecs::plugin::CustomSolverActive>();
+        }
+    }
+
+    /// Enable or disable the DCPF-initialized Newton-Raphson solver dynamically at runtime.
+    #[pyo3(signature = (enable=true))]
+    fn enable_dcpf_init(&mut self, enable: bool) -> PyResult<()> {
+        if enable {
+            let app = self.inner.app_mut();
+            if !app.is_plugin_added::<crate::basic::ecs::dcpf::DcpfNewtonPfPlugin>() {
+                app.add_plugins(crate::basic::ecs::dcpf::DcpfNewtonPfPlugin);
+            }
+            let world = self.inner.world_mut();
+            if !world.contains_resource::<crate::basic::dcpf::DcpfModel>() {
+                let model = world
+                    .run_system_once(crate::basic::ecs::dcpf::build_dcpf_model)
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
+                world.insert_resource(model);
+            }
+            world.insert_resource(crate::basic::ecs::dcpf::DcpfSolverActive);
+            world.remove_resource::<crate::basic::ecs::plugin::CustomSolverActive>();
+        } else {
+            self.inner
+                .world_mut()
+                .remove_resource::<crate::basic::ecs::dcpf::DcpfSolverActive>();
+        }
+        Ok(())
+    }
+
+    /// Compute the DCPF initial voltage vector (unpermuted, in original bus order) as a numpy array.
+    fn compute_dcpf_v<'py>(
+        &mut self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
+        let world = self.inner.world_mut();
+        if !world.contains_resource::<crate::basic::dcpf::DcpfModel>() {
+            let model = world
+                .run_system_once(crate::basic::ecs::dcpf::build_dcpf_model)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
+            world.insert_resource(model);
+        }
+
+        let mut dcpf_model = world
+            .remove_resource::<crate::basic::dcpf::DcpfModel>()
+            .unwrap();
+        let mat = world
+            .get_resource::<crate::basic::ecs::powerflow::systems::PowerFlowMat>()
+            .unwrap();
+        let n_active = dcpf_model.n_active;
+        let mut theta_ws = vec![0.0; n_active];
+        let mut solver = crate::basic::solver::DefaultSolver::default();
+
+        let v_perm_res = crate::basic::dcpf::dcpf_initial_v(
+            &mut dcpf_model,
+            &mat.s_bus,
+            &mat.v_bus_init,
+            &mut theta_ws,
+            &mut solver,
+        );
+        let n = mat.v_bus_init.len();
+        let from_perm = mat.from_perm.clone();
+        world.insert_resource(dcpf_model);
+
+        match v_perm_res {
+            Ok(v_perm) => {
+                let mut v_orig = vec![num_complex::Complex64::new(0.0, 0.0); n];
+                for (new_idx, &orig_idx) in from_perm.iter().enumerate() {
+                    v_orig[orig_idx] = v_perm[new_idx];
+                }
+                Ok(numpy::PyArray1::from_vec(py, v_orig))
+            }
+            Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "DCPF solve failed: {e}"
+            ))),
+        }
+    }
+
+    /// Solves DCPF and applies the resulting phase angles to the internal initial voltage vector.
+    fn apply_dcpf_init(&mut self) -> PyResult<()> {
+        let world = self.inner.world_mut();
+        if !world.contains_resource::<crate::basic::dcpf::DcpfModel>() {
+            let model = world
+                .run_system_once(crate::basic::ecs::dcpf::build_dcpf_model)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
+            world.insert_resource(model);
+        }
+
+        let mut dcpf_model = world
+            .remove_resource::<crate::basic::dcpf::DcpfModel>()
+            .unwrap();
+        let mut mat = world
+            .get_resource_mut::<crate::basic::ecs::powerflow::systems::PowerFlowMat>()
+            .unwrap();
+        let n_active = dcpf_model.n_active;
+        let mut theta_ws = vec![0.0; n_active];
+        let mut solver = crate::basic::solver::DefaultSolver::default();
+
+        let v_perm_res = crate::basic::dcpf::dcpf_initial_v(
+            &mut dcpf_model,
+            &mat.s_bus,
+            &mat.v_bus_init,
+            &mut theta_ws,
+            &mut solver,
+        );
+
+        match v_perm_res {
+            Ok(v_perm) => {
+                mat.v_bus_init = v_perm;
+                drop(mat);
+                world.insert_resource(dcpf_model);
+                Ok(())
+            }
+            Err(e) => {
+                drop(mat);
+                world.insert_resource(dcpf_model);
+                Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "DCPF solve failed: {e}"
+                )))
+            }
         }
     }
 
