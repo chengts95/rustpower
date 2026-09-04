@@ -7,7 +7,7 @@ use nalgebra::Matrix2;
 use rustpower_proc_marco::DeferBundle;
 
 use super::{
-    bus::SnaptShotRegGroup,
+    bus::{OutOfService, SnaptShotRegGroup},
     line::{FromBus, StandardModelType, ToBus},
 };
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -150,6 +150,10 @@ pub struct TransformerBundle {
     pub name: Option<Name>,
     /// Optional standard type string (e.g., "25MVA_110/10kV_OFAF").
     pub std_type: Option<StandardModelType>,
+    /// Optional marker if this transformer is out of service
+    pub out: Option<OutOfService>,
+    /// Pre-allocated result data component for zero-allocation power flow post-processing
+    pub res: crate::basic::ecs::post_processing::TrafoResultData,
 }
 
 impl From<&Transformer> for TransformerBundle {
@@ -183,6 +187,8 @@ impl From<&Transformer> for TransformerBundle {
             to_bus: ToBus(t.lv_bus as i64),
             name: t.name.as_ref().map(|x| Name::new(x.clone())),
             std_type: t.std_type.as_ref().map(|x| StandardModelType(x.clone())),
+            out: (!t.in_service).then_some(OutOfService),
+            res: crate::basic::ecs::post_processing::TrafoResultData::default(),
         }
     }
 }
@@ -208,14 +214,7 @@ pub mod trans_systems {
     pub fn setup_transformer(
         mut commands: Commands,
         q: Query<(Entity, &TransformerDevice), Without<OutOfService>>,
-        oos: Query<Entity, (With<TransformerDevice>, With<OutOfService>)>,
     ) {
-        // Out-of-service transformers contribute nothing to the Y-bus:
-        // drop their admittance children and matrix patch.
-        for entity in &oos {
-            commands.entity(entity).despawn_related::<Children>();
-            commands.entity(entity).remove::<Port4MatPatch>();
-        }
         q.iter().for_each(|(entity, transformer)| {
             setup_transformer_admittance(&mut commands, entity, transformer);
         });
@@ -225,8 +224,6 @@ pub mod trans_systems {
         parent: Entity,
         dev: &TransformerDevice,
     ) {
-        commands.entity(parent).despawn_related::<Children>();
-
         let tap_m = dev.tap.as_ref().map_or(1.0, |tap| {
             let pos = tap.pos.unwrap_or(0.0);
             let neutral = tap.neutral.unwrap_or(0.0);
@@ -263,6 +260,6 @@ pub mod trans_systems {
         }
 
         let g = t.conjugate() * g * t;
-        commands.entity(parent).insert((crate::basic::ecs::elements::Transformer, Port4MatPatch(g)));
+        commands.entity(parent).insert(Port4MatPatch(g));
     }
 }

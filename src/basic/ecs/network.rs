@@ -156,20 +156,26 @@ pub fn ecs_run_pf(
         cache.as_deref_mut(),
     );
 
-    // Handle the results of the power flow calculation.
+    let n = mat.v_bus_init.len();
     match v {
-        Ok((v, iterations)) => {
-            //let v = mat.reorder.transpose() * v;
+        Ok((v_perm, iterations)) => {
+            let mut v_orig = nalgebra::DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
+            for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
+                v_orig[orig_idx] = v_perm[new_idx];
+            }
             cmd.insert_resource(PowerFlowResult {
-                v,
+                v: v_orig,
                 iterations,
                 converged: true,
             });
         }
-        Err((_err, v_err, its)) => {
-            // let v = mat.reorder.transpose() * v_err;
+        Err((_err, v_perm_err, its)) => {
+            let mut v_orig = nalgebra::DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
+            for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
+                v_orig[orig_idx] = v_perm_err[new_idx];
+            }
             cmd.insert_resource(PowerFlowResult {
-                v: v_err,
+                v: v_orig,
                 iterations: its,
                 converged: false,
             });
@@ -207,17 +213,26 @@ pub fn iwamoto_run_pf(
         &mut solver.solver,
     );
 
+    let n = mat.v_bus_init.len();
     match v {
-        Ok((v, iterations)) => {
+        Ok((v_perm, iterations)) => {
+            let mut v_orig = nalgebra::DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
+            for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
+                v_orig[orig_idx] = v_perm[new_idx];
+            }
             cmd.insert_resource(PowerFlowResult {
-                v,
+                v: v_orig,
                 iterations,
                 converged: true,
             });
         }
-        Err((_err, v_err, its)) => {
+        Err((_err, v_perm_err, its)) => {
+            let mut v_orig = nalgebra::DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
+            for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
+                v_orig[orig_idx] = v_perm_err[new_idx];
+            }
             cmd.insert_resource(PowerFlowResult {
-                v: v_err,
+                v: v_orig,
                 iterations: its,
                 converged: false,
             });

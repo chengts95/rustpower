@@ -79,6 +79,8 @@ pub struct LineBundle {
     pub std_spec: Option<StandardModelType>,
     /// Optional marker if this line is out of service
     pub out: Option<OutOfService>,
+    /// Pre-allocated result data component for zero-allocation power flow post-processing
+    pub res: crate::basic::ecs::post_processing::LineResultData,
 }
 
 /// Standard line model name (e.g. from library or external spec).
@@ -111,6 +113,7 @@ impl From<&Line> for LineBundle {
             name: line.name.clone().map(Name::new),
             std_spec: line.std_type.clone().map(StandardModelType),
             out: (!line.in_service).then_some(OutOfService),
+            res: crate::basic::ecs::post_processing::LineResultData::default(),
         }
     }
 }
@@ -135,16 +138,10 @@ pub mod line_systems {
     use super::*;
     pub fn setup_line_systems(
         mut commands: Commands,
-        q: Query<(Entity, &LineParams, &FromBus, &ToBus), Without<OutOfService>>,
-        oos: Query<Entity, (With<LineParams>, With<OutOfService>)>,
+        q: Query<(Entity, &LineParams), Without<OutOfService>>,
         common: Res<PFCommonData>,
     ) {
-        // Out-of-service lines contribute nothing to the Y-bus.
-        for entity in &oos {
-            commands.entity(entity).despawn_related::<Children>();
-            commands.entity(entity).remove::<Port4MatPatch>();
-        }
-        for (entity, params, _from, _to) in &q {
+        for (entity, params) in &q {
             let length = params.length_km;
             let parallel = params.parallel as f64;
             let wbase = common.wbase;
@@ -156,8 +153,6 @@ pub mod line_systems {
             let rl = params.r_ohm_per_km * length / parallel;
             let xl = params.x_ohm_per_km * length / parallel;
             let y_series = 1.0 / Complex::new(rl, xl);
-
-            commands.entity(entity).despawn_related::<Children>();
 
             // Physical SI 2x2 admittance matrix:
             // [ [y_series + y_shunt, -y_series],
