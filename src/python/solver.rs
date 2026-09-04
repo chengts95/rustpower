@@ -74,8 +74,18 @@ impl NewtonSolver {
     ) -> PyResult<()> {
         let n = v_init.len()?;
 
-        let p_vec: Vec<usize> = p_vec_in.readonly().as_slice()?.iter().map(|&x| x as usize).collect();
-        let p_inv: Vec<usize> = p_inv_in.readonly().as_slice()?.iter().map(|&x| x as usize).collect();
+        let p_vec: Vec<usize> = p_vec_in
+            .readonly()
+            .as_slice()?
+            .iter()
+            .map(|&x| x as usize)
+            .collect();
+        let p_inv: Vec<usize> = p_inv_in
+            .readonly()
+            .as_slice()?
+            .iter()
+            .map(|&x| x as usize)
+            .collect();
 
         let indptr: Vec<usize> = y_indptr
             .readonly()
@@ -147,43 +157,54 @@ impl NewtonSolver {
         use bevy_ecs::system::RunSystemOnce;
 
         // Update the resource
-        let mut cfg = self.app.world_mut().get_resource_or_insert_with(|| PowerFlowConfig::default());
+        let mut cfg = self
+            .app
+            .world_mut()
+            .get_resource_or_insert_with(|| PowerFlowConfig::default());
         cfg.max_it = Some(max_iter);
         cfg.tol = Some(tol);
 
-        let converged = self.app.world_mut().run_system_once(
-            |mat: ResMut<PowerFlowMat>,
-             mut solver_res: ResMut<PowerFlowSolver>,
-             cfg: Res<PowerFlowConfig>,
-             mut cache: Option<ResMut<crate::basic::newtonpf::NewtonCache>>,
-             mut cmd: Commands| {
-                let mat_ref = mat.into_inner();
-                let result = crate::basic::newton_pf(
-                    &mat_ref.y_bus,
-                    &mat_ref.s_bus,
-                    &mut mat_ref.v_bus_init,
-                    mat_ref.npv,
-                    mat_ref.npq,
-                    cfg.tol,
-                    cfg.max_it,
-                    &mut solver_res.solver,
-                    cache.as_deref_mut(),
-                );
+        let converged = self
+            .app
+            .world_mut()
+            .run_system_once(
+                |mat: ResMut<PowerFlowMat>,
+                 mut solver_res: ResMut<PowerFlowSolver>,
+                 cfg: Res<PowerFlowConfig>,
+                 mut cache: Option<ResMut<crate::basic::newtonpf::NewtonCache>>,
+                 mut cmd: Commands| {
+                    let mat_ref = mat.into_inner();
+                    let result = crate::basic::newton_pf(
+                        &mat_ref.y_bus,
+                        &mat_ref.s_bus,
+                        &mut mat_ref.v_bus_init,
+                        mat_ref.npv,
+                        mat_ref.npq,
+                        cfg.tol,
+                        cfg.max_it,
+                        &mut solver_res.solver,
+                        cache.as_deref_mut(),
+                    );
 
-                let (converged, its, v_final) = match result {
-                    Ok((v, i)) => (true, i, v),
-                    Err((_err, v, i)) => (false, i, v),
-                };
+                    let (converged, its, v_final) = match result {
+                        Ok((v, i)) => (true, i, v),
+                        Err((_err, v, i)) => (false, i, v),
+                    };
 
-                cmd.insert_resource(PowerFlowResult {
-                    v: v_final,
-                    iterations: its,
-                    converged,
-                });
+                    cmd.insert_resource(PowerFlowResult {
+                        v: v_final,
+                        iterations: its,
+                        converged,
+                    });
 
-                converged
-            },
-        ).map_err(|_| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Solver system failed or resources missing"))?;
+                    converged
+                },
+            )
+            .map_err(|_| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    "Solver system failed or resources missing",
+                )
+            })?;
 
         Ok(converged)
     }

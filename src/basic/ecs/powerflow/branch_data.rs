@@ -1,9 +1,9 @@
+use crate::basic::ecs::powerflow::systems::create_y_bus;
 use bevy_app::prelude::*;
 use bevy_ecs::{prelude::*, system::RunSystemOnce};
-use nalgebra_sparse::CsrMatrix;
 use nalgebra::DVector;
+use nalgebra_sparse::CsrMatrix;
 use num_complex::Complex64;
-use crate::basic::ecs::powerflow::systems::create_y_bus;
 
 /// Incremental resource to store branch-related matrices for analysis.
 /// Only populated if BranchAnalysisPlugin is added.

@@ -36,7 +36,7 @@ impl Solve for KLUSolver {
                     n as i64,
                 );
             }
-            
+
             let mut ret = if self.0.numeric.is_null() {
                 self.0.factor(
                     Ap.as_mut_ptr() as *mut i64,
@@ -51,7 +51,7 @@ impl Solve for KLUSolver {
                     Ax.as_mut_ptr(),
                     n as i64,
                 );
-                // status > 0 means singular, status < 0 means error. 
+                // status > 0 means singular, status < 0 means error.
                 // In both cases, we try a full factor.
                 if status != 0 {
                     self.0.factor(

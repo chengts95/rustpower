@@ -2,10 +2,10 @@ use ecs::{
     elements::PPNetwork,
     network::{DataOps, PowerFlow, PowerGrid},
 };
+use newtonpf::NewtonCache;
 use rustpower::{io::pandapower::*, prelude::*, testcases::case_ieee39::IEEE_39};
 use std::env;
 use std::time::{Duration, Instant};
-use newtonpf::NewtonCache;
 #[macro_export]
 macro_rules! timeit {
     ($name:expr, $times:expr, $block:expr) => {{
@@ -31,11 +31,7 @@ macro_rules! timeit {
         let avg_duration = total_duration / $times;
         println!(
             " {}: {} loops - Average: {:?}, Max: {:?}, Min: {:?}",
-            $name,
-            $times,
-            avg_duration,
-            max_duration,
-            min_duration
+            $name, $times, avg_duration, max_duration, min_duration
         );
     }};
 }
@@ -45,16 +41,13 @@ fn run_benchmark(name: &str, net: Network, iterations: u32) {
     pf_net.world_mut().insert_resource(PPNetwork(net));
     pf_net.world_mut().insert_resource(NewtonCache::default());
     pf_net.init_pf_net();
-    
+
     // Warmup
     pf_net.run_pf();
     pf_net.post_process();
-    
-    let res = pf_net
-        .world()
-        .get_resource::<PowerFlowResult>()
-        .unwrap();
-    
+
+    let res = pf_net.world().get_resource::<PowerFlowResult>().unwrap();
+
     if !res.converged {
         println!("{} did not converge!", name);
         return;

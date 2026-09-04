@@ -2,8 +2,8 @@ use std::env;
 use std::time::{Duration, Instant};
 
 use rustpower::io::pandapower::*;
-use rustpower::prelude::*;
 use rustpower::prelude::newtonpf::NewtonCache;
+use rustpower::prelude::*;
 use rustpower::testcases::case_ieee39::IEEE_39;
 
 struct BenchStat {
@@ -36,7 +36,14 @@ fn bench_loop<F: FnMut()>(times: u32, mut f: F) -> BenchStat {
     }
 }
 
-fn run_case_bench(name: &str, net: Network, n_bus: usize, n_line: usize, n_trafo: usize, loops: u32) {
+fn run_case_bench(
+    name: &str,
+    net: Network,
+    n_bus: usize,
+    n_line: usize,
+    n_trafo: usize,
+    loops: u32,
+) {
     println!("\n================================================================================");
     println!(
         " BENCHMARK: {} (Buses: {}, Lines: {}, Transformers: {}, Total Branches: {})",
@@ -91,16 +98,37 @@ fn run_case_bench(name: &str, net: Network, n_bus: usize, n_line: usize, n_trafo
     let branch_throughput = (total_branches / (post_stat.avg.as_secs_f64())) / 1_000_000.0;
     let post_ratio = (post_us / combined_us) * 100.0;
 
-    println!("  [1] Pure Solve:           avg = {:>9.2} µs (min: {:>9.2} µs, max: {:>9.2} µs)",
-        solve_us, solve_stat.min.as_nanos() as f64 / 1000.0, solve_stat.max.as_nanos() as f64 / 1000.0);
-    println!("  [2] Pure Post-Process:     avg = {:>9.2} µs (min: {:>9.2} µs, max: {:>9.2} µs)",
-        post_us, post_stat.min.as_nanos() as f64 / 1000.0, post_stat.max.as_nanos() as f64 / 1000.0);
-    println!("  [3] Hot Loop (Solve+Post):  avg = {:>9.2} µs (min: {:>9.2} µs, max: {:>9.2} µs)",
-        combined_us, combined_stat.min.as_nanos() as f64 / 1000.0, combined_stat.max.as_nanos() as f64 / 1000.0);
+    println!(
+        "  [1] Pure Solve:           avg = {:>9.2} µs (min: {:>9.2} µs, max: {:>9.2} µs)",
+        solve_us,
+        solve_stat.min.as_nanos() as f64 / 1000.0,
+        solve_stat.max.as_nanos() as f64 / 1000.0
+    );
+    println!(
+        "  [2] Pure Post-Process:     avg = {:>9.2} µs (min: {:>9.2} µs, max: {:>9.2} µs)",
+        post_us,
+        post_stat.min.as_nanos() as f64 / 1000.0,
+        post_stat.max.as_nanos() as f64 / 1000.0
+    );
+    println!(
+        "  [3] Hot Loop (Solve+Post):  avg = {:>9.2} µs (min: {:>9.2} µs, max: {:>9.2} µs)",
+        combined_us,
+        combined_stat.min.as_nanos() as f64 / 1000.0,
+        combined_stat.max.as_nanos() as f64 / 1000.0
+    );
     println!("  ------------------------------------------------------------------------------");
-    println!("  * Post-processing overhead in hot loop: {:.2}%", post_ratio);
-    println!("  * Post-processing branch throughput:    {:.2} Million branches / sec", branch_throughput);
-    println!("  * Per-branch compute time:              {:.2} ns / branch", (post_stat.avg.as_nanos() as f64) / total_branches);
+    println!(
+        "  * Post-processing overhead in hot loop: {:.2}%",
+        post_ratio
+    );
+    println!(
+        "  * Post-processing branch throughput:    {:.2} Million branches / sec",
+        branch_throughput
+    );
+    println!(
+        "  * Per-branch compute time:              {:.2} ns / branch",
+        (post_stat.avg.as_nanos() as f64) / total_branches
+    );
 }
 
 fn main() {
@@ -120,7 +148,14 @@ fn main() {
         let n_bus_118 = net_118.bus.len();
         let n_line_118 = net_118.line.as_ref().map(|v| v.len()).unwrap_or(0);
         let n_trafo_118 = net_118.trafo.as_ref().map(|v| v.len()).unwrap_or(0);
-        run_case_bench("IEEE 118", net_118, n_bus_118, n_line_118, n_trafo_118, 1000);
+        run_case_bench(
+            "IEEE 118",
+            net_118,
+            n_bus_118,
+            n_line_118,
+            n_trafo_118,
+            1000,
+        );
     }
 
     // 3. PEGASE 9241
@@ -130,6 +165,13 @@ fn main() {
         let n_bus_9241 = net_9241.bus.len();
         let n_line_9241 = net_9241.line.as_ref().map(|v| v.len()).unwrap_or(0);
         let n_trafo_9241 = net_9241.trafo.as_ref().map(|v| v.len()).unwrap_or(0);
-        run_case_bench("PEGASE 9241", net_9241, n_bus_9241, n_line_9241, n_trafo_9241, 100);
+        run_case_bench(
+            "PEGASE 9241",
+            net_9241,
+            n_bus_9241,
+            n_line_9241,
+            n_trafo_9241,
+            100,
+        );
     }
 }

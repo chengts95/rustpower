@@ -141,10 +141,8 @@ fn extract_res_bus(
         for (idx, entity) in nodes.iter() {
             let i = idx as usize;
             if i < n {
-                cmd.entity(entity).insert((
-                    SBusResult(s_orig[i]),
-                    VBusResult(res.v[i]),
-                ));
+                cmd.entity(entity)
+                    .insert((SBusResult(s_orig[i]), VBusResult(res.v[i])));
             }
         }
     } else if let Ok(chunks) = bus_q.contiguous_iter_mut() {
@@ -527,20 +525,26 @@ fn process_trafos_portable(
 /// Completely skips OutOfService components with zero overhead.
 /// Zero per-iteration heap allocations: bus_calc memory is retained in Local<Vec<BusPrecalc>>!
 fn extract_res_branches(
-    mut lines_q: Query<(
-        &Port4MatPatch,
-        &FromBus,
-        &ToBus,
-        &LineParams,
-        &mut LineResultData,
-    ), Without<OutOfService>>,
-    mut trafos_q: Query<(
-        &Port4MatPatch,
-        &FromBus,
-        &ToBus,
-        &TransformerDevice,
-        &mut TrafoResultData,
-    ), Without<OutOfService>>,
+    mut lines_q: Query<
+        (
+            &Port4MatPatch,
+            &FromBus,
+            &ToBus,
+            &LineParams,
+            &mut LineResultData,
+        ),
+        Without<OutOfService>,
+    >,
+    mut trafos_q: Query<
+        (
+            &Port4MatPatch,
+            &FromBus,
+            &ToBus,
+            &TransformerDevice,
+            &mut TrafoResultData,
+        ),
+        Without<OutOfService>,
+    >,
     buses: Query<(&BusID, &VNominal)>,
     lut: Res<NodeLookup>,
     mat: Res<PowerFlowMat>,
@@ -587,7 +591,10 @@ fn extract_res_branches(
     // Direct read from solver polar state (NewtonCache) if present, eliminating atan2 & sqrt!
     // Zero branches in the permutation update loop for optimal pipeline throughput.
     if let Some(c) = cache.as_ref().filter(|c| {
-        c.v_m.len() == nodes && c.v_a.len() == nodes && mat.from_perm.len() == nodes && v_slice.len() >= nodes
+        c.v_m.len() == nodes
+            && c.v_a.len() == nodes
+            && mat.from_perm.len() == nodes
+            && v_slice.len() >= nodes
     }) {
         let vm_slice = c.v_m.as_slice();
         let va_slice = c.v_a.as_slice();
@@ -618,15 +625,36 @@ fn extract_res_branches(
             {
                 if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
                     unsafe {
-                        process_lines_avx2(patch_slice, from_slice, to_slice, params_slice, res, &bus_calc);
+                        process_lines_avx2(
+                            patch_slice,
+                            from_slice,
+                            to_slice,
+                            params_slice,
+                            res,
+                            &bus_calc,
+                        );
                     }
                 } else {
-                    process_lines_portable(patch_slice, from_slice, to_slice, params_slice, res, &bus_calc);
+                    process_lines_portable(
+                        patch_slice,
+                        from_slice,
+                        to_slice,
+                        params_slice,
+                        res,
+                        &bus_calc,
+                    );
                 }
             }
             #[cfg(not(target_arch = "x86_64"))]
             {
-                process_lines_portable(patch_slice, from_slice, to_slice, params_slice, res, &bus_calc);
+                process_lines_portable(
+                    patch_slice,
+                    from_slice,
+                    to_slice,
+                    params_slice,
+                    res,
+                    &bus_calc,
+                );
             }
         }
     }
@@ -639,15 +667,36 @@ fn extract_res_branches(
             {
                 if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
                     unsafe {
-                        process_trafos_avx2(patch_slice, from_slice, to_slice, dev_slice, res, &bus_calc);
+                        process_trafos_avx2(
+                            patch_slice,
+                            from_slice,
+                            to_slice,
+                            dev_slice,
+                            res,
+                            &bus_calc,
+                        );
                     }
                 } else {
-                    process_trafos_portable(patch_slice, from_slice, to_slice, dev_slice, res, &bus_calc);
+                    process_trafos_portable(
+                        patch_slice,
+                        from_slice,
+                        to_slice,
+                        dev_slice,
+                        res,
+                        &bus_calc,
+                    );
                 }
             }
             #[cfg(not(target_arch = "x86_64"))]
             {
-                process_trafos_portable(patch_slice, from_slice, to_slice, dev_slice, res, &bus_calc);
+                process_trafos_portable(
+                    patch_slice,
+                    from_slice,
+                    to_slice,
+                    dev_slice,
+                    res,
+                    &bus_calc,
+                );
             }
         }
     }
@@ -708,7 +757,9 @@ impl PostProcessing for PowerGrid {
 
     fn post_process(&mut self) {
         self.world_mut().run_system_once(extract_res_bus).unwrap();
-        self.world_mut().run_system_once(extract_res_branches).unwrap();
+        self.world_mut()
+            .run_system_once(extract_res_branches)
+            .unwrap();
     }
 }
 
@@ -723,6 +774,8 @@ impl PostProcessing for App {
 
     fn post_process(&mut self) {
         self.world_mut().run_system_once(extract_res_bus).unwrap();
-        self.world_mut().run_system_once(extract_res_branches).unwrap();
+        self.world_mut()
+            .run_system_once(extract_res_branches)
+            .unwrap();
     }
 }

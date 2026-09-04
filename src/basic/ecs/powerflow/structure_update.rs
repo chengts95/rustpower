@@ -1,6 +1,6 @@
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
- 
+
 use crate::basic::ecs::network::PowerFlowSolver;
 use crate::basic::ecs::{elements::*, network::apply_permutation};
 
@@ -115,7 +115,9 @@ pub fn vbus_pu_update(mut pfmat: ResMut<PowerFlowMat>, vbus: Query<(&BusID, &VBu
 
 pub fn structure_update(world: &mut World) {
     let flags = world.run_system_cached(event_update).unwrap();
-    world.insert_resource(LastStructureAction { full_rebuild: flags.full_dirty });
+    world.insert_resource(LastStructureAction {
+        full_rebuild: flags.full_dirty,
+    });
 
     // Topology changed: run the single full-rebuild pipeline.
     if flags.full_dirty {

@@ -1,7 +1,4 @@
-use crate::{
-    basic::sparse::cast::Cast,
-    io::pandapower::SwitchType,
-};
+use crate::{basic::sparse::cast::Cast, io::pandapower::SwitchType};
 use bevy_ecs::prelude::*;
 use derive_more::{Deref, DerefMut};
 use nalgebra::{Complex, DVector, vector};
@@ -154,7 +151,7 @@ pub fn process_switch_state(
     buses: Query<&VNominal>,
     q: Query<(Entity, &Switch, &SwitchState)>,
 ) {
-    let node_idx: Vec<u64> = nodes.reverse.values().map(|&x| x as u64).collect();
+    let node_idx: Vec<u64> = nodes.iter().map(|(id, _)| id as u64).collect();
     let mut union_find: Option<NodeMerge> = if q.iter().count() > 0 {
         Some(NodeMerge::new(&node_idx))
     } else {
@@ -192,10 +189,7 @@ pub fn process_switch_state(
 ///
 /// This function adds admittance branches based on the state of switches, no ideal switch.
 #[allow(dead_code)]
-pub fn process_switch_state_admit(
-    mut cmd: Commands,
-    q: Query<(Entity, &Switch, &SwitchState)>,
-) {
+pub fn process_switch_state_admit(mut cmd: Commands, q: Query<(Entity, &Switch, &SwitchState)>) {
     q.iter().for_each(|(entity, switch, closed)| {
         let _z_ohm = switch.z_ohm;
         match switch.et {

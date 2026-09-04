@@ -7,10 +7,10 @@ use std::marker::PhantomData;
 
 use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
-use rustpower_proc_marco::DeferBundle;
 use const_format::concatcp;
 use derive_more::derive::{Deref, DerefMut, From, Into};
 use nalgebra::Complex;
+use rustpower_proc_marco::DeferBundle;
 
 use crate::{define_snapshot, io::pandapower::Bus};
 
@@ -194,7 +194,7 @@ mod tests {
         let buses: Vec<BusBundle> = net.bus.iter().map(|x| x.into()).collect();
         let mut pf_net = PowerGrid::default();
         let world = pf_net.world_mut();
-        
+
         let mut buffer = HarvardCommandBuffer::new();
         for b in buses {
             let e = world.spawn_empty().id();
