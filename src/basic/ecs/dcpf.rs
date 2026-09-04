@@ -14,110 +14,51 @@ use crate::basic::solver::DefaultSolver;
 #[derive(Resource, Default)]
 pub struct DcpfSolverActive;
 
-/// Pre-allocated workspace buffer for DCPF in-place solve to avoid dynamic allocation.
+/// Pre-allocated workspace buffer and solver for DCPF in-place solve.
 #[derive(Resource, Default)]
 pub struct DcpfWorkspace {
     pub buffer: Vec<f64>,
     pub solver: DefaultSolver,
 }
 
-/// Builds the DCPF susceptance matrix B_aa and phase-shifter / Slack boundary injections
-/// directly from the existing `PowerFlowMat::y_bus` in O(nnz) time without rebuilding COO.
+impl DcpfWorkspace {
+    #[inline]
+    pub fn ensure_capacity(&mut self, n: usize) {
+        if self.buffer.len() < n {
+            self.buffer.resize(n, 0.0);
+        }
+    }
+}
+
+/// Builds the DCPF model by querying phase shifters and delegating matrix extraction to `DcpfModel::from_ybus`.
 pub fn build_dcpf_model(
     common: Res<PFCommonData>,
     mat: Res<PowerFlowMat>,
     trafos: Query<(&Port4MatPatch, &TransformerDevice, &FromBus, &ToBus), Without<OutOfService>>,
 ) -> DcpfModel {
-    let nodes = mat.v_bus_init.len();
-    let n_active = mat.npv + mat.npq;
-    let y_bus = &mat.y_bus;
-
-    // 1. Directly construct B_aa in CSC format from Ybus left-upper block
-    let mut col_ptrs = Vec::with_capacity(n_active + 1);
-    col_ptrs.push(0);
-    let mut row_indices = Vec::with_capacity(y_bus.row_indices().len());
-    let mut values = Vec::with_capacity(y_bus.values().len());
-
-    let mut p_slack_inj = vec![0.0; n_active];
-
-    for col in 0..n_active {
-        let start = y_bus.col_offsets()[col];
-        let end = y_bus.col_offsets()[col + 1];
-
-        let mut diag_sum = 0.0;
-        let mut diag_idx = None;
-
-        for idx in start..end {
-            let row = y_bus.row_indices()[idx];
-            if row == col {
-                // Diagonal placeholder: row indices in Ybus column are already sorted,
-                // so keeping `col` at its original slot maintains sorted CSC row indices.
-                diag_idx = Some(values.len());
-                row_indices.push(col);
-                values.push(0.0);
-                continue;
-            }
-
-            let b = y_bus.values()[idx].norm();
-            diag_sum += b;
-
-            if row < n_active {
-                // Active neighbor in B_aa
-                row_indices.push(row);
-                values.push(-b);
-            } else {
-                // Slack neighbor: Dirichlet boundary injection (b * theta_slack)
-                let theta_slack = mat.v_bus_init[row].arg();
-                p_slack_inj[col] += b * theta_slack;
-            }
-        }
-
-        if let Some(d_idx) = diag_idx {
-            values[d_idx] = diag_sum;
-        } else {
-            row_indices.push(col);
-            values.push(diag_sum);
-        }
-
-        col_ptrs.push(row_indices.len());
-    }
-
-    // 2. Transformer Phase Shifters (only scan non-zero shift degree trafos)
-    let s_base = common.sbase;
-    let mut p_shift_orig = vec![0.0; nodes];
+    let mut p_shift_orig = vec![0.0; mat.v_bus_init.len()];
     for (patch, dev, from, to) in trafos.iter() {
         let shift_deg = dev.effective_shift_degree();
         if shift_deg.abs() > 1e-6 {
             let vn = dev.vn_lv_kv;
-            let b = patch.0[(0, 1)].norm() * (vn * vn) / s_base;
+            let b = patch.0[(0, 1)].norm() * (vn * vn) / common.sbase;
             let p_inj = b * (-shift_deg.to_radians());
-            let f = from.0;
-            let t = to.0;
-            if f >= 0 && (f as usize) < nodes {
-                p_shift_orig[f as usize] += p_inj;
+            if from.0 >= 0 && (from.0 as usize) < p_shift_orig.len() {
+                p_shift_orig[from.0 as usize] += p_inj;
             }
-            if t >= 0 && (t as usize) < nodes {
-                p_shift_orig[t as usize] -= p_inj;
+            if to.0 >= 0 && (to.0 as usize) < p_shift_orig.len() {
+                p_shift_orig[to.0 as usize] -= p_inj;
             }
         }
     }
 
-    // 3. Assemble active RHS shift vector: P_shift_active = P_shift - P_slack_inj
-    let mut p_shift_active = DVector::zeros(n_active);
-    for orig in 0..nodes {
-        let perm = mat.to_perm[orig];
-        if perm < n_active {
-            p_shift_active[perm] = p_shift_orig[orig] - p_slack_inj[perm];
-        }
-    }
-
-    DcpfModel {
-        col_ptrs,
-        row_indices,
-        values,
-        p_shift: p_shift_active,
-        n_active,
-    }
+    DcpfModel::from_ybus(
+        &mat.y_bus,
+        &mat.v_bus_init,
+        mat.npv + mat.npq,
+        &mat.to_perm,
+        &p_shift_orig,
+    )
 }
 
 /// ECS system that executes the serial DCPF-initialized AC power flow.
@@ -140,58 +81,51 @@ pub fn ecs_run_dcpf_pf(
     }
 
     let n_active = dcpf_model.n_active;
-    if workspace.buffer.len() < n_active {
-        workspace.buffer.resize(n_active, 0.0);
-    }
+    let ws = &mut *workspace;
+    ws.ensure_capacity(n_active);
 
-    let v_init = &mat.v_bus_init;
-    let max_it = cfg.max_it;
-    let tol = cfg.tol;
-
-    let DcpfWorkspace {
-        buffer,
-        solver,
-    } = &mut *workspace;
-
-    let v = newton_pf_dcpf_serial(
+    let res = newton_pf_dcpf_serial(
         &mat.y_bus,
         &mat.s_bus,
-        v_init,
+        &mat.v_bus_init,
         &mut dcpf_model,
-        buffer.as_mut_slice(),
+        &mut ws.buffer[..n_active],
         mat.npv,
         mat.npq,
-        tol,
-        max_it,
+        cfg.tol,
+        cfg.max_it,
         &mut solver_res.solver,
-        solver,
+        &mut ws.solver,
         cache.as_deref_mut(),
     );
 
-    let n = mat.v_bus_init.len();
-    match v {
-        Ok((v_perm, iterations)) => {
-            let mut v_orig = nalgebra::DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
-            for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
-                v_orig[orig_idx] = v_perm[new_idx];
-            }
-            cmd.insert_resource(PowerFlowResult {
-                v: v_orig,
-                iterations,
-                converged: true,
-            });
-        }
-        Err((_err, v_perm_err, its)) => {
-            let mut v_orig = nalgebra::DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
-            for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
-                v_orig[orig_idx] = v_perm_err[new_idx];
-            }
-            cmd.insert_resource(PowerFlowResult {
-                v: v_orig,
-                iterations: its,
-                converged: false,
-            });
-        }
+    let (v_perm, iterations, converged) = match res {
+        Ok((v, iters)) => (v, iters, true),
+        Err((_, v, iters)) => (v, iters, false),
+    };
+
+    let mut v_orig = DVector::from_element(mat.v_bus_init.len(), num_complex::Complex64::new(0.0, 0.0));
+    for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
+        v_orig[orig_idx] = v_perm[new_idx];
+    }
+
+    cmd.insert_resource(PowerFlowResult {
+        v: v_orig,
+        iterations,
+        converged,
+    });
+}
+
+/// Ensures DcpfModel resource exists before solve if DcpfSolverActive is set.
+pub fn ensure_dcpf_model(
+    mut cmd: Commands,
+    model: Option<Res<DcpfModel>>,
+    common: Res<PFCommonData>,
+    mat: Res<PowerFlowMat>,
+    trafos: Query<(&Port4MatPatch, &TransformerDevice, &FromBus, &ToBus), Without<OutOfService>>,
+) {
+    if model.is_none() {
+        cmd.insert_resource(build_dcpf_model(common, mat, trafos));
     }
 }
 
@@ -213,10 +147,19 @@ impl Plugin for DcpfNewtonPfPlugin {
         );
         app.add_systems(
             Update,
-            ecs_run_dcpf_pf
+            (
+                ensure_dcpf_model.run_if(
+                    resource_exists::<DcpfSolverActive>
+                        .and_then(not(resource_exists::<DcpfModel>)),
+                ),
+                ecs_run_dcpf_pf.run_if(
+                    resource_exists::<DcpfSolverActive>
+                        .and_then(resource_exists::<DcpfModel>),
+                ),
+            )
+                .chain()
                 .in_set(SolverStage::Solve)
-                .in_set(PowerFlowSolverSet)
-                .run_if(resource_exists::<DcpfSolverActive>),
+                .in_set(PowerFlowSolverSet),
         );
     }
 }
