@@ -7,14 +7,14 @@ def main():
     
     # 1. Build a simple 2-bus system
     grid = rp.PowerGrid()
-    with grid.defer() as b:
+    with grid.edit() as b:
         b.add_bus(vn_kv=110.0, name="Source")
         b.add_bus(vn_kv=110.0, name="LoadBus")
-    
-    # Add Slack and Load
-    grid.add_ext_grid(bus=0, vm_pu=1.02)
-    load_h = grid.add_load(bus=1, p_mw=30.0, q_mvar=10.0)
-    grid.add_line(from_bus=0, to_bus=1, length_km=10.0)
+        b.add_ext_grid(bus=0, vm_pu=1.02)
+        b.add_load(bus=1, p_mw=30.0, q_mvar=10.0)
+        b.add_line(from_bus=0, to_bus=1, length_km=10.0)
+
+    load_h = grid.load(bus=1)
     
     # INITIALIZATION: Build the matrices and lookup tables once!
     print("Initializing power flow matrices...")

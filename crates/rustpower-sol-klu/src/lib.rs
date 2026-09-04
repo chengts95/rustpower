@@ -14,7 +14,7 @@ impl Default for KLUSolver {
         unsafe {
             let common_ptr = Box::into_raw(Box::new(klu_l_common::default()));
             klu_l_defaults(common_ptr);
-            
+
             KLUSolver {
                 common: common_ptr,
                 symbolic: std::ptr::null_mut(),
@@ -28,7 +28,7 @@ impl Drop for KLUSolver {
         unsafe {
             klu_l_free_symbolic(&mut self.symbolic as *mut *mut klu_l_symbolic, self.common);
             klu_l_free_numeric(&mut self.numeric as *mut *mut klu_l_numeric, self.common);
-            
+
             if !self.common.is_null() {
                 let _ = Box::from_raw(self.common);
             }

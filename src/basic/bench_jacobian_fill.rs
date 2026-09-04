@@ -22,7 +22,6 @@
 
 use std::time::{Duration, Instant};
 
-use nalgebra::*;
 use crate::basic::dsbus_dv::{dSbus_dV, dSbus_dV_old};
 use crate::basic::ecs::elements::PPNetwork;
 use crate::basic::ecs::network::{DataOps, PowerFlow, PowerGrid};
@@ -33,6 +32,7 @@ use crate::basic::newtonpf::{
 };
 use crate::basic::solver::KLUSolver;
 use crate::io::pandapower::Network;
+use nalgebra::*;
 
 /// Build the ECS network, initialise it, and pull out the (reordered) power-flow
 /// matrices that `newton_pf` / `newton_pf_old` consume directly.
@@ -45,7 +45,6 @@ fn extract_mat(net: Network) -> PowerFlowMat {
         .expect("init_pf_net did not produce a PowerFlowMat resource")
         .clone()
 }
-
 
 /// Silent variant of `timeit`: same logic, no stdout output.
 fn timeit_quiet(repeats: usize, mut f: impl FnMut()) -> Duration {
@@ -90,17 +89,38 @@ fn compare(name: &str, mat: &PowerFlowMat, repeats: usize) {
 
     // Correctness.
     let (v_v0, it_v0) = newton_pf_v0(
-        &mat.y_bus, &mat.s_bus, &mat.v_bus_init, mat.npv, mat.npq,
-        None, None, &mut KLUSolver::default(),
-    ).expect("V0 (newton_pf_v0) did not converge");
+        &mat.y_bus,
+        &mat.s_bus,
+        &mat.v_bus_init,
+        mat.npv,
+        mat.npq,
+        None,
+        None,
+        &mut KLUSolver::default(),
+    )
+    .expect("V0 (newton_pf_v0) did not converge");
     let (v_v1, it_v1) = newton_pf_old(
-        &mat.y_bus, &mat.s_bus, &mat.v_bus_init, mat.npv, mat.npq,
-        None, None, &mut KLUSolver::default(),
-    ).expect("V1 (newton_pf_old) did not converge");
+        &mat.y_bus,
+        &mat.s_bus,
+        &mat.v_bus_init,
+        mat.npv,
+        mat.npq,
+        None,
+        None,
+        &mut KLUSolver::default(),
+    )
+    .expect("V1 (newton_pf_old) did not converge");
     let (v_v2, it_v2) = newton_pf(
-        &mat.y_bus, &mat.s_bus, &mat.v_bus_init, mat.npv, mat.npq,
-        None, None, &mut KLUSolver::default(),
-    ).expect("V2 (newton_pf) did not converge");
+        &mat.y_bus,
+        &mat.s_bus,
+        &mat.v_bus_init,
+        mat.npv,
+        mat.npq,
+        None,
+        None,
+        &mut KLUSolver::default(),
+    )
+    .expect("V2 (newton_pf) did not converge");
 
     let d02 = (&v_v0 - &v_v2).norm();
     let d12 = (&v_v1 - &v_v2).norm();
@@ -115,22 +135,40 @@ fn compare(name: &str, mat: &PowerFlowMat, repeats: usize) {
     let mut s0 = KLUSolver::default();
     let t_v0 = timeit("V0  build_jacobian (raw)", repeats, || {
         let _ = newton_pf_v0(
-            &mat.y_bus, &mat.s_bus, &mat.v_bus_init, mat.npv, mat.npq,
-            None, None, &mut s0,
+            &mat.y_bus,
+            &mat.s_bus,
+            &mat.v_bus_init,
+            mat.npv,
+            mat.npq,
+            None,
+            None,
+            &mut s0,
         );
     });
     let mut s1 = KLUSolver::default();
     let t_v1 = timeit("V1  build_jacobian_cached", repeats, || {
         let _ = newton_pf_old(
-            &mat.y_bus, &mat.s_bus, &mat.v_bus_init, mat.npv, mat.npq,
-            None, None, &mut s1,
+            &mat.y_bus,
+            &mat.s_bus,
+            &mat.v_bus_init,
+            mat.npv,
+            mat.npq,
+            None,
+            None,
+            &mut s1,
         );
     });
     let mut s2 = KLUSolver::default();
     let t_v2 = timeit("V2  fill_jacobian_v2 [PQ-1st]", repeats, || {
         let _ = newton_pf(
-            &mat.y_bus, &mat.s_bus, &mat.v_bus_init, mat.npv, mat.npq,
-            None, None, &mut s2,
+            &mat.y_bus,
+            &mat.s_bus,
+            &mat.v_bus_init,
+            mat.npv,
+            mat.npq,
+            None,
+            None,
+            &mut s2,
         );
     });
     println!(
@@ -225,8 +263,14 @@ fn compare_klu_breakdown(name: &str, mat: &PowerFlowMat, repeats: usize) {
     // One full solve: warms instruction caches and produces a converged voltage.
     let mut solver = KLUSolver::default();
     let (v_conv, n_iters) = newton_pf(
-        &mat.y_bus, &mat.s_bus, &mat.v_bus_init, npv, npq,
-        None, None, &mut solver,
+        &mat.y_bus,
+        &mat.s_bus,
+        &mat.v_bus_init,
+        npv,
+        npq,
+        None,
+        None,
+        &mut solver,
     )
     .expect("warm-up solve failed");
     let v_norm = v_conv.map(|e| e.simd_signum());
@@ -261,8 +305,12 @@ fn compare_klu_breakdown(name: &str, mat: &PowerFlowMat, repeats: usize) {
     // Re-initialise KLU symbolic + numeric on OUR arrays so the internal
     // pointers are consistent (warm-up used its own internal j_pattern).
     unsafe {
-        solver.0.solve_sym(ap.as_mut_ptr(), ai.as_mut_ptr(), n_state as i64);
-        solver.0.factor(ap.as_mut_ptr(), ai.as_mut_ptr(), j_values.as_mut_ptr());
+        solver
+            .0
+            .solve_sym(ap.as_mut_ptr(), ai.as_mut_ptr(), n_state as i64);
+        solver
+            .0
+            .factor(ap.as_mut_ptr(), ai.as_mut_ptr(), j_values.as_mut_ptr());
     }
 
     // ── 1. Assembly: SpMV (Ybus * v) + fill_jacobian_v2 ──
@@ -323,18 +371,34 @@ fn klu_one_time_costs(name: &str, mat: &PowerFlowMat, repeats: usize) {
     // Converged voltage → build J once.
     let mut solver = KLUSolver::default();
     let (v_conv, _) = newton_pf(
-        &mat.y_bus, &mat.s_bus, &mat.v_bus_init, npv, npq,
-        None, None, &mut solver,
-    ).expect("warm-up solve failed");
+        &mat.y_bus,
+        &mat.s_bus,
+        &mat.v_bus_init,
+        npv,
+        npq,
+        None,
+        None,
+        &mut solver,
+    )
+    .expect("warm-up solve failed");
     let v_norm = v_conv.map(|e| e.simd_signum());
     let j_pattern = JacobianPattern2::build_from_permuted(
-        mat.y_bus.col_offsets(), mat.y_bus.row_indices(), npv, npq,
+        mat.y_bus.col_offsets(),
+        mat.y_bus.row_indices(),
+        npv,
+        npq,
     );
     let mut j_values = vec![0.0_f64; j_pattern.nnz_j];
     let ibus = &mat.y_bus * &v_conv;
     fill_jacobian_v2(
-        &mat.y_bus, v_conv.as_slice(), v_norm.as_slice(), ibus.as_slice(),
-        &j_pattern, npv, npq, &mut j_values,
+        &mat.y_bus,
+        v_conv.as_slice(),
+        v_norm.as_slice(),
+        ibus.as_slice(),
+        &j_pattern,
+        npv,
+        npq,
+        &mut j_values,
     );
     let mut ap: Vec<i64> = j_pattern.j_col_ptrs.iter().map(|&x| x as i64).collect();
     let mut ai: Vec<i64> = j_pattern.j_row_indices.iter().map(|&x| x as i64).collect();
@@ -342,18 +406,27 @@ fn klu_one_time_costs(name: &str, mat: &PowerFlowMat, repeats: usize) {
     // klu_l_analyze: symbolic factorization (sparsity pattern only, values ignored).
     // solve_sym frees + re-runs analyze each call, so the loop is self-contained.
     let t_analyze = timeit("KLU klu_l_analyze (symbolic)   ", repeats, || unsafe {
-        solver.0.solve_sym(ap.as_mut_ptr(), ai.as_mut_ptr(), n_state as i64);
+        solver
+            .0
+            .solve_sym(ap.as_mut_ptr(), ai.as_mut_ptr(), n_state as i64);
     });
 
     // klu_l_factor: first full numeric factorization (uses values).
     // factor frees + re-runs each call.
     let t_factor = timeit("KLU klu_l_factor  (full numeric)", repeats, || unsafe {
-        solver.0.factor(ap.as_mut_ptr(), ai.as_mut_ptr(), j_values.as_mut_ptr());
+        solver
+            .0
+            .factor(ap.as_mut_ptr(), ai.as_mut_ptr(), j_values.as_mut_ptr());
     });
 
     // klu_l_refactor for comparison (already in the figure, repeated here for ratio).
     let t_refactor = timeit("KLU klu_l_refactor (re-factor) ", repeats, || unsafe {
-        solver.0.refactor(ap.as_mut_ptr(), ai.as_mut_ptr(), j_values.as_mut_ptr(), n_state as i64);
+        solver.0.refactor(
+            ap.as_mut_ptr(),
+            ai.as_mut_ptr(),
+            j_values.as_mut_ptr(),
+            n_state as i64,
+        );
     });
 
     println!(
@@ -382,9 +455,16 @@ fn export_solve_breakdown_csv(path: &str, name: &str, mat: &PowerFlowMat, repeat
     // Warm-up: converged voltage + iteration count.
     let mut solver = KLUSolver::default();
     let (v_conv, n_iter) = newton_pf(
-        &mat.y_bus, &mat.s_bus, &mat.v_bus_init, npv, npq,
-        None, None, &mut solver,
-    ).expect("warm-up");
+        &mat.y_bus,
+        &mat.s_bus,
+        &mat.v_bus_init,
+        npv,
+        npq,
+        None,
+        None,
+        &mut solver,
+    )
+    .expect("warm-up");
     let v_norm_conv = v_conv.map(|e| e.simd_signum());
 
     // Assembly timings (per iteration, fixed voltage).
@@ -399,23 +479,41 @@ fn export_solve_breakdown_csv(path: &str, name: &str, mat: &PowerFlowMat, repeat
     });
     let t_sym = timeit_quiet(repeats, || {
         let _ = JacobianPattern2::build_from_permuted(
-            mat.y_bus.col_offsets(), mat.y_bus.row_indices(), npv, npq,
+            mat.y_bus.col_offsets(),
+            mat.y_bus.row_indices(),
+            npv,
+            npq,
         );
     });
     let j_pattern = JacobianPattern2::build_from_permuted(
-        mat.y_bus.col_offsets(), mat.y_bus.row_indices(), npv, npq,
+        mat.y_bus.col_offsets(),
+        mat.y_bus.row_indices(),
+        npv,
+        npq,
     );
     let mut j_values = vec![0.0_f64; j_pattern.nnz_j];
     let ibus_conv = &mat.y_bus * &v_conv;
     fill_jacobian_v2(
-        &mat.y_bus, v_conv.as_slice(), v_norm_conv.as_slice(),
-        ibus_conv.as_slice(), &j_pattern, npv, npq, &mut j_values,
+        &mat.y_bus,
+        v_conv.as_slice(),
+        v_norm_conv.as_slice(),
+        ibus_conv.as_slice(),
+        &j_pattern,
+        npv,
+        npq,
+        &mut j_values,
     );
     let t_v2 = timeit_quiet(repeats, || {
         let ibus = &mat.y_bus * &v_conv;
         fill_jacobian_v2(
-            &mat.y_bus, v_conv.as_slice(), v_norm_conv.as_slice(),
-            ibus.as_slice(), &j_pattern, npv, npq, &mut j_values,
+            &mat.y_bus,
+            v_conv.as_slice(),
+            v_norm_conv.as_slice(),
+            ibus.as_slice(),
+            &j_pattern,
+            npv,
+            npq,
+            &mut j_values,
         );
     });
 
@@ -423,17 +521,30 @@ fn export_solve_breakdown_csv(path: &str, name: &str, mat: &PowerFlowMat, repeat
     let mut ap: Vec<i64> = j_pattern.j_col_ptrs.iter().map(|&x| x as i64).collect();
     let mut ai: Vec<i64> = j_pattern.j_row_indices.iter().map(|&x| x as i64).collect();
     unsafe {
-        solver.0.solve_sym(ap.as_mut_ptr(), ai.as_mut_ptr(), n_state as i64);
-        solver.0.factor(ap.as_mut_ptr(), ai.as_mut_ptr(), j_values.as_mut_ptr());
+        solver
+            .0
+            .solve_sym(ap.as_mut_ptr(), ai.as_mut_ptr(), n_state as i64);
+        solver
+            .0
+            .factor(ap.as_mut_ptr(), ai.as_mut_ptr(), j_values.as_mut_ptr());
     }
     let t_analyze = timeit_quiet(repeats, || unsafe {
-        solver.0.solve_sym(ap.as_mut_ptr(), ai.as_mut_ptr(), n_state as i64);
+        solver
+            .0
+            .solve_sym(ap.as_mut_ptr(), ai.as_mut_ptr(), n_state as i64);
     });
     let t_factor = timeit_quiet(repeats, || unsafe {
-        solver.0.factor(ap.as_mut_ptr(), ai.as_mut_ptr(), j_values.as_mut_ptr());
+        solver
+            .0
+            .factor(ap.as_mut_ptr(), ai.as_mut_ptr(), j_values.as_mut_ptr());
     });
     let t_refactor = timeit_quiet(repeats, || unsafe {
-        solver.0.refactor(ap.as_mut_ptr(), ai.as_mut_ptr(), j_values.as_mut_ptr(), n_state as i64);
+        solver.0.refactor(
+            ap.as_mut_ptr(),
+            ai.as_mut_ptr(),
+            j_values.as_mut_ptr(),
+            n_state as i64,
+        );
     });
     let mut rhs = vec![0.0_f64; n_state];
     let t_backsolve = timeit_quiet(repeats, || unsafe {
@@ -454,10 +565,17 @@ fn export_solve_breakdown_csv(path: &str, name: &str, mat: &PowerFlowMat, repeat
         writeln!(
             f,
             "{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
-            name, n_iter, ver,
-            asm, sym,
-            us(t_analyze), us(t_factor), us(t_refactor), us(t_backsolve),
-        ).expect("CSV write");
+            name,
+            n_iter,
+            ver,
+            asm,
+            sym,
+            us(t_analyze),
+            us(t_factor),
+            us(t_refactor),
+            us(t_backsolve),
+        )
+        .expect("CSV write");
     }
     println!("    [solve_breakdown.csv: {} rows written for {}]", 3, name);
 }
@@ -470,8 +588,7 @@ fn bench_jacobian_fill() {
     );
 
     // IEEE 39 -- transformers modelled as lines, topology identical to pandapower.
-    let net: Network =
-        serde_json::from_str(crate::testcases::case_ieee39::IEEE_39).unwrap();
+    let net: Network = serde_json::from_str(crate::testcases::case_ieee39::IEEE_39).unwrap();
     let mat = extract_mat(net);
     compare_assembly("IEEE 39", &mat, 300);
     compare_klu_breakdown("IEEE 39", &mat, 300);
@@ -502,17 +619,19 @@ fn bench_jacobian_fill() {
         {
             use std::io::Write as _;
             let mut f = std::fs::File::create(&csv).expect("cannot create solve_breakdown.csv");
-            writeln!(f, "system,n_iter,version,asm_us,sym_us,analyze_us,factor_us,refactor_us,backsolve_us")
-                .expect("CSV header");
+            writeln!(
+                f,
+                "system,n_iter,version,asm_us,sym_us,analyze_us,factor_us,refactor_us,backsolve_us"
+            )
+            .expect("CSV header");
         }
-        let net39: Network =
-            serde_json::from_str(crate::testcases::case_ieee39::IEEE_39).unwrap();
+        let net39: Network = serde_json::from_str(crate::testcases::case_ieee39::IEEE_39).unwrap();
         let mat39 = extract_mat(net39);
         export_solve_breakdown_csv(&csv, "IEEE 39", &mat39, 300);
 
         for (name, rel, repeats) in [
-            ("IEEE 118",    "cases/IEEE118/data.zip",    300usize),
-            ("PEGASE 9241", "cases/pegase9241/data.zip",  30usize),
+            ("IEEE 118", "cases/IEEE118/data.zip", 300usize),
+            ("PEGASE 9241", "cases/pegase9241/data.zip", 30usize),
         ] {
             let path = format!("{}/{}", dir, rel);
             if let Ok(net) = crate::io::pandapower::load_csv_zip(&path) {

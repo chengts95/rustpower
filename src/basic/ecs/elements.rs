@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 pub mod bus;
 pub mod ele_process;
 pub mod generator;
@@ -11,7 +10,6 @@ pub mod trans;
 pub mod units;
 use crate::io::pandapower;
 
-use bevy_ecs::entity::EntityHash;
 use bevy_ecs::prelude::*;
 use derive_more::{Deref, DerefMut};
 pub use ele_process::*;
@@ -76,12 +74,11 @@ pub struct PPNetwork(pub pandapower::Network);
 /// Resource that maps node indices (i64) to ECS entities.
 ///
 /// `NodeLookup` helps in quickly finding the ECS entity corresponding to a node in the power flow network.
-#[derive(Default, Debug, Resource)]
+#[derive(Default, Debug, Resource, Clone)]
 pub struct NodeLookup {
     /// bus_id → entity 映射
     pub forward: Vec<Option<Entity>>,
-    /// entity → bus_id 映射
-    pub reverse: HashMap<Entity, i64, EntityHash>,
+    count: usize,
 }
 
 /// Component representing an auxiliary node in the network.
@@ -93,7 +90,7 @@ pub struct AuxNode {
 }
 
 /// Marker component for a line element in the power system.
-#[derive(Debug, Component, serde::Serialize, serde::Deserialize,Clone)]
+#[derive(Debug, Component, serde::Serialize, serde::Deserialize, Clone)]
 pub struct Line;
 
 /// Marker component for a transformer element in the power system.
@@ -101,7 +98,9 @@ pub struct Line;
 pub struct Transformer;
 
 /// Dense flat index of a branch (Line or Trafo) in the BranchCollection pool.
-#[derive(Debug, Component, Copy, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Component, Copy, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct BranchIndex(pub usize);
 
 /// Marker component for a shunt element in the power system.
@@ -120,10 +119,10 @@ pub struct PFCommonData {
 
 impl NodeLookup {
     pub fn len(&self) -> usize {
-        self.reverse.len()
+        self.count
     }
     pub fn is_empty(&self) -> bool {
-        self.reverse.is_empty()
+        self.count == 0
     }
     pub fn iter(&self) -> impl Iterator<Item = (i64, Entity)> + '_ {
         self.forward
@@ -136,28 +135,26 @@ impl NodeLookup {
         if self.forward.len() <= idx {
             self.forward.resize_with(idx + 1, || None);
         }
-
-        if let Some(old_id) = self.reverse.insert(entity, bus_id)
-            && let Some(e) = self.forward.get_mut(old_id as usize)
-            && *e == Some(entity)
-        {
-            *e = None;
+        if self.forward[idx].is_none() {
+            self.count += 1;
         }
-
         self.forward[idx] = Some(entity);
     }
     pub fn remove_entity(&mut self, entity: Entity) {
-        if let Some(id) = self.reverse.remove(&entity)
-            && let Some(slot) = self.forward.get_mut(id as usize)
-            && *slot == Some(entity)
-        {
-            *slot = None;
+        for slot in self.forward.iter_mut() {
+            if *slot == Some(entity) {
+                *slot = None;
+                self.count = self.count.saturating_sub(1);
+            }
         }
     }
 
     pub fn remove_id(&mut self, bus_id: i64) {
-        if let Some(Some(entity)) = self.forward.get_mut(bus_id as usize) {
-            self.reverse.remove(entity);
+        if let Some(slot) = self.forward.get_mut(bus_id as usize) {
+            if slot.is_some() {
+                *slot = None;
+                self.count = self.count.saturating_sub(1);
+            }
         }
     }
 
@@ -166,7 +163,10 @@ impl NodeLookup {
     }
 
     pub fn get_id(&self, entity: Entity) -> Option<i64> {
-        self.reverse.get(&entity).copied()
+        self.forward
+            .iter()
+            .position(|&x| x == Some(entity))
+            .map(|idx| idx as i64)
     }
 
     pub fn contains_id(&self, bus_id: i64) -> bool {
@@ -176,6 +176,6 @@ impl NodeLookup {
     }
 
     pub fn contains_entity(&self, entity: Entity) -> bool {
-        self.reverse.contains_key(&entity)
+        self.forward.iter().any(|&e| e == Some(entity))
     }
 }
