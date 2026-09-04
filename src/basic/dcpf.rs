@@ -17,6 +17,78 @@ pub struct DcpfModel {
     pub n_active: usize,
 }
 
+impl DcpfModel {
+    /// Constructs the DCPF model directly from the permuted `Ybus` and phase-shift injections.
+    /// Extracts B_aa and handles Dirichlet Slack boundary injection in a single O(nnz) pass.
+    pub fn from_ybus(
+        y_bus: &CscMatrix<Complex64>,
+        v_init: &DVector<Complex64>,
+        n_active: usize,
+        to_perm: &[usize],
+        p_shift_orig: &[f64],
+    ) -> Self {
+        let mut col_ptrs = Vec::with_capacity(n_active + 1);
+        col_ptrs.push(0);
+        let mut row_indices = Vec::with_capacity(y_bus.row_indices().len());
+        let mut values = Vec::with_capacity(y_bus.values().len());
+        let mut p_slack_inj = vec![0.0; n_active];
+
+        for col in 0..n_active {
+            let start = y_bus.col_offsets()[col];
+            let end = y_bus.col_offsets()[col + 1];
+
+            let mut diag_sum = 0.0;
+            let mut diag_idx = None;
+
+            for idx in start..end {
+                let row = y_bus.row_indices()[idx];
+                if row == col {
+                    diag_idx = Some(values.len());
+                    row_indices.push(col);
+                    values.push(0.0);
+                    continue;
+                }
+
+                let b = y_bus.values()[idx].norm();
+                diag_sum += b;
+
+                if row < n_active {
+                    row_indices.push(row);
+                    values.push(-b);
+                } else {
+                    let theta_slack = v_init[row].arg();
+                    p_slack_inj[col] += b * theta_slack;
+                }
+            }
+
+            if let Some(d_idx) = diag_idx {
+                values[d_idx] = diag_sum;
+            } else {
+                row_indices.push(col);
+                values.push(diag_sum);
+            }
+
+            col_ptrs.push(row_indices.len());
+        }
+
+        let mut p_shift_active = DVector::zeros(n_active);
+        for orig in 0..p_shift_orig.len() {
+            let perm = to_perm[orig];
+            if perm < n_active {
+                p_shift_active[perm] = p_shift_orig[orig] - p_slack_inj[perm];
+            }
+        }
+
+        Self {
+            col_ptrs,
+            row_indices,
+            values,
+            p_shift: p_shift_active,
+            n_active,
+        }
+    }
+}
+
 /// Solves the DC power flow linear system in-place into `theta_buf`:
 /// B_active * theta_active = P_inj - P_shift
 ///
