@@ -17,5 +17,5 @@ pub use newtonpf::newton_pf;
 #[cfg(test)]
 mod test_jacobian_pattern;
 
-#[cfg(all(test, feature = "klu"))]
+#[cfg(all(test, any(feature = "klu", feature = "klu_dyn")))]
 mod bench_jacobian_fill;
