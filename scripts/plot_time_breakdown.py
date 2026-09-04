@@ -36,16 +36,16 @@ from pathlib import Path
 #
 # Assembly (μs): SpMV (Ybus*v) + fill_jacobian_ultimate, KLU excluded.
 ASM_US = {
-    '39':   {'V0': 29.68, 'V1': 6.19,  'V2': 1.84},
-    '118':  {'V0': 101.8, 'V1': 16.71, 'V2': 6.03},
-    '9241': {'V0': 13745, 'V1': 4635,  'V2': 641},
+    '39':   {'V0': 11.42, 'V1': 2.52,  'V2': 0.47},
+    '118':  {'V0': 29.72, 'V1': 6.91,  'V2': 1.38},
+    '9241': {'V0': 4174,  'V1': 1227,  'V2': 197},
 }
 # KLU per-iteration (μs): refactor + back-substitution, measured directly.
 # Version-invariant (same KLU instance), so V0/V1/V2 share the same value.
 KLU_US = {
-    '39':   3.64 + 0.76,    # refactor 3.64  back-sub 0.76
-    '118':  8.73 + 1.82,    # refactor 8.73  back-sub 1.82
-    '9241': 2889 + 353,     # refactor 2889  back-sub 353
+    '39':   2.03 + 0.54,    # refactor 2.03  back-sub 0.54
+    '118':  3.54 + 1.04,    # refactor 3.54  back-sub 1.04
+    '9241': 1369 + 243,     # refactor 1369  back-sub 243
 }
 
 SYSTEMS  = ['39', '118', '9241']
