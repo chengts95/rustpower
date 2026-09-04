@@ -27,8 +27,7 @@ impl Default for VBusPu {
     }
 }
 
-#[derive(Component, Clone, serde::Serialize, serde::Deserialize)]
-#[component(storage = "SparseSet")]
+#[derive(Component, Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct OutOfService;
 #[derive(Component, Eq, Ord, PartialEq, PartialOrd)]
 #[require(VNominal)]

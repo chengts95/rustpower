@@ -135,6 +135,7 @@ impl GridFactory for PowerGrid {
             FromBus(from_bus),
             ToBus(to_bus),
             final_params,
+            crate::basic::ecs::post_processing::LineResultData::default(),
         ));
         if let Some(n) = name { buffer.insert(world, entity, Name::new(n)); }
         if let Some(st) = std_type { buffer.insert(world, entity, StandardModelType(st)); }
@@ -224,6 +225,7 @@ impl GridFactory for PowerGrid {
             final_dev,
             FromBus(hv_bus),
             ToBus(lv_bus),
+            crate::basic::ecs::post_processing::TrafoResultData::default(),
         ));
         if let Some(n) = name { buffer.insert(world, entity, Name::new(n)); }
         if let Some(st) = std_type { buffer.insert(world, entity, StandardModelType(st)); }

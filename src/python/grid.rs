@@ -540,13 +540,7 @@ impl PowerGrid {
         let world = self.inner.world();
         let res = world.get_resource::<PowerFlowResult>()
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("No power flow result: call solve() first"))?;
-        let mat = world.get_resource::<PowerFlowMat>()
-            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Power flow not initialized"))?;
-        let mut out = vec![num_complex::Complex64::new(0.0, 0.0); res.v.len()];
-        for (i, &val) in res.v.iter().enumerate() {
-            out[mat.from_perm[i]] = val;
-        }
-        Ok(out.into_pyarray(py))
+        Ok(res.v.as_slice().to_vec().into_pyarray(py))
     }
 
     /// Set the voltage start vector (p.u. complex), indexed by bus id.
@@ -728,18 +722,22 @@ impl PowerGrid {
     /// Get the number of lines in the grid.
     #[getter] fn n_line(&mut self) -> usize { let world = self.inner.world_mut(); world.query::<&crate::basic::ecs::elements::Line>().iter(world).count() }
 
-    /// Return the raw bus results as a dictionary.
+    /// Return the raw bus results as a DataFrame.
     fn get_bus_results<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.ensure_post_processed();
-        let res = self.get_bus_results_impl(py)?;
-        py.import("pandas")?.call_method1("DataFrame", (res,))
+        self.get_bus_results_impl(py)
     }
 
-    /// Return the raw line results as a dictionary.
+    /// Return the raw line results as a DataFrame.
     fn get_line_results<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.ensure_post_processed();
-        let res = self.get_line_results_impl(py)?;
-        py.import("pandas")?.call_method1("DataFrame", (res,))
+        self.get_line_results_impl(py)
+    }
+
+    /// Return the raw transformer results as a DataFrame.
+    fn get_trafo_results<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.ensure_post_processed();
+        self.get_trafo_results_impl(py)
     }
 
     /// Return the raw bus parameters as a dictionary.
@@ -757,6 +755,11 @@ impl PowerGrid {
     /// Lazy: triggers post-processing on first access after solve().
     #[getter]
     fn res_line<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> { self.get_line_results(py) }
+
+    /// Transformer results of the last solve as a DataFrame (pandapower's res_trafo).
+    /// Lazy: triggers post-processing on first access after solve().
+    #[getter]
+    fn res_trafo<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> { self.get_trafo_results(py) }
 
     /// Return a pandas DataFrame showing all bus parameters in the case.
     fn display_case_buses<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> { self.get_bus_params(py) }
@@ -847,7 +850,7 @@ impl PowerGrid {
     /// Run ECS post-processing (bus + line result extraction) only if the
     /// dirty flag is set.  Called lazily from `res_bus`, `res_line`, and any
     /// other result getter.
-    fn ensure_post_processed(&mut self) {
+    pub(crate) fn ensure_post_processed(&mut self) {
         if self.post_process_dirty {
             self.inner.post_process();
             self.post_process_dirty = false;
@@ -929,30 +932,96 @@ impl PowerGrid {
         Ok(dict)
     }
 
-    fn get_bus_results_impl<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    fn get_bus_results_impl<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let world = self.inner.world_mut();
-        let mut bus_ids = Vec::new(); let mut v_complex = Vec::new(); let mut vms = Vec::new(); let mut vas = Vec::new(); let mut ps = Vec::new(); let mut qs = Vec::new();
         let mut query = world.query::<(&BusID, &VBusResult, &SBusResult)>();
+        let count = query.iter(world).count();
+
+        let mut bus_ids = Vec::with_capacity(count);
+        let mut v_complex = Vec::with_capacity(count);
+        let mut vms = Vec::with_capacity(count);
+        let mut vas = Vec::with_capacity(count);
+        let mut ps = Vec::with_capacity(count);
+        let mut qs = Vec::with_capacity(count);
+
         query.iter(world).for_each(|(id, v, s)| {
-            bus_ids.push(id.0); v_complex.push(v.0); vms.push(v.0.norm()); vas.push(v.0.arg().to_degrees()); ps.push(s.0.re); qs.push(s.0.im);
+            bus_ids.push(id.0);
+            v_complex.push(v.0);
+            vms.push(v.0.norm());
+            vas.push(v.0.arg().to_degrees());
+            ps.push(s.0.re);
+            qs.push(s.0.im);
         });
+
         let dict = pyo3::types::PyDict::new(py);
-        dict.set_item("bus_id", bus_ids.into_pyarray(py))?; dict.set_item("v_pu", v_complex.into_pyarray(py))?; dict.set_item("vm_pu", vms.into_pyarray(py))?; dict.set_item("va_degree", vas.into_pyarray(py))?; dict.set_item("p_mw", ps.into_pyarray(py))?; dict.set_item("q_mvar", qs.into_pyarray(py))?;
-        Ok(dict)
+        dict.set_item("bus_id", bus_ids.into_pyarray(py))?;
+        dict.set_item("v_pu", v_complex.into_pyarray(py))?;
+        dict.set_item("vm_pu", vms.into_pyarray(py))?;
+        dict.set_item("va_degree", vas.into_pyarray(py))?;
+        dict.set_item("p_mw", ps.into_pyarray(py))?;
+        dict.set_item("q_mvar", qs.into_pyarray(py))?;
+        py.import("pandas")?.call_method1("DataFrame", (dict,))
     }
 
-    fn get_line_results_impl<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    fn get_line_results_impl<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let world = self.inner.world_mut();
-        let mut from_bus = Vec::new(); let mut to_bus = Vec::new();
-        let mut p_f = Vec::new(); let mut q_f = Vec::new(); let mut i_f = Vec::new();
         let mut query = world.query::<(&FromBus, &ToBus, &LineResultData)>();
+        let count = query.iter(world).count();
+
+        let mut from_bus = Vec::with_capacity(count);
+        let mut to_bus = Vec::with_capacity(count);
+        let mut data = Vec::with_capacity(count * 14);
+
         query.iter(world).for_each(|(f, t, d)| {
-            from_bus.push(f.0); to_bus.push(t.0);
-            p_f.push(d.p_from_mw); q_f.push(d.q_from_mvar); i_f.push(d.i_from_ka);
+            from_bus.push(f.0);
+            to_bus.push(t.0);
+            data.extend_from_slice(d.as_slice());
         });
-        let dict = pyo3::types::PyDict::new(py);
-        dict.set_item("from_bus", from_bus.into_pyarray(py))?; dict.set_item("to_bus", to_bus.into_pyarray(py))?;
-        dict.set_item("p_mw", p_f.into_pyarray(py))?; dict.set_item("q_mvar", q_f.into_pyarray(py))?; dict.set_item("i_ka", i_f.into_pyarray(py))?;
-        Ok(dict)
+
+        let pandas = py.import("pandas")?;
+        let py_data_2d = data.into_pyarray(py).call_method1("reshape", ((count, 14),))?;
+        const LINE_COLS: &[&str] = &[
+            "p_from_mw", "q_from_mvar", "p_to_mw", "q_to_mvar",
+            "pl_mw", "ql_mvar", "i_from_ka", "i_to_ka", "i_ka",
+            "vm_from_pu", "va_from_degree", "vm_to_pu", "va_to_degree",
+            "loading_percent",
+        ];
+        let kwargs = pyo3::types::PyDict::new(py);
+        kwargs.set_item("columns", LINE_COLS)?;
+        let df = pandas.call_method("DataFrame", (py_data_2d,), Some(&kwargs))?;
+        df.call_method1("insert", (0, "to_bus", to_bus.into_pyarray(py)))?;
+        df.call_method1("insert", (0, "from_bus", from_bus.into_pyarray(py)))?;
+        Ok(df)
+    }
+
+    fn get_trafo_results_impl<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let world = self.inner.world_mut();
+        let mut query = world.query::<(&FromBus, &ToBus, &TrafoResultData)>();
+        let count = query.iter(world).count();
+
+        let mut hv_bus = Vec::with_capacity(count);
+        let mut lv_bus = Vec::with_capacity(count);
+        let mut data = Vec::with_capacity(count * 13);
+
+        query.iter(world).for_each(|(f, t, d)| {
+            hv_bus.push(f.0);
+            lv_bus.push(t.0);
+            data.extend_from_slice(d.as_slice());
+        });
+
+        let pandas = py.import("pandas")?;
+        let py_data_2d = data.into_pyarray(py).call_method1("reshape", ((count, 13),))?;
+        const TRAFO_COLS: &[&str] = &[
+            "p_hv_mw", "q_hv_mvar", "p_lv_mw", "q_lv_mvar",
+            "pl_mw", "ql_mvar", "i_hv_ka", "i_lv_ka",
+            "vm_hv_pu", "va_hv_degree", "vm_lv_pu", "va_lv_degree",
+            "loading_percent",
+        ];
+        let kwargs = pyo3::types::PyDict::new(py);
+        kwargs.set_item("columns", TRAFO_COLS)?;
+        let df = pandas.call_method("DataFrame", (py_data_2d,), Some(&kwargs))?;
+        df.call_method1("insert", (0, "lv_bus", lv_bus.into_pyarray(py)))?;
+        df.call_method1("insert", (0, "hv_bus", hv_bus.into_pyarray(py)))?;
+        Ok(df)
     }
 }
