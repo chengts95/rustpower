@@ -9,8 +9,6 @@ use bevy_app::App;
 #[cfg(feature = "python")]
 use nalgebra::DVector;
 #[cfg(feature = "python")]
-use nalgebra_sparse::CsrMatrix;
-#[cfg(feature = "python")]
 use numpy::{IntoPyArray, PyArrayMethods};
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
@@ -116,7 +114,6 @@ impl NewtonSolver {
             v_bus_init: v_perm,
             npv,
             npq,
-            reorder: CsrMatrix::zeros(n, n),
             to_perm: p_vec.clone(),
             from_perm: p_inv.clone(),
         });

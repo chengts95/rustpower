@@ -126,18 +126,37 @@ def run_benchmark(net_name, net):
     rp_model.init_pf()
     rp_model.enable_cache(True)
     rp_model.solve(V_init_flat.copy(), max_iter=MAX_ITER, tol=TOL)
+    rp_model.post_process()
+
     times_rp_hot = []
+    times_rp_core = []
     for _ in range(NUM_TRIALS_HOT):
-        start = time.perf_counter()
+        t0 = time.perf_counter()
         report = rp_model.solve(V_init_flat.copy(), max_iter=MAX_ITER, tol=TOL)
-        times_rp_hot.append(time.perf_counter() - start)
+        t_solve = time.perf_counter() - t0
+        t1 = time.perf_counter()
+        rp_model.post_process()
+        t_post = time.perf_counter() - t1
+        times_rp_hot.append(t_solve + t_post)
+        times_rp_core.append(t_solve)
+
+    pp_hot_min = np.min(times_pp_hot) * 1000
+    pp_hot_max = np.max(times_pp_hot) * 1000
+    ls2g_hot_min = np.min(times_ls2g_hot) * 1000
+    ls2g_hot_max = np.max(times_ls2g_hot) * 1000
     rp_hot_ms = np.mean(times_rp_hot) * 1000
+    rp_hot_min = np.min(times_rp_hot) * 1000
+    rp_hot_max = np.max(times_rp_hot) * 1000
+    rp_core_ms = np.mean(times_rp_core) * 1000
+    rp_core_min = np.min(times_rp_core) * 1000
+    rp_core_max = np.max(times_rp_core) * 1000
     rp_hot_iters = report.iterations
 
     print(f"\n--- HOT LOOP (Iterations: PP={pp_hot_iters}, LS2G={ls2g_hot_iters}, RP={rp_hot_iters}) ---")
-    print(f"[Pandapower] {pp_hot_ms:.3f} ms")
-    print(f"[LS2G (KLU)] {ls2g_hot_ms:.3f} ms")
-    print(f"[RustPower]  {rp_hot_ms:.3f} ms")
+    print(f"[Pandapower (Numba)]           Avg: {pp_hot_ms:>7.3f} ms | Min: {pp_hot_min:>7.3f} ms | Max: {pp_hot_max:>7.3f} ms")
+    print(f"[LS2G (GridModel AC)]          Avg: {ls2g_hot_ms:>7.3f} ms | Min: {ls2g_hot_min:>7.3f} ms | Max: {ls2g_hot_max:>7.3f} ms")
+    print(f"[RustPower (Grid+PostProcess)]  Avg: {rp_hot_ms:>7.3f} ms | Min: {rp_hot_min:>7.3f} ms | Max: {rp_hot_max:>7.3f} ms")
+    print(f"[RustPower (Solver Core)]      Avg: {rp_core_ms:>7.3f} ms | Min: {rp_core_min:>7.3f} ms | Max: {rp_core_max:>7.3f} ms")
 
 
 if __name__ == "__main__":
