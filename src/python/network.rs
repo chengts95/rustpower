@@ -101,10 +101,11 @@ impl Network {
         let g_us = Self::get_float_vec(&df, "g_us_per_km")?;
         let in_service = Self::get_bool_vec(&df, "in_service")?;
         let parallel = Self::get_int32_vec(&df, "parallel").unwrap_or_else(|_| vec![1; from_bus.len()]);
+        let max_i_ka = if df.hasattr("max_i_ka")? { Self::get_opt_float_vec(py, &df, "max_i_ka")? } else { vec![None; from_bus.len()] };
         let names = if df.hasattr("name")? { Self::get_opt_str_vec(py, &df, "name")? } else { vec![None; from_bus.len()] };
 
         Ok((0..from_bus.len()).map(|i| Line {
-            from_bus: from_bus[i], to_bus: to_bus[i], length_km: length_km[i], r_ohm_per_km: r_ohm[i], x_ohm_per_km: x_ohm[i], c_nf_per_km: c_nf[i], g_us_per_km: g_us[i], in_service: in_service[i], parallel: parallel[i], name: names[i].clone(), df: 1.0, max_i_ka: Some(0.0), max_loading_percent: None, type_: None, std_type: None,
+            from_bus: from_bus[i], to_bus: to_bus[i], length_km: length_km[i], r_ohm_per_km: r_ohm[i], x_ohm_per_km: x_ohm[i], c_nf_per_km: c_nf[i], g_us_per_km: g_us[i], in_service: in_service[i], parallel: parallel[i], name: names[i].clone(), df: 1.0, max_i_ka: max_i_ka[i], max_loading_percent: None, type_: None, std_type: None,
         }).collect())
     }
 

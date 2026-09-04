@@ -86,7 +86,8 @@ impl BusHandle {
     /// Voltage magnitude (p.u.) from the last solve.
     #[getter]
     fn vm_pu(&self, py: Python<'_>) -> PyResult<f64> {
-        let grid_py = self.grid.borrow(py);
+        let mut grid_py = self.grid.borrow_mut(py);
+        grid_py.ensure_post_processed();
         grid_py.inner.world().get::<VBusResult>(self.entity()).map(|v| v.0.norm())
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("No result at this bus: call solve() first"))
     }
@@ -94,7 +95,8 @@ impl BusHandle {
     /// Voltage angle (degrees) from the last solve.
     #[getter]
     fn va_degree(&self, py: Python<'_>) -> PyResult<f64> {
-        let grid_py = self.grid.borrow(py);
+        let mut grid_py = self.grid.borrow_mut(py);
+        grid_py.ensure_post_processed();
         grid_py.inner.world().get::<VBusResult>(self.entity()).map(|v| v.0.arg().to_degrees())
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("No result at this bus: call solve() first"))
     }
@@ -102,7 +104,8 @@ impl BusHandle {
     /// Net injected active power (MW) from the last solve. Positive for production.
     #[getter]
     fn p_mw(&self, py: Python<'_>) -> PyResult<f64> {
-        let grid_py = self.grid.borrow(py);
+        let mut grid_py = self.grid.borrow_mut(py);
+        grid_py.ensure_post_processed();
         grid_py.inner.world().get::<SBusResult>(self.entity()).map(|s| s.0.re)
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("No result at this bus: call solve() first"))
     }
@@ -110,7 +113,8 @@ impl BusHandle {
     /// Net injected reactive power (MVar) from the last solve.
     #[getter]
     fn q_mvar(&self, py: Python<'_>) -> PyResult<f64> {
-        let grid_py = self.grid.borrow(py);
+        let mut grid_py = self.grid.borrow_mut(py);
+        grid_py.ensure_post_processed();
         grid_py.inner.world().get::<SBusResult>(self.entity()).map(|s| s.0.im)
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("No result at this bus: call solve() first"))
     }

@@ -1,28 +1,26 @@
 use bevy_app::App;
 use bevy_ecs::{prelude::*, system::RunSystemOnce};
 
-use nalgebra::*;
-use num_complex::{Complex64, ComplexFloat};
-use num_traits::Zero;
-mod res_display;
-use res_display::*;
+use num_complex::Complex64;
 use serde::{Deserialize, Serialize};
 use tabled::{Table, settings::Style};
 
-use crate::basic::sparse::cast::Cast;
+mod res_display;
+use res_display::*;
 
 use super::{elements::*, network::*, powerflow::prelude::*};
+
 /// Component storing the result of SBus power flow calculation.
-/// The result is a complex number representing the power demand in MW in the bus.
-#[derive(Debug, Component, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct SBusResult(pub Complex64);
 
 /// Component storing the result of VBus power flow calculation.
-/// /// The result has a complex number representing the voltage magnitude in p.u.
-#[derive(Debug, Component, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct VBusResult(pub Complex64);
+
 /// Data structure for storing results of power flow calculations for a line.
-#[derive(Component, Debug, Default, Serialize, Deserialize, Clone)]
+#[repr(C)]
+#[derive(Component, Debug, Default, Serialize, Deserialize, Clone, Copy, PartialEq)]
 pub struct LineResultData {
     pub p_from_mw: f64,       // Active power from the 'from' bus (MW)
     pub q_from_mvar: f64,     // Reactive power from the 'from' bus (MVAr)
@@ -39,6 +37,14 @@ pub struct LineResultData {
     pub va_to_degree: f64,    // Voltage angle at the 'to' bus (degrees)
     pub loading_percent: f64, // Line loading percentage (%)
 }
+
+impl LineResultData {
+    #[inline(always)]
+    pub fn as_slice(&self) -> &[f64; 14] {
+        unsafe { &*(self as *const Self as *const [f64; 14]) }
+    }
+}
+
 impl From<&LineResultData> for LineResTable {
     fn from(val: &LineResultData) -> Self {
         LineResTable {
@@ -61,47 +67,322 @@ impl From<&LineResultData> for LineResTable {
         }
     }
 }
+
+/// Data structure for storing results of power flow calculations for a transformer.
+#[repr(C)]
+#[derive(Component, Debug, Default, Serialize, Deserialize, Clone, Copy, PartialEq)]
+pub struct TrafoResultData {
+    pub p_hv_mw: f64,
+    pub q_hv_mvar: f64,
+    pub p_lv_mw: f64,
+    pub q_lv_mvar: f64,
+    pub pl_mw: f64,
+    pub ql_mvar: f64,
+    pub i_hv_ka: f64,
+    pub i_lv_ka: f64,
+    pub vm_hv_pu: f64,
+    pub va_hv_degree: f64,
+    pub vm_lv_pu: f64,
+    pub va_lv_degree: f64,
+    pub loading_percent: f64,
+}
+
+impl TrafoResultData {
+    #[inline(always)]
+    pub fn as_slice(&self) -> &[f64; 13] {
+        unsafe { &*(self as *const Self as *const [f64; 13]) }
+    }
+}
+
 /// Extracts bus results after power flow calculation.
 fn extract_res_bus(
     mut cmd: Commands,
-    shunts: Query<(&Admittance, &Port2, &VBase), With<EShunt>>,
     nodes: Res<NodeLookup>,
-    node_agg: Option<Res<NodeAggRes>>,
     mat: Res<PowerFlowMat>,
     res: Res<PowerFlowResult>,
     common: Res<PFCommonData>,
+    cache: Option<Res<crate::basic::newtonpf::NewtonCache>>,
 ) {
-    //Step 1: restore order before split results to original bus
-    let cv = &res.v;
-    let mis = &cv.component_mul(&(&mat.y_bus * cv).conjugate());
-    let sbus_res = -mis.clone();
-    let inv_order = &mat.reorder.transpose();
-    let sbus_res = inv_order * sbus_res;
-    let v = inv_order * &res.v;
-    //Step 2: apply results to original bus
-    let v = match &node_agg {
-        Some(node_agg) => &node_agg.expand_mat_v.cast() * &v,
-        None => v,
-    };
-    let mut sbus_res = match &node_agg {
-        Some(node_agg) => &node_agg.expand_mat.cast() * &sbus_res,
-        None => sbus_res,
-    };
+    let n = res.v.len();
+    let s_base = common.sbase;
+    let mut s_orig = vec![Complex64::new(0.0, 0.0); n];
 
-    shunts.iter().for_each(|(a, b, vb)| {
-        let node = b.0[0] as usize;
-        let z_base = vb.0 * vb.0 / common.sbase;
-        // `node` is an original bus id, so index the un-permuted, expanded `v`
-        // (res.v is in solver ordering and, under aggregation, a different space).
-        let s_shunt = v[node] * (a.0 * z_base * v[node]).conjugate();
-        sbus_res[node] += s_shunt;
-    });
+    if let Some(c) = cache.as_ref().filter(|c| c.s_calc.len() == n) {
+        for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
+            s_orig[orig_idx] = -c.s_calc[new_idx] * s_base;
+        }
+    } else {
+        // Fallback when NewtonCache is empty or not enabled:
+        // mat.y_bus is in permuted order (new_idx).
+        // Since res.v is in natural order (orig_idx), map to permuted order:
+        let mut v_perm = vec![Complex64::new(0.0, 0.0); n];
+        for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
+            v_perm[new_idx] = res.v[orig_idx];
+        }
+        let mut ibus = vec![Complex64::new(0.0, 0.0); n];
+        let mut scalc_perm = vec![Complex64::new(0.0, 0.0); n];
+        crate::basic::newtonpf::csc_matvec_and_scalc(
+            mat.y_bus.col_offsets(),
+            mat.y_bus.row_indices(),
+            mat.y_bus.values(),
+            &v_perm,
+            &mut ibus,
+            &mut scalc_perm,
+        );
+        for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
+            s_orig[orig_idx] = -scalc_perm[new_idx] * s_base;
+        }
+    }
 
     for (idx, entity) in nodes.iter() {
+        let i = idx as usize;
         cmd.entity(entity).insert((
-            SBusResult(sbus_res[idx as usize] * common.sbase),
-            VBusResult(v[idx as usize]),
+            SBusResult(s_orig[i]),
+            VBusResult(res.v[i]),
         ));
+    }
+}
+
+/// Extracts line and transformer results using contiguous_iter_mut + bypass_change_detection.
+/// Completely skips OutOfService components with zero overhead.
+fn extract_res_branches(
+    mut lines_q: Query<(
+        &Port4MatPatch,
+        &FromBus,
+        &ToBus,
+        &LineParams,
+        &mut LineResultData,
+    ), Without<OutOfService>>,
+    mut trafos_q: Query<(
+        &Port4MatPatch,
+        &FromBus,
+        &ToBus,
+        &TransformerDevice,
+        &mut TrafoResultData,
+    ), Without<OutOfService>>,
+    buses: Query<&VNominal>,
+    lut: Res<NodeLookup>,
+    results: Res<PowerFlowResult>,
+    common: Res<PFCommonData>,
+) {
+    let s_base = common.sbase;
+    let nodes = lut.len();
+
+    // Cache bus nominal voltage array indexed by bus id (3NF compliant: single source of truth)
+    let mut bus_vn = vec![1.0; nodes];
+    for (bus_idx, entity) in lut.iter() {
+        if let Ok(vnom) = buses.get(entity) {
+            bus_vn[bus_idx as usize] = vnom.0.0;
+        }
+    }
+
+    // Direct voltage slice without reorder transposition
+    let v_slice = results.v.as_slice();
+
+    const SQRT3: f64 = 1.7320508075688772;
+
+    // 1. Process In-service Lines using contiguous slices with bypass_change_detection
+    if let Ok(chunks) = lines_q.contiguous_iter_mut() {
+        for (patch_slice, from_slice, to_slice, params_slice, mut res_slice) in chunks {
+            let res = res_slice.bypass_change_detection();
+            let len = res.len();
+
+            for i in 0..len {
+                let f_idx = from_slice[i].0 as usize;
+                let t_idx = to_slice[i].0 as usize;
+                let vf = v_slice[f_idx];
+                let vt = v_slice[t_idx];
+
+                let vn_kv = bus_vn[f_idx];
+                let scale = (vn_kv * vn_kv) / s_base;
+
+                // 2x2 physical admittance matrix * [vf, vt]
+                let g = patch_slice[i].0;
+                let if_pu = (g[(0, 0)] * vf + g[(0, 1)] * vt) * scale;
+                let it_pu = (g[(1, 0)] * vf + g[(1, 1)] * vt) * scale;
+
+                let sf = vf * if_pu.conj() * s_base;
+                let st = vt * it_pu.conj() * s_base;
+
+                let base_i_ka = s_base / (SQRT3 * vn_kv);
+                let i_from_ka = if_pu.norm() * base_i_ka;
+                let i_to_ka = it_pu.norm() * base_i_ka;
+                let i_ka = i_from_ka.max(i_to_ka);
+
+                let max_i = params_slice[i].max_i_ka;
+                let loading_percent = if max_i > 0.0 {
+                    (i_ka / max_i) * 100.0
+                } else {
+                    0.0
+                };
+
+                let r = &mut res[i];
+                r.p_from_mw = sf.re;
+                r.q_from_mvar = sf.im;
+                r.p_to_mw = st.re;
+                r.q_to_mvar = st.im;
+                r.pl_mw = sf.re + st.re;
+                r.ql_mvar = sf.im + st.im;
+                r.i_from_ka = i_from_ka;
+                r.i_to_ka = i_to_ka;
+                r.i_ka = i_ka;
+                r.vm_from_pu = vf.norm();
+                r.va_from_degree = vf.arg().to_degrees();
+                r.vm_to_pu = vt.norm();
+                r.va_to_degree = vt.arg().to_degrees();
+                r.loading_percent = loading_percent;
+            }
+        }
+    } else {
+        // Fallback for non-contiguous iteration if any
+        for (patch, from, to, params, mut res) in lines_q.iter_mut() {
+            let r = res.bypass_change_detection();
+            let f_idx = from.0 as usize;
+            let t_idx = to.0 as usize;
+            let vf = v_slice[f_idx];
+            let vt = v_slice[t_idx];
+            let vn_kv = bus_vn[f_idx];
+            let scale = (vn_kv * vn_kv) / s_base;
+
+            let g = patch.0;
+            let if_pu = (g[(0, 0)] * vf + g[(0, 1)] * vt) * scale;
+            let it_pu = (g[(1, 0)] * vf + g[(1, 1)] * vt) * scale;
+
+            let sf = vf * if_pu.conj() * s_base;
+            let st = vt * it_pu.conj() * s_base;
+
+            let base_i_ka = s_base / (SQRT3 * vn_kv);
+            let i_from_ka = if_pu.norm() * base_i_ka;
+            let i_to_ka = it_pu.norm() * base_i_ka;
+            let i_ka = i_from_ka.max(i_to_ka);
+
+            let max_i = params.max_i_ka;
+            let loading_percent = if max_i > 0.0 {
+                (i_ka / max_i) * 100.0
+            } else {
+                0.0
+            };
+
+            r.p_from_mw = sf.re;
+            r.q_from_mvar = sf.im;
+            r.p_to_mw = st.re;
+            r.q_to_mvar = st.im;
+            r.pl_mw = sf.re + st.re;
+            r.ql_mvar = sf.im + st.im;
+            r.i_from_ka = i_from_ka;
+            r.i_to_ka = i_to_ka;
+            r.i_ka = i_ka;
+            r.vm_from_pu = vf.norm();
+            r.va_from_degree = vf.arg().to_degrees();
+            r.vm_to_pu = vt.norm();
+            r.va_to_degree = vt.arg().to_degrees();
+            r.loading_percent = loading_percent;
+        }
+    }
+
+    // 2. Process In-service Transformers using contiguous slices with bypass_change_detection
+    if let Ok(chunks) = trafos_q.contiguous_iter_mut() {
+        for (patch_slice, from_slice, to_slice, dev_slice, mut res_slice) in chunks {
+            let res = res_slice.bypass_change_detection();
+            let len = res.len();
+
+            for i in 0..len {
+                let hv_idx = from_slice[i].0 as usize;
+                let lv_idx = to_slice[i].0 as usize;
+                let vh = v_slice[hv_idx];
+                let vl = v_slice[lv_idx];
+
+                let dev = &dev_slice[i];
+                let vn_lv = dev.vn_lv_kv;
+                let vn_hv = dev.vn_hv_kv;
+                let scale = (vn_lv * vn_lv) / s_base;
+
+                // 2x2 physical admittance matrix * [vh, vl]
+                let g = patch_slice[i].0;
+                let ih_pu = (g[(0, 0)] * vh + g[(0, 1)] * vl) * scale;
+                let il_pu = (g[(1, 0)] * vh + g[(1, 1)] * vl) * scale;
+
+                let sh = vh * ih_pu.conj() * s_base;
+                let sl = vl * il_pu.conj() * s_base;
+
+                let base_i_hv = s_base / (SQRT3 * vn_hv);
+                let base_i_lv = s_base / (SQRT3 * vn_lv);
+                let i_hv_ka = ih_pu.norm() * base_i_hv;
+                let i_lv_ka = il_pu.norm() * base_i_lv;
+
+                let sn_rated = dev.sn_mva * (dev.parallel as f64);
+                let i_rated_hv = sn_rated / (SQRT3 * vn_hv);
+                let i_rated_lv = sn_rated / (SQRT3 * vn_lv);
+                let loading_percent = if sn_rated > 0.0 && i_rated_hv > 0.0 && i_rated_lv > 0.0 {
+                    (i_hv_ka / i_rated_hv).max(i_lv_ka / i_rated_lv) * 100.0
+                } else {
+                    0.0
+                };
+
+                let r = &mut res[i];
+                r.p_hv_mw = sh.re;
+                r.q_hv_mvar = sh.im;
+                r.p_lv_mw = sl.re;
+                r.q_lv_mvar = sl.im;
+                r.pl_mw = sh.re + sl.re;
+                r.ql_mvar = sh.im + sl.im;
+                r.i_hv_ka = i_hv_ka;
+                r.i_lv_ka = i_lv_ka;
+                r.vm_hv_pu = vh.norm();
+                r.va_hv_degree = vh.arg().to_degrees();
+                r.vm_lv_pu = vl.norm();
+                r.va_lv_degree = vl.arg().to_degrees();
+                r.loading_percent = loading_percent;
+            }
+        }
+    } else {
+        // Fallback for non-contiguous iteration if any
+        for (patch, from, to, dev, mut res) in trafos_q.iter_mut() {
+            let r = res.bypass_change_detection();
+            let hv_idx = from.0 as usize;
+            let lv_idx = to.0 as usize;
+            let vh = v_slice[hv_idx];
+            let vl = v_slice[lv_idx];
+
+            let vn_lv = dev.vn_lv_kv;
+            let vn_hv = dev.vn_hv_kv;
+            let scale = (vn_lv * vn_lv) / s_base;
+
+            let g = patch.0;
+            let ih_pu = (g[(0, 0)] * vh + g[(0, 1)] * vl) * scale;
+            let il_pu = (g[(1, 0)] * vh + g[(1, 1)] * vl) * scale;
+
+            let sh = vh * ih_pu.conj() * s_base;
+            let sl = vl * il_pu.conj() * s_base;
+
+            let base_i_hv = s_base / (SQRT3 * vn_hv);
+            let base_i_lv = s_base / (SQRT3 * vn_lv);
+            let i_hv_ka = ih_pu.norm() * base_i_hv;
+            let i_lv_ka = il_pu.norm() * base_i_lv;
+
+            let sn_rated = dev.sn_mva * (dev.parallel as f64);
+            let i_rated_hv = sn_rated / (SQRT3 * vn_hv);
+            let i_rated_lv = sn_rated / (SQRT3 * vn_lv);
+            let loading_percent = if sn_rated > 0.0 && i_rated_hv > 0.0 && i_rated_lv > 0.0 {
+                (i_hv_ka / i_rated_hv).max(i_lv_ka / i_rated_lv) * 100.0
+            } else {
+                0.0
+            };
+
+            r.p_hv_mw = sh.re;
+            r.q_hv_mvar = sh.im;
+            r.p_lv_mw = sl.re;
+            r.q_lv_mvar = sl.im;
+            r.pl_mw = sh.re + sl.re;
+            r.ql_mvar = sh.im + sl.im;
+            r.i_hv_ka = i_hv_ka;
+            r.i_lv_ka = i_lv_ka;
+            r.vm_hv_pu = vh.norm();
+            r.va_hv_degree = vh.arg().to_degrees();
+            r.vm_lv_pu = vl.norm();
+            r.va_lv_degree = vl.arg().to_degrees();
+            r.loading_percent = loading_percent;
+        }
     }
 }
 
@@ -111,10 +392,10 @@ fn print_res_bus(q: Query<(&BusID, &VBusResult, &SBusResult)>) {
         .iter()
         .sort_by::<&BusID>(|value_1, value_2| value_1.cmp(value_2))
         .map(|(node, v, s)| {
-            let vm = v.0.modulus();
-            let angle = v.0.argument().to_degrees();
-            let p = s.0.re();
-            let q = s.0.im();
+            let vm = v.0.norm();
+            let angle = v.0.arg().to_degrees();
+            let p = s.0.re;
+            let q = s.0.im;
             BusResTable {
                 Bus: node.0 as i32,
                 Vm: FloatWrapper::new(vm, 5),
@@ -129,105 +410,12 @@ fn print_res_bus(q: Query<(&BusID, &VBusResult, &SBusResult)>) {
     println!("{table}");
 }
 
-/// Enumeration for the type of admittance in a power grid branch.
-enum AdmittanceType {
-    FromToGround,
-    ToToGround,
-    BetweenBus,
-}
-
-/// Determines the type of admittance between two nodes.
-fn determine_branch(parent: &Port2, child: &Port2) -> AdmittanceType {
-    if parent[0] == child[0] && child[1] == GND {
-        AdmittanceType::FromToGround
-    } else if parent[1] == child[0] && child[1] == GND {
-        AdmittanceType::ToToGround
-    } else {
-        AdmittanceType::BetweenBus
-    }
-}
-
-/// Extracts line results after power flow calculation.
-#[allow(unused_assignments)]
-fn extract_res_line(
-    mut cmd: Commands,
-    node_agg: Option<Res<NodeAggRes>>,
-    q: Query<(Entity, &Children, &FromBus, &ToBus, &LineParams), With<Line>>,
-    admit: Query<(&Admittance, &VBase, &Port2), With<ChildOf>>,
-    results: Res<PowerFlowResult>,
-    _common: Res<PFCommonData>,
-    mat: Res<PowerFlowMat>,
-) {
-    let v = &mat.reorder.transpose() * &results.v;
-    let v = match node_agg {
-        Some(agg) => &agg.expand_mat_v.cast() * v,
-        None => v,
-    };
-    
-    q.iter().for_each(|(e, children, from, to, params)| {
-        let mut data = LineResultData::default();
-        let p_port = Port2::new(from.0, to.0);
-        
-        let v_from = v[p_port[0] as usize];
-        let v_to = v[p_port[1] as usize];
-
-        data.vm_from_pu = v_from.modulus();
-        data.va_from_degree = v_from.argument().to_degrees();
-        data.vm_to_pu = v_to.modulus();
-        data.va_to_degree = v_to.argument().to_degrees();
-
-        let mut i_f = Complex64::zero();
-        let mut i_t = Complex64::zero();
-        let mut v_base = 0.0;
-
-        for child in children {
-            let (a, vbase, pins) = admit.get(*child).unwrap();
-            match determine_branch(&p_port, pins) {
-                AdmittanceType::FromToGround => {
-                    i_f += (v_from * vbase.0) * a.0;
-                }
-                AdmittanceType::ToToGround => {
-                    i_t -= (v_to * vbase.0) * a.0;
-                }
-                AdmittanceType::BetweenBus => {
-                    let vd = v_from - v_to;
-                    let i_l = (vd * vbase.0) * a.0;
-                    let s = (vd * vbase.0) * i_l.conj();
-                    data.pl_mw += s.re();
-                    data.ql_mvar += s.im();
-                    i_f += i_l;
-                    i_t += i_l;
-                    v_base = vbase.0;
-                }
-            }
-        }
-
-        let s_f = v_from * v_base * i_f.conj();
-        let s_t = -v_to * v_base * i_t.conj();
-        data.p_from_mw = s_f.real();
-        data.q_from_mvar = s_f.im();
-        data.p_to_mw = s_t.real();
-        data.q_to_mvar = s_t.im();
-        data.pl_mw = data.p_to_mw + data.p_from_mw;
-        data.ql_mvar = data.q_to_mvar + data.q_from_mvar;
-        data.i_from_ka = i_f.modulus();
-        data.i_to_ka = i_t.modulus();
-        data.i_ka = data.i_from_ka.max(data.i_to_ka);
-
-        if params.max_i_ka > 0.0 {
-            data.loading_percent = (data.i_ka / params.max_i_ka) * 100.0;
-        }
-
-        cmd.entity(e).insert(data);
-    });
-}
-
 /// Prints the results of the power flow for each line.
-fn print_res_line(q: Query<(&Port2, &LineResultData)>) {
-    let table = q.iter().map(|(p, record)| {
+fn print_res_line(q: Query<(&FromBus, &ToBus, &LineResultData)>) {
+    let table = q.iter().map(|(from, to, record)| {
         let mut row_display: LineResTable = record.into();
-        row_display.from = p[0];
-        row_display.to = p[1];
+        row_display.from = from.0;
+        row_display.to = to.0;
         row_display
     });
 
@@ -237,13 +425,8 @@ fn print_res_line(q: Query<(&Port2, &LineResultData)>) {
 
 /// Trait for post-processing after a power flow simulation.
 pub trait PostProcessing {
-    /// Runs all post-processing steps.
     fn post_process(&mut self);
-
-    /// Processes and prints the bus results.
     fn print_res_bus(&mut self);
-
-    /// Processes and prints the line results.
     fn print_res_line(&mut self);
 }
 
@@ -258,7 +441,7 @@ impl PostProcessing for PowerGrid {
 
     fn post_process(&mut self) {
         self.world_mut().run_system_once(extract_res_bus).unwrap();
-        self.world_mut().run_system_once(extract_res_line).unwrap();
+        self.world_mut().run_system_once(extract_res_branches).unwrap();
     }
 }
 
@@ -273,44 +456,6 @@ impl PostProcessing for App {
 
     fn post_process(&mut self) {
         self.world_mut().run_system_once(extract_res_bus).unwrap();
-        self.world_mut().run_system_once(extract_res_line).unwrap();
-    }
-}
-
-#[cfg(test)]
-#[allow(unused_imports)]
-mod tests {
-    use super::*;
-    use crate::basic::ecs::network::PowerFlow;
-    use crate::{basic, io::pandapower::load_csv_zip};
-    use bevy_ecs::system::RunSystemOnce;
-    use nalgebra::ComplexField;
-    use std::env;
-
-    /// Tests the ECS results for power flow.
-    #[test]
-    fn test_ecs_results() {
-        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-        let folder = format!("{}/cases/IEEE118", dir);
-        let name = folder.to_owned() + "/data.zip";
-        let net = load_csv_zip(&name).unwrap();
-
-        let mut pf_net = PowerGrid::default();
-        pf_net.world_mut().insert_resource(PPNetwork(net));
-        pf_net.init_pf_net();
-        pf_net.run_pf();
-
-        assert_eq!(
-            pf_net
-                .world()
-                .get_resource::<PowerFlowResult>()
-                .unwrap()
-                .converged,
-            true
-        );
-
-        pf_net.post_process();
-        pf_net.print_res_bus();
-        pf_net.print_res_line();
+        self.world_mut().run_system_once(extract_res_branches).unwrap();
     }
 }
