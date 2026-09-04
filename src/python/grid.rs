@@ -564,17 +564,11 @@ impl PowerGrid {
                 n
             )));
         }
-        // Resolve bus id -> entity up front so the NodeLookup borrow ends
-        // before the component writes.
-        let entities: Vec<Option<Entity>> = {
-            let lookup = world.resource::<NodeLookup>();
-            (0..n).map(|i| lookup.get_entity(i as i64)).collect()
-        };
-        for (i, e) in entities.into_iter().enumerate() {
-            if let Some(e) = e {
-                if let Some(mut bus_v) = world.get_mut::<VBusPu>(e) {
-                    bus_v.0 = v_arr[i];
-                }
+        let mut bus_q = world.query::<(&BusID, &mut VBusPu)>();
+        for (id, mut bus_v) in bus_q.iter_mut(world) {
+            let idx = id.0 as usize;
+            if idx < v_arr.len() {
+                bus_v.0 = v_arr[idx];
             }
         }
         // Re-pin PV/slack magnitude and slack angle targets: v overrides the

@@ -17,6 +17,7 @@ use num_complex::Complex64;
 
 /// Symbolic structure of the reduced Jacobian under `[PQ | PV | slack]` order.
 /// Computed once from `Ybus.col_offsets`, `Ybus.row_indices`, and `(npv, npq)`.
+#[derive(Clone)]
 pub struct JacobianPattern2 {
     pub nnz_j: usize,
     pub j_col_ptrs: Vec<usize>,
