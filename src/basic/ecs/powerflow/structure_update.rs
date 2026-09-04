@@ -91,6 +91,9 @@ pub fn reset_solvers(world: &mut World) {
     if let Some(mut solver) = world.get_resource_mut::<PowerFlowSolver>() {
         solver.solver.reset();
     }
+    if let Some(mut ws) = world.get_resource_mut::<crate::basic::ecs::dcpf::DcpfWorkspace>() {
+        ws.solver.reset();
+    }
 }
 /// Re-syncs the full `s_bus` vector in [`PowerFlowMat`] from the `SBusInjPu`
 /// components. Triggered by the coarse [`SBusChangeEvent`] (native writers,

@@ -4,7 +4,7 @@ use bevy_ecs::prelude::*;
 
 use super::{
     TargetPMW, TargetQMVar,
-    bus::SnaptShotRegGroup,
+    bus::{OutOfService, SnaptShotRegGroup},
     generator::{TargetBus, Uncontrollable},
 };
 
@@ -30,6 +30,7 @@ pub struct SGenBundle {
     pub target_q: TargetQMVar,
     pub uncontrollable: Option<Uncontrollable>,
     pub name: Option<Name>,
+    pub out: Option<OutOfService>,
 }
 
 impl From<&SGen> for SGenBundle {
@@ -46,8 +47,9 @@ impl From<&SGen> for SGenBundle {
             },
             uncontrollable: (!sgen.controllable.unwrap_or(true)).then_some(Uncontrollable),
             name: sgen.name.clone().map(Name::new),
-            target_p: TargetPMW(sgen.p_mw),
-            target_q: TargetQMVar(sgen.q_mvar),
+            target_p: TargetPMW(sgen.p_mw * sgen.scaling),
+            target_q: TargetQMVar(sgen.q_mvar * sgen.scaling),
+            out: (!sgen.in_service).then_some(OutOfService),
         }
     }
 }
