@@ -18,7 +18,8 @@ pub struct Switch {
 /// Represents the state of a switch (either open or closed).
 ///
 /// The state (`true` for closed and `false` for open) is wrapped in the `SwitchState` component.
-#[derive(Default, Debug, Clone, Component, Deref, DerefMut, serde::Serialize, serde::Deserialize,
+#[derive(
+    Default, Debug, Clone, Component, Deref, DerefMut, serde::Serialize, serde::Deserialize,
 )]
 pub struct SwitchState(pub bool);
 

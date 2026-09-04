@@ -7,8 +7,8 @@
 
 use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
-use rustpower_proc_marco::DeferBundle;
 use derive_more::From;
+use rustpower_proc_marco::DeferBundle;
 
 use crate::io::pandapower::{ExtGrid, Gen};
 

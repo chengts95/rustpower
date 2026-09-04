@@ -122,7 +122,12 @@ impl Plugin for NonLinearSchedulePlugin {
 
         // 4. Register outer iteration driver and convergence updater systems
         app.add_systems(Main, run_outer_iteration);
-        app.add_systems(Update, update_convergence.after(crate::basic::ecs::plugin::PowerFlowSolverSet).in_set(Solve));
+        app.add_systems(
+            Update,
+            update_convergence
+                .after(crate::basic::ecs::plugin::PowerFlowSolverSet)
+                .in_set(Solve),
+        );
 
         // 5. Insert NonLinearErrorCheck into the schedule order after Update
         let mut order = app.world_mut().resource_mut::<MainScheduleOrder>();

@@ -4,7 +4,7 @@ use std::fmt;
 use bevy_app::prelude::*;
 use bevy_ecs::{component::Mutable, prelude::*, world::error::EntityMutableFetchError};
 
-use crate::basic::{newtonpf::NewtonCache, newton_pf, newton_pf_iwamoto, solver::DefaultSolver};
+use crate::basic::{newton_pf, newton_pf_iwamoto, newtonpf::NewtonCache, solver::DefaultSolver};
 
 use super::{
     plugin::DefaultPlugins,
@@ -159,7 +159,8 @@ pub fn ecs_run_pf(
     let n = mat.v_bus_init.len();
     match v {
         Ok((v_perm, iterations)) => {
-            let mut v_orig = nalgebra::DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
+            let mut v_orig =
+                nalgebra::DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
             for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
                 v_orig[orig_idx] = v_perm[new_idx];
             }
@@ -170,7 +171,8 @@ pub fn ecs_run_pf(
             });
         }
         Err((_err, v_perm_err, its)) => {
-            let mut v_orig = nalgebra::DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
+            let mut v_orig =
+                nalgebra::DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
             for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
                 v_orig[orig_idx] = v_perm_err[new_idx];
             }
@@ -216,7 +218,8 @@ pub fn iwamoto_run_pf(
     let n = mat.v_bus_init.len();
     match v {
         Ok((v_perm, iterations)) => {
-            let mut v_orig = nalgebra::DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
+            let mut v_orig =
+                nalgebra::DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
             for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
                 v_orig[orig_idx] = v_perm[new_idx];
             }
@@ -227,7 +230,8 @@ pub fn iwamoto_run_pf(
             });
         }
         Err((_err, v_perm_err, its)) => {
-            let mut v_orig = nalgebra::DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
+            let mut v_orig =
+                nalgebra::DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
             for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
                 v_orig[orig_idx] = v_perm_err[new_idx];
             }

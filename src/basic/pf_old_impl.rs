@@ -155,10 +155,8 @@ pub(crate) fn build_jacobian_cached(
             ])
         }
         None => {
-            let ds_dva =
-                ds_dva.block((0, 0), (ds_dva.nrows() - n_ext, ds_dva.ncols() - n_ext));
-            let ds_dvm =
-                ds_dvm.block((0, 0), (ds_dvm.nrows() - n_ext, ds_dvm.ncols() - n_ext));
+            let ds_dva = ds_dva.block((0, 0), (ds_dva.nrows() - n_ext, ds_dva.ncols() - n_ext));
+            let ds_dvm = ds_dvm.block((0, 0), (ds_dvm.nrows() - n_ext, ds_dvm.ncols() - n_ext));
             let (real, imag) = ds_dva.real_imag();
             let (real2, imag2) = ds_dvm.real_imag();
             let j11 = real;
@@ -166,7 +164,14 @@ pub(crate) fn build_jacobian_cached(
             let j21 = imag.block((0, 0), (npq, imag.ncols()));
             let j22 = imag2.block((0, 0), (npq, npq));
             let j = csc_vstack(&[&csc_hstack(&[&j11, &j12]), &csc_hstack(&[&j21, &j22])]);
-            cache.replace(JacobianCache { ds_dva, ds_dvm, j11, j12, j21, j22 });
+            cache.replace(JacobianCache {
+                ds_dva,
+                ds_dvm,
+                j11,
+                j12,
+                j21,
+                j22,
+            });
             j
         }
     }
@@ -233,7 +238,16 @@ pub fn newton_pf_old<Solver: Solve>(
         );
 
         let dx = &F;
-        update_v(&mut v_a, dx, n_bus, &mut v_m, npq, num_state, &mut v_norm, &mut v);
+        update_v(
+            &mut v_a,
+            dx,
+            n_bus,
+            &mut v_m,
+            npq,
+            num_state,
+            &mut v_norm,
+            &mut v,
+        );
 
         v.component_mul(&(Ybus * &v).conjugate())
             .sub_to(Sbus, &mut mis);
@@ -297,7 +311,16 @@ pub fn newton_pf_v0<Solver: Solve>(
         );
 
         let dx = &F;
-        update_v(&mut v_a, dx, n_bus, &mut v_m, npq, num_state, &mut v_norm, &mut v);
+        update_v(
+            &mut v_a,
+            dx,
+            n_bus,
+            &mut v_m,
+            npq,
+            num_state,
+            &mut v_norm,
+            &mut v,
+        );
 
         v.component_mul(&(Ybus * &v).conjugate())
             .sub_to(Sbus, &mut mis);

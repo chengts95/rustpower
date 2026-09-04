@@ -1,6 +1,6 @@
+use bevy_ecs::component::ComponentId;
 use bevy_ecs::prelude::*;
 use bevy_ecs::ptr::{Aligned, OwningPtr};
-use bevy_ecs::component::ComponentId;
 use bumpalo::Bump;
 use std::ptr::NonNull;
 
@@ -68,16 +68,25 @@ impl Drop for HarvardCommandBuffer {
         }
         for op in &self.ops {
             match op {
-                OpHead::ModifyEntity { args_ptr, count, .. } => {
-                    let args = unsafe { std::slice::from_raw_parts(args_ptr.as_ptr(), *count as usize) };
+                OpHead::ModifyEntity {
+                    args_ptr, count, ..
+                } => {
+                    let args =
+                        unsafe { std::slice::from_raw_parts(args_ptr.as_ptr(), *count as usize) };
                     for arg in args {
                         if let Some(drop_fn) = arg.drop_fn {
-                             let ptr = unsafe { OwningPtr::new(arg.payload_ptr) };
-                             unsafe { drop_fn(ptr) };
+                            let ptr = unsafe { OwningPtr::new(arg.payload_ptr) };
+                            unsafe { drop_fn(ptr) };
                         }
                     }
                 }
-                OpHead::BatchInsert { payload_ptr, count, stride, drop_fn, .. } => {
+                OpHead::BatchInsert {
+                    payload_ptr,
+                    count,
+                    stride,
+                    drop_fn,
+                    ..
+                } => {
                     if let Some(drop_fn) = drop_fn {
                         let mut ptr = payload_ptr.as_ptr();
                         for _ in 0..*count {
@@ -94,7 +103,9 @@ impl Drop for HarvardCommandBuffer {
 }
 
 impl HarvardCommandBuffer {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     fn flush(&mut self) {
         if let Some(entity) = self.pending_entity.take() {
@@ -115,13 +126,19 @@ impl HarvardCommandBuffer {
                             unsafe { drop_fn(ptr) };
                         }
                         self.pending_args.swap_remove(i);
-                    } else { i += 1; }
+                    } else {
+                        i += 1;
+                    }
                 }
                 if !self.pending_args.is_empty() {
                     let slice = self.meta_bump.alloc_slice_copy(&self.pending_args);
                     let count = slice.len() as u16;
                     let args_ptr = unsafe { NonNull::new_unchecked(slice.as_mut_ptr()) };
-                    self.ops.push(OpHead::ModifyEntity { entity, args_ptr, count });
+                    self.ops.push(OpHead::ModifyEntity {
+                        entity,
+                        args_ptr,
+                        count,
+                    });
                 }
                 self.pending_args.clear();
             }
@@ -136,28 +153,54 @@ impl HarvardCommandBuffer {
         self.insert_raw(entity, comp_id, payload_ptr, Some(drop_fn));
     }
 
-    fn insert_raw(&mut self, entity: Entity, comp_id: ComponentId, payload_ptr: NonNull<u8>, drop_fn: Option<DropFn>) {
+    fn insert_raw(
+        &mut self,
+        entity: Entity,
+        comp_id: ComponentId,
+        payload_ptr: NonNull<u8>,
+        drop_fn: Option<DropFn>,
+    ) {
         if self.pending_entity != Some(entity) {
             self.flush();
             self.pending_entity = Some(entity);
         }
-        self.pending_args.push(ArgMeta { comp_id, payload_ptr, drop_fn });
+        self.pending_args.push(ArgMeta {
+            comp_id,
+            payload_ptr,
+            drop_fn,
+        });
     }
 
     pub fn apply(&mut self, world: &mut World) {
         self.flush();
         for op in &self.ops {
             match op {
-                OpHead::ModifyEntity { entity, args_ptr, count } => {
-                    let args = unsafe { std::slice::from_raw_parts(args_ptr.as_ptr(), *count as usize) };
+                OpHead::ModifyEntity {
+                    entity,
+                    args_ptr,
+                    count,
+                } => {
+                    let args =
+                        unsafe { std::slice::from_raw_parts(args_ptr.as_ptr(), *count as usize) };
                     let ids: Vec<ComponentId> = args.iter().map(|a| a.comp_id).collect();
-                    let ptrs = args.iter().map(|a| unsafe { OwningPtr::new(a.payload_ptr) });
+                    let ptrs = args
+                        .iter()
+                        .map(|a| unsafe { OwningPtr::new(a.payload_ptr) });
                     let _ = world.spawn_empty_at(*entity);
                     let mut entity_mut = world.entity_mut(*entity);
                     unsafe { entity_mut.insert_by_ids(&ids, ptrs) };
                 }
-                OpHead::BatchInsert { entities_ptr, payload_ptr, count, comp_id, stride, .. } => {
-                    let entities = unsafe { std::slice::from_raw_parts(entities_ptr.as_ptr(), *count as usize) };
+                OpHead::BatchInsert {
+                    entities_ptr,
+                    payload_ptr,
+                    count,
+                    comp_id,
+                    stride,
+                    ..
+                } => {
+                    let entities = unsafe {
+                        std::slice::from_raw_parts(entities_ptr.as_ptr(), *count as usize)
+                    };
                     let mut ptr = payload_ptr.as_ptr();
                     for &entity in entities {
                         let _ = world.spawn_empty_at(entity);
@@ -167,13 +210,20 @@ impl HarvardCommandBuffer {
                         ptr = unsafe { ptr.add(*stride) };
                     }
                 }
-                OpHead::RemoveComponents { entity, ids_ptr, count } => {
-                    let ids = unsafe { std::slice::from_raw_parts(ids_ptr.as_ptr(), *count as usize) };
+                OpHead::RemoveComponents {
+                    entity,
+                    ids_ptr,
+                    count,
+                } => {
+                    let ids =
+                        unsafe { std::slice::from_raw_parts(ids_ptr.as_ptr(), *count as usize) };
                     if let Ok(mut entity_mut) = world.get_entity_mut(*entity) {
                         entity_mut.remove_by_ids(ids);
                     }
                 }
-                OpHead::Despawn(entity) => { world.despawn(*entity); }
+                OpHead::Despawn(entity) => {
+                    world.despawn(*entity);
+                }
             }
         }
         self.ops.clear();

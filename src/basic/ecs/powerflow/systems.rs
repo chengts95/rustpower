@@ -34,13 +34,13 @@ pub struct PowerFlowResult {
 /// matrix, admittance matrix (Y-bus), and the power injection vector (S-bus).
 #[derive(Debug, Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PowerFlowMat {
-    pub y_bus: CscMatrix<Complex<f64>>,   // Y-bus admittance matrix
-    pub s_bus: DVector<Complex64>,        // S-bus power injections
-    pub v_bus_init: DVector<Complex64>,   // V-bus power injections
-    pub npv: usize,                       // Number of PV buses
-    pub npq: usize,                       // Number of PQ buses
-    pub to_perm: Vec<usize>,              // original → reordered
-    pub from_perm: Vec<usize>,            // reordered → original
+    pub y_bus: CscMatrix<Complex<f64>>, // Y-bus admittance matrix
+    pub s_bus: DVector<Complex64>,      // S-bus power injections
+    pub v_bus_init: DVector<Complex64>, // V-bus power injections
+    pub npv: usize,                     // Number of PV buses
+    pub npq: usize,                     // Number of PQ buses
+    pub to_perm: Vec<usize>,            // original → reordered
+    pub from_perm: Vec<usize>,          // reordered → original
 }
 impl PowerFlowMat {
     pub fn reorder_index(&self, orig: usize) -> usize {
@@ -118,10 +118,7 @@ pub(crate) fn create_y_bus(
         (&Port4MatPatch, &FromBus, &ToBus),
         (Without<OutOfService>, Without<TransformerDevice>),
     >,
-    trafos: Query<
-        (&Port4MatPatch, &TransformerDevice, &FromBus, &ToBus),
-        Without<OutOfService>,
-    >,
+    trafos: Query<(&Port4MatPatch, &TransformerDevice, &FromBus, &ToBus), Without<OutOfService>>,
 ) -> (CsrMatrix<Complex64>, CscMatrix<Complex64>) {
     let nodes = node_lookup.len();
     let s_base = common.sbase;
@@ -212,7 +209,7 @@ pub(crate) fn create_y_bus(
 /// Inserts a `PowerFlowMat` resource into the world, containing matrices and vectors required for power flow analysis.
 pub fn init_states(world: &mut World) {
     let (_incidence_matrix, y_bus) = world.run_system_once(create_y_bus).unwrap();
-    let cfg = world.run_system_once(init_bus_status).unwrap(); 
+    let cfg = world.run_system_once(init_bus_status).unwrap();
     let s_bus = cfg.s_bus;
     let v_bus_init = cfg.v_bus_init;
     world.insert_resource(PowerFlowMat {

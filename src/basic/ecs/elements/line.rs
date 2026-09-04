@@ -7,8 +7,8 @@ use crate::basic;
 use crate::io::pandapower::Line;
 use bevy_archive::prelude::SnapshotRegistry;
 use bevy_ecs::prelude::*;
-use rustpower_proc_marco::DeferBundle;
 use derive_more::From;
+use rustpower_proc_marco::DeferBundle;
 
 use super::bus::{OutOfService, SnaptShotRegGroup};
 use bevy_ecs::name::Name;
@@ -157,17 +157,11 @@ pub mod line_systems {
             // Physical SI 2x2 admittance matrix:
             // [ [y_series + y_shunt, -y_series],
             //   [-y_series, y_series + y_shunt] ]
-            let g_mat = Matrix2::new(
-                y_series + y_shunt,
-                -y_series,
-                -y_series,
-                y_series + y_shunt,
-            );
+            let g_mat = Matrix2::new(y_series + y_shunt, -y_series, -y_series, y_series + y_shunt);
 
-            commands.entity(entity).insert((
-                basic::ecs::elements::Line,
-                Port4MatPatch(g_mat),
-            ));
+            commands
+                .entity(entity)
+                .insert((basic::ecs::elements::Line, Port4MatPatch(g_mat)));
         }
     }
 }
