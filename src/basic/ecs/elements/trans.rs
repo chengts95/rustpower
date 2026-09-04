@@ -276,21 +276,37 @@ pub mod trans_systems {
         let (ratio, shift_deg, z_scale, tap_factor) = dev.effective_tap_params();
         let is_lv = dev.is_lv_tap();
 
-        let v_base = dev.vn_lv_kv;
-        let z_base = v_base * v_base / dev.sn_mva;
+        // 1. All branch parameters directly in rated per-unit (O(1) range, no z_base needed)
         let vk = dev.vk_percent * 0.01 * z_scale;
         let vkr = dev.vkr_percent * 0.01 * z_scale;
-        let z = z_base * vk;
-        let re = z_base * vkr;
-        let im = (z.powi(2) - re.powi(2)).max(0.0).sqrt();
-        let y = dev.parallel as f64 / Complex::new(re, im);
+        let r_pu = vkr;
+        let x_pu = (vk * vk - vkr * vkr).max(0.0).sqrt();
+        let z_series_pu = Complex::new(r_pu, x_pu) / (dev.parallel as f64);
 
-        let g_m = dev.pfe_kw * 0.001 / (v_base * v_base);
-        let y_0 = (dev.i0_percent * 0.01) * dev.sn_mva / (v_base * v_base);
-        let b_m = (y_0 * y_0 - g_m * g_m).max(0.0).sqrt();
-        let y_m_single = Complex::new(g_m, -b_m) / (if is_lv { tap_factor * tap_factor } else { 1.0 });
-        let y_m = dev.parallel as f64 * y_m_single;
+        let g_m_pu = (dev.pfe_kw * 0.001) / dev.sn_mva;
+        let y0_pu = dev.i0_percent * 0.01;
+        let b_m_pu = (y0_pu * y0_pu - g_m_pu * g_m_pu).max(0.0).sqrt();
+        let y_m_single_pu = Complex::new(g_m_pu, -b_m_pu) / (if is_lv { tap_factor * tap_factor } else { 1.0 });
+        let y_m_pu = dev.parallel as f64 * y_m_single_pu;
 
+        // 2. T-model: Kron reduction of the internal star node entirely in per-unit
+        // d1 = r1 + j*x1, d2 = r2 + j*x2 in p.u.; y_m in p.u.
+        // g = 1 / (y_m + d1^-1 + d2^-1) in p.u.
+        // Y_c = [d1^-1 - g*d1^-2, -g*(d1*d2)^-1; -g*(d1*d2)^-1, d2^-1 - g*d2^-2] in p.u.
+        let r_ratio = 0.5;
+        let x_ratio = 0.5;
+        let d1 = Complex::new(z_series_pu.re * r_ratio, z_series_pu.im * x_ratio);
+        let d2 = Complex::new(z_series_pu.re * (1.0 - r_ratio), z_series_pu.im * (1.0 - x_ratio));
+        let y1 = Complex::new(1.0, 0.0) / d1;
+        let y2 = Complex::new(1.0, 0.0) / d2;
+        let g = Complex::new(1.0, 0.0) / (y_m_pu + y1 + y2);
+
+        let y11 = y1 - g * y1 * y1;
+        let y12 = -g * y1 * y2;
+        let y22 = y2 - g * y2 * y2;
+        let y_mat_pu = Matrix2::new(y11, y12, y12, y22);
+
+        // 3. Ideal tap transformer scaling
         let a = ratio * Complex::from_polar(1.0, shift_deg.to_radians());
         let a_inv = a.recip();
         let t = Matrix2::new(
@@ -299,13 +315,13 @@ pub mod trans_systems {
             Complex::new(0.0, 0.0),
             Complex::new(1.0, 0.0),
         );
-        let mut g = Matrix2::new(y, -y, -y, y);
-        if y_m.is_finite() {
-            g[(0, 0)] += 0.5 * y_m;
-            g[(1, 1)] += 0.5 * y_m;
-        }
+        let g_mat_pu = t.conjugate() * y_mat_pu * t;
 
-        let g = t.conjugate() * g * t;
-        commands.entity(parent).insert(Port4MatPatch(g));
+        // 4. Apply z_base^-1 at the very end to store nominal physical value (Siemens S)
+        // z_base = vn_lv_kv^2 / sn_mva  =>  y_base = sn_mva / vn_lv_kv^2
+        let y_base = dev.sn_mva / (dev.vn_lv_kv * dev.vn_lv_kv);
+        let g_physical = g_mat_pu.scale(y_base);
+
+        commands.entity(parent).insert(Port4MatPatch(g_physical));
     }
 }
