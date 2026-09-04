@@ -154,15 +154,16 @@ fn main() {
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()));
 
     if cfg!(target_os = "linux") {
-        builder = builder.clang_arg("-I/usr/include/suitesparse")
-                         .clang_arg("-I/usr/local/include/suitesparse");
+        builder = builder
+            .clang_arg("-I/usr/include/suitesparse")
+            .clang_arg("-I/usr/local/include/suitesparse");
     } else if cfg!(target_os = "macos") {
-        builder = builder.clang_arg("-I/usr/local/include")
-                         .clang_arg("-I/opt/homebrew/include");
+        builder = builder
+            .clang_arg("-I/usr/local/include")
+            .clang_arg("-I/opt/homebrew/include");
     }
 
-    let bindings = builder.generate()
-        .expect("Unable to generate bindings");
+    let bindings = builder.generate().expect("Unable to generate bindings");
 
     // Write the bindings to the $OUT_DIR/bindings.rs file.
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());

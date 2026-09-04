@@ -56,10 +56,10 @@ impl SnaptShotRegGroup for ShuntSnapShotReg {
 }
 
 pub mod shunt_systems {
+    use super::*;
     use crate::basic::ecs::{elements::*, network::GND};
     use bevy_ecs::prelude::Commands;
-    use nalgebra::{vector, Complex};
-    use super::*;
+    use nalgebra::{Complex, vector};
 
     fn shunt_internal(item: &ShuntDevice, bus: &TargetBus) -> AdmittanceBranch {
         let s = Complex::new(-item.p_mw, -item.q_mvar) * Complex::new(item.step as f64, 0.0);

@@ -1,15 +1,9 @@
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
-use crate::basic::{
-    ecs::elements::*,
-    sparse::cast::Cast,
-};
+use crate::basic::{ecs::elements::*, sparse::cast::Cast};
 
-use super::{
-    structure_update::VoltageChangeEvent,
-    systems::PowerFlowResult,
-};
+use super::{structure_update::VoltageChangeEvent, systems::PowerFlowResult};
 use crate::prelude::ecs::network::SolverStage::Solve;
 
 pub fn extract_powerflow_results(
@@ -43,7 +37,9 @@ impl Plugin for VBusUpdatePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            extract_powerflow_results.after(crate::basic::ecs::plugin::PowerFlowSolverSet).in_set(Solve),
+            extract_powerflow_results
+                .after(crate::basic::ecs::plugin::PowerFlowSolverSet)
+                .in_set(Solve),
         );
     }
 }
