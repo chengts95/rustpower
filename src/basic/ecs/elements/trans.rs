@@ -224,31 +224,57 @@ pub mod trans_systems {
         parent: Entity,
         dev: &TransformerDevice,
     ) {
-        let tap_m = dev.tap.as_ref().map_or(1.0, |tap| {
-            let pos = tap.pos.unwrap_or(0.0);
-            let neutral = tap.neutral.unwrap_or(0.0);
-            let step = tap.step_percent.unwrap_or(0.0);
-            1.0 + (pos - neutral) * 0.01 * step
-        });
+        let is_lv = dev
+            .tap
+            .as_ref()
+            .and_then(|t| t.side.as_deref())
+            .map_or(false, |s| s.eq_ignore_ascii_case("lv") || s == "2");
+
+        let (pos, neutral, step_p, step_d) = dev.tap.as_ref().map_or(
+            (0.0, 0.0, 0.0, 0.0),
+            |tap| (
+                tap.pos.unwrap_or(0.0),
+                tap.neutral.unwrap_or(0.0),
+                tap.step_percent.unwrap_or(0.0),
+                tap.step_degree.unwrap_or(0.0),
+            ),
+        );
+        let n_steps = pos - neutral;
+        let tap_factor = 1.0 + n_steps * 0.01 * step_p;
+
+        let (ratio, shift_deg, z_scale) = if is_lv {
+            (
+                1.0 / tap_factor,
+                dev.shift_degree - n_steps * step_d,
+                tap_factor * tap_factor,
+            )
+        } else {
+            (
+                tap_factor,
+                dev.shift_degree + n_steps * step_d,
+                1.0,
+            )
+        };
 
         let v_base = dev.vn_lv_kv;
         let z_base = v_base * v_base / dev.sn_mva;
-        let vk = dev.vk_percent * 0.01;
-        let vkr = dev.vkr_percent * 0.01;
+        let vk = dev.vk_percent * 0.01 * z_scale;
+        let vkr = dev.vkr_percent * 0.01 * z_scale;
         let z = z_base * vk;
         let re = z_base * vkr;
-        let im = (z.powi(2) - re.powi(2)).sqrt();
+        let im = (z.powi(2) - re.powi(2)).max(0.0).sqrt();
         let y = dev.parallel as f64 / Complex::new(re, im);
+
         let g_m = dev.pfe_kw * 0.001 / (v_base * v_base);
         let y_0 = (dev.i0_percent * 0.01) * dev.sn_mva / (v_base * v_base);
         let b_m = (y_0 * y_0 - g_m * g_m).max(0.0).sqrt();
-        let y_m_single = Complex::new(g_m, -b_m);
+        let y_m_single = Complex::new(g_m, -b_m) / (if is_lv { tap_factor * tap_factor } else { 1.0 });
         let y_m = dev.parallel as f64 * y_m_single;
 
-        let a = tap_m * Complex::from_polar(1.0, dev.shift_degree.to_radians());
-        let a = a.recip();
+        let a = ratio * Complex::from_polar(1.0, shift_deg.to_radians());
+        let a_inv = a.recip();
         let t = Matrix2::new(
-            a,
+            a_inv,
             Complex::new(0.0, 0.0),
             Complex::new(0.0, 0.0),
             Complex::new(1.0, 0.0),

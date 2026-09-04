@@ -256,6 +256,26 @@ impl Network {
         } else {
             vec![None; hv_bus.len()]
         };
+        let tap_step_degree = if df.hasattr("tap_step_degree")? {
+            Self::get_opt_float_vec(py, &df, "tap_step_degree")?
+        } else {
+            vec![None; hv_bus.len()]
+        };
+        let parallel = if df.hasattr("parallel")? {
+            Self::get_int32_vec(&df, "parallel")?
+        } else {
+            vec![1; hv_bus.len()]
+        };
+        let df_rating = if df.hasattr("df")? {
+            Self::get_float_vec(&df, "df")?
+        } else {
+            vec![1.0; hv_bus.len()]
+        };
+        let tap_phase_shifter = if df.hasattr("tap_phase_shifter")? {
+            Self::get_bool_vec(&df, "tap_phase_shifter")?
+        } else {
+            vec![false; hv_bus.len()]
+        };
 
         Ok((0..hv_bus.len())
             .map(|i| Transformer {
@@ -274,15 +294,15 @@ impl Network {
                 tap_side: tap_side[i].clone(),
                 tap_neutral: tap_neutral[i],
                 tap_step_percent: tap_step_percent[i],
-                parallel: 1,
-                df: 1.0,
-                tap_phase_shifter: false,
+                parallel: parallel[i],
+                df: df_rating[i],
+                tap_phase_shifter: tap_phase_shifter[i],
                 name: None,
                 std_type: None,
                 max_loading_percent: None,
                 tap_max: None,
                 tap_min: None,
-                tap_step_degree: None,
+                tap_step_degree: tap_step_degree[i],
             })
             .collect())
     }
@@ -398,6 +418,11 @@ impl Network {
         } else {
             vec![110.0; bus.len()]
         };
+        let step = if df.hasattr("step")? {
+            Self::get_int32_vec(&df, "step")?
+        } else {
+            vec![1; bus.len()]
+        };
 
         Ok((0..bus.len())
             .map(|i| Shunt {
@@ -406,8 +431,8 @@ impl Network {
                 q_mvar: q_mvar[i],
                 in_service: in_service[i],
                 vn_kv: vn_kv[i],
-                step: 1,
-                max_step: 1,
+                step: step[i],
+                max_step: step[i],
                 name: None,
             })
             .collect())

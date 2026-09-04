@@ -757,6 +757,36 @@ impl PowerGrid {
         Ok(res.v.as_slice().to_vec().into_pyarray(py))
     }
 
+    /// Return the original (unpermuted) Y-bus as a scipy.sparse.csc_matrix.
+    #[getter]
+    fn y_bus<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let world = self.inner.world();
+        if let Some(orig) = world.get_resource::<crate::basic::ecs::powerflow::systems::OriginalYBus>() {
+            let indptr = orig.0.col_offsets().to_vec().into_pyarray(py);
+            let indices = orig.0.row_indices().to_vec().into_pyarray(py);
+            let data = orig.0.values().to_vec().into_pyarray(py);
+            let sp = py.import("scipy.sparse")?;
+            let shape = (orig.0.nrows(), orig.0.ncols());
+            return sp.call_method1("csc_matrix", ((data, indices, indptr), shape));
+        }
+        if let Some(mat) = world.get_resource::<PowerFlowMat>() {
+            let orig = crate::basic::sparse::utils::permute_csc_to_csc_local_sort(
+                &mat.y_bus,
+                &mat.to_perm,
+                &mat.from_perm,
+            );
+            let indptr = orig.col_offsets().to_vec().into_pyarray(py);
+            let indices = orig.row_indices().to_vec().into_pyarray(py);
+            let data = orig.values().to_vec().into_pyarray(py);
+            let sp = py.import("scipy.sparse")?;
+            let shape = (orig.nrows(), orig.ncols());
+            return sp.call_method1("csc_matrix", ((data, indices, indptr), shape));
+        }
+        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            "Ybus not initialized: solve() or init_pf() must be called first",
+        ))
+    }
+
     /// Set the voltage start vector (p.u. complex), indexed by bus id.
     /// Writes VBusPu on each bus, re-pins PV/slack setpoints (v_inj) so this
     /// is a pure warm start, and fires VoltageChangeEvent; the sync into the

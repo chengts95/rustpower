@@ -43,14 +43,14 @@ pub fn newton_pf_iwamoto<Solver: Solve>(
         ibus.as_mut_slice(),
         s_calc.as_mut_slice(),
     );
-    let norm2 = fill_f_from_scalc::<false>(
+    let norm = fill_f_from_scalc::<false>(
         s_calc.as_slice(),
         Sbus.as_slice(),
         npq,
         n_bus,
         F.as_mut_slice(),
     );
-    if norm2 < tol * tol {
+    if norm < tol {
         return Ok((v, 0));
     }
 
@@ -160,7 +160,7 @@ pub fn newton_pf_iwamoto<Solver: Solve>(
             ibus.as_mut_slice(),
             s_calc.as_mut_slice(),
         );
-        let norm2 = fill_f_from_scalc::<false>(
+        let norm = fill_f_from_scalc::<false>(
             s_calc.as_slice(),
             Sbus.as_slice(),
             npq,
@@ -168,7 +168,7 @@ pub fn newton_pf_iwamoto<Solver: Solve>(
             F.as_mut_slice(),
         );
 
-        if norm2 < tol * tol {
+        if norm < tol {
             return Ok((v, it + 1));
         }
     }
