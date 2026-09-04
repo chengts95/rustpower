@@ -244,13 +244,7 @@ pub fn newton_pf<Solver: Solve>(
             return Ok((v, it + 1));
         }
 
-        if F.norm() < tol {
-            if let (Some(target_vm), Some(target_va)) = (cache_vm, cache_va) {
-                *target_vm = v_m;
-                *target_va = v_a;
-            }
-            return Ok((v, it + 1));
-        }
+  
     }
 
     if let (Some(target_vm), Some(target_va)) = (cache_vm, cache_va) {

@@ -207,8 +207,13 @@ pub(crate) fn create_y_bus(
 /// # Side Effects
 ///
 /// Inserts a `PowerFlowMat` resource into the world, containing matrices and vectors required for power flow analysis.
+/// Resource holding the original unpermuted Ybus admittance matrix.
+#[derive(Debug, Resource, Clone)]
+pub struct OriginalYBus(pub CscMatrix<Complex64>);
+
 pub fn init_states(world: &mut World) {
     let (_incidence_matrix, y_bus) = world.run_system_once(create_y_bus).unwrap();
+    world.insert_resource(OriginalYBus(y_bus.clone()));
     let cfg = world.run_system_once(init_bus_status).unwrap();
     let s_bus = cfg.s_bus;
     let v_bus_init = cfg.v_bus_init;
