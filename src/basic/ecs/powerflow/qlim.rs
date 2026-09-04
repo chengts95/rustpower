@@ -2,6 +2,7 @@ use std::ops::DerefMut;
 
 use bevy_app::prelude::*;
 use bevy_ecs::{prelude::*, system::SystemParam};
+use nalgebra::DVector;
 
 use crate::{
     basic::{
@@ -67,10 +68,11 @@ fn modify_qlim_system(
     } = env;
     // This system may have trouble since multiple generators can be connected to the same bus.
     let cv = &res.v;
-    let mis = &cv.component_mul(&(&mat.y_bus * cv).conjugate());
-    let sbus_res = mis;
-    let inv_order = &mat.reorder.transpose();
-    let sbus_res = inv_order * sbus_res;
+    let mis = cv.component_mul(&(&mat.y_bus * cv).conjugate());
+    let mut sbus_res = DVector::zeros(mis.len());
+    for (perm_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
+        sbus_res[orig_idx] = mis[perm_idx];
+    }
 
     let sbus_res = match &node_agg {
         Some(node_agg) => &node_agg.expand_mat.cast() * &sbus_res,
