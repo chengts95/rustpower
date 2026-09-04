@@ -46,6 +46,32 @@ pub struct TransformerDevice {
     #[serde(flatten)]
     pub tap: Option<TapChanger>,
 }
+
+impl TransformerDevice {
+    /// Computes the effective phase shift angle in degrees including tap changer adjustments.
+    pub fn effective_shift_degree(&self) -> f64 {
+        let is_lv = self
+            .tap
+            .as_ref()
+            .and_then(|t| t.side.as_deref())
+            .map_or(false, |s| s.eq_ignore_ascii_case("lv") || s == "2");
+
+        let (pos, neutral, step_d) = self.tap.as_ref().map_or(
+            (0.0, 0.0, 0.0),
+            |tap| (
+                tap.pos.unwrap_or(0.0),
+                tap.neutral.unwrap_or(0.0),
+                tap.step_degree.unwrap_or(0.0),
+            ),
+        );
+        let n_steps = pos - neutral;
+        if is_lv {
+            self.shift_degree - n_steps * step_d
+        } else {
+            self.shift_degree + n_steps * step_d
+        }
+    }
+}
 #[cfg(feature = "arrow")]
 /// Represents the electrical and modeling parameters of a transformer.
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]

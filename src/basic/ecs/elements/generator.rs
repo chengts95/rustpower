@@ -12,7 +12,10 @@ use rustpower_proc_marco::DeferBundle;
 
 use crate::io::pandapower::{ExtGrid, Gen};
 
-use super::{bus::SnaptShotRegGroup, units::*};
+use super::{
+    bus::{OutOfService, SnaptShotRegGroup},
+    units::*,
+};
 
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SnMva(pub f64);
@@ -156,6 +159,7 @@ pub struct GeneratorBundle {
     pub uncontrollable: Option<Uncontrollable>,
     pub sn_mva: Option<SnMva>,
     pub name: Option<Name>,
+    pub out: Option<OutOfService>,
 }
 
 /// ECS bundle for generator initialization from Pandapower `ExtGrid`.
@@ -168,13 +172,14 @@ pub struct ExtGridBundle {
     pub cfg: GeneratorCfg, // slack_weight, gen_type, scaling
     pub pq_range: PQLim,   // min/max p/q
     pub slack: Slack,
+    pub out: Option<OutOfService>,
 }
 
 impl From<&Gen> for GeneratorBundle {
     fn from(generator: &Gen) -> Self {
         GeneratorBundle {
             target_bus: TargetBus(generator.bus),
-            target_p: TargetPMW(generator.p_mw),
+            target_p: TargetPMW(generator.p_mw * generator.scaling),
             target_vm: TargetVmPu(generator.vm_pu),
             pq_range: PQLim {
                 p: Limit {
@@ -197,6 +202,7 @@ impl From<&Gen> for GeneratorBundle {
 
             sn_mva: generator.sn_mva.map(SnMva),
             name: generator.name.clone().map(Name::new),
+            out: (!generator.in_service).then_some(OutOfService),
         }
     }
 }
@@ -223,6 +229,7 @@ impl From<&ExtGrid> for ExtGridBundle {
                 },
             },
             slack: Slack,
+            out: (!ext_grid.in_service).then_some(OutOfService),
         }
     }
 }

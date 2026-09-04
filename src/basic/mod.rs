@@ -1,4 +1,5 @@
 pub mod branch;
+pub mod dcpf;
 pub(crate) mod dsbus_dv;
 pub mod iwamoto;
 #[cfg(test)]
@@ -11,6 +12,7 @@ pub(crate) mod pf_old_impl;
 pub mod ecs;
 pub mod solver;
 pub(crate) mod sparse;
+pub use dcpf::newton_pf_dcpf_serial;
 pub use iwamoto::newton_pf_iwamoto;
 pub use newtonpf::newton_pf;
 
