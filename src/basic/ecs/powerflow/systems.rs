@@ -34,7 +34,6 @@ pub struct PowerFlowResult {
 /// matrix, admittance matrix (Y-bus), and the power injection vector (S-bus).
 #[derive(Debug, Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PowerFlowMat {
-    pub reorder: CsrMatrix<Complex<f64>>, // Reordering matrix
     pub y_bus: CscMatrix<Complex<f64>>,   // Y-bus admittance matrix
     pub s_bus: DVector<Complex64>,        // S-bus power injections
     pub v_bus_init: DVector<Complex64>,   // V-bus power injections
@@ -72,6 +71,7 @@ impl PowerFlowMat {
 ///
 /// This function will panic if the indices provided in `pv`, `pq`, or `ext` are out of bounds.
 /// Creates a permutation matrix based on PV, PQ, and EXT nodes.
+#[allow(dead_code)]
 pub(crate) fn create_permutation_matrix(
     pq: &[i64],
     pv: &[i64],
@@ -215,34 +215,21 @@ pub fn init_states(world: &mut World) {
     let cfg = world.run_system_once(init_bus_status).unwrap(); 
     let s_bus = cfg.s_bus;
     let v_bus_init = cfg.v_bus_init;
-    let mut to_perm = vec![0; v_bus_init.len()]; // 原 → 新
-    let mut from_perm = vec![0; v_bus_init.len()]; // 新 → 原
-    // println!(
-    //     "Power flow system initialized with {} buses, {} PV buses, and {} PQ buses.",
-    //     v_bus_init.len(),
-    //     cfg.npv,
-    //     cfg.npq
-    // );
-    for (new_idx, &original_idx) in cfg.reorder.col_indices().iter().enumerate() {
-        to_perm[original_idx] = new_idx;
-        from_perm[new_idx] = original_idx;
-    }
     world.insert_resource(PowerFlowMat {
-        reorder: cfg.reorder,
         y_bus,
         s_bus,
         v_bus_init,
         npv: cfg.npv,
         npq: cfg.npq,
-        to_perm,
-        from_perm,
+        to_perm: cfg.to_perm,
+        from_perm: cfg.from_perm,
     });
 }
 
-/// Holds the system bus status, including reorder matrix, power injections, initial voltages, and counts of PV and PQ buses.
+/// Holds the system bus status, including permutation indices, power injections, initial voltages, and counts of PV and PQ buses.
 pub(crate) struct SystemBusStatus {
-    /// The permutation matrix for reordering buses.
-    reorder: CsrMatrix<Complex64>,
+    to_perm: Vec<usize>,
+    from_perm: Vec<usize>,
     /// The complex power injections at each bus.
     s_bus: DVector<Complex64>,
     /// The initial voltage vector for each bus.
@@ -299,16 +286,19 @@ pub(crate) fn init_bus_status(
     pq_only.sort_unstable();
     exts.sort_unstable();
 
-    // Create permutation matrix for bus reordering
-    let reorder = create_permutation_matrix(
-        pq_only.as_slice(),
-        pv_only.as_slice(),
-        exts.as_slice(),
-        nodes,
-    );
+    let mut to_perm = vec![0; nodes];
+    let mut from_perm = Vec::with_capacity(nodes);
+    from_perm.extend(pq_only.iter().map(|&x| x as usize));
+    from_perm.extend(pv_only.iter().map(|&x| x as usize));
+    from_perm.extend(exts.iter().map(|&x| x as usize));
+
+    for (new_idx, &original_idx) in from_perm.iter().enumerate() {
+        to_perm[original_idx] = new_idx;
+    }
 
     SystemBusStatus {
-        reorder,
+        to_perm,
+        from_perm,
         s_bus,
         v_bus_init,
         npv,
