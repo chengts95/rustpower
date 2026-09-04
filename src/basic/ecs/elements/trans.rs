@@ -286,6 +286,24 @@ pub mod trans_systems {
         let g_m_pu = (dev.pfe_kw * 0.001) / dev.sn_mva;
         let y0_pu = dev.i0_percent * 0.01;
         let b_m_pu = (y0_pu * y0_pu - g_m_pu * g_m_pu).max(0.0).sqrt();
+
+        // -----------------------------------------------------------------------------------------
+        // CRITICAL ARCHITECTURAL NOTE: IEEE 118 & Pandapower T-Model Equivalence
+        //
+        // In IEEE standard test cases (such as IEEE 118) and classical PSS/E datasets, these branches
+        // represent transmission lines compounded/overlaid with transformers (transmission line
+        // overlaid on transformer), or branches with measured charging capacitance / port shunts.
+        // From a rigorous power system physics and modeling perspective, such branches MUST be modeled
+        // using the Pi-model (pi_model) and MUST NOT be treated as physical T-equivalent transformers.
+        // Forcing a T-model Wye-Delta / Kron reduction inappropriately relocates terminal line charging
+        // capacitance into the internal core wye-point, which artificially distorts and alters the
+        // branch's physical series leakage reactance (Z_series = Z + 0.25 * Z^2 * Y_m).
+        //
+        // However, Pandapower use t model for transformers by default, taking the magnitude of branch susceptance and forcing it into an inductive
+        // no-load current (-b_m). To maintain exact machine-precision equivalence (down to 10^-11 p.u.)
+        // and serve as a seamless drop-in replacement for Pandapower's default behavior, we deliberately
+        // mirror Pandapower's purely inductive path (-b_m_pu) here and bypass this physical discrepancy.
+        // -----------------------------------------------------------------------------------------
         let y_m_single_pu = Complex::new(g_m_pu, -b_m_pu) / (if is_lv { tap_factor * tap_factor } else { 1.0 });
         let y_m_pu = dev.parallel as f64 * y_m_single_pu;
 

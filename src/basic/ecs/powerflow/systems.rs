@@ -112,7 +112,7 @@ pub(crate) fn create_permutation_matrix(
 pub(crate) fn create_y_bus(
     common: Res<PFCommonData>,
     node_lookup: Res<NodeLookup>,
-    buses: Query<&VNominal>,
+    buses: Query<(&BusID, &VNominal)>,
     y_br: Query<(&Admittance, &Port2, &VBase)>,
     lines_and_switches: Query<
         (&Port4MatPatch, &FromBus, &ToBus),
@@ -121,74 +121,163 @@ pub(crate) fn create_y_bus(
     trafos: Query<(&Port4MatPatch, &TransformerDevice, &FromBus, &ToBus), Without<OutOfService>>,
 ) -> (CsrMatrix<Complex64>, CscMatrix<Complex64>) {
     let nodes = node_lookup.len();
-    let s_base = common.sbase;
+    let inv_s_base = 1.0 / common.sbase;
 
-    // Cache bus nominal voltage array indexed by bus id
-    let mut bus_vn = vec![1.0; nodes];
-    for (bus_idx, entity) in node_lookup.iter() {
-        if let Ok(vnom) = buses.get(entity) {
-            bus_vn[bus_idx as usize] = vnom.0.0;
+    // Cache bus z_base = (Vn^2) / S_base array using contiguous slice iteration
+    let mut bus_z_base = vec![inv_s_base; nodes];
+    if let Ok(chunks) = buses.contiguous_iter() {
+        for (id_slice, vnom_slice) in chunks {
+            let len = id_slice.len();
+            for i in 0..len {
+                let idx = id_slice[i].0 as usize;
+                if idx < nodes {
+                    let vn = vnom_slice[i].0.0;
+                    bus_z_base[idx] = (vn * vn) * inv_s_base;
+                }
+            }
+        }
+    } else {
+        for (id, vnom) in buses.iter() {
+            let idx = id.0 as usize;
+            if idx < nodes {
+                let vn = vnom.0.0;
+                bus_z_base[idx] = (vn * vn) * inv_s_base;
+            }
         }
     }
 
     let mut coo = CooMatrix::new(nodes, nodes);
 
-    // 1. Stamp Lines and Switches (V_base from connecting bus)
-    for (patch, from, to) in lines_and_switches.iter() {
-        let f = from.0;
-        let t = to.0;
-        let vn = if f >= 0 && (f as usize) < nodes {
-            bus_vn[f as usize]
-        } else if t >= 0 && (t as usize) < nodes {
-            bus_vn[t as usize]
-        } else {
-            1.0
-        };
-        let p = patch.0.scale((vn * vn) / s_base);
-        if f >= 0 {
-            coo.push(f as usize, f as usize, p[(0, 0)]);
+    // 1. Stamp Lines and Switches using contiguous slice iteration
+    if let Ok(chunks) = lines_and_switches.contiguous_iter() {
+        for (patch_slice, from_slice, to_slice) in chunks {
+            let len = patch_slice.len();
+            for i in 0..len {
+                let f = from_slice[i].0;
+                let t = to_slice[i].0;
+                let z_base = if f >= 0 && (f as usize) < nodes {
+                    bus_z_base[f as usize]
+                } else if t >= 0 && (t as usize) < nodes {
+                    bus_z_base[t as usize]
+                } else {
+                    inv_s_base
+                };
+                let p = patch_slice[i].0.scale(z_base);
+                if f >= 0 {
+                    coo.push(f as usize, f as usize, p[(0, 0)]);
+                }
+                if t >= 0 {
+                    coo.push(t as usize, t as usize, p[(1, 1)]);
+                }
+                if f >= 0 && t >= 0 {
+                    coo.push(f as usize, t as usize, p[(0, 1)]);
+                    coo.push(t as usize, f as usize, p[(1, 0)]);
+                }
+            }
         }
-        if t >= 0 {
-            coo.push(t as usize, t as usize, p[(1, 1)]);
-        }
-        if f >= 0 && t >= 0 {
-            coo.push(f as usize, t as usize, p[(0, 1)]);
-            coo.push(t as usize, f as usize, p[(1, 0)]);
+    } else {
+        for (patch, from, to) in lines_and_switches.iter() {
+            let f = from.0;
+            let t = to.0;
+            let z_base = if f >= 0 && (f as usize) < nodes {
+                bus_z_base[f as usize]
+            } else if t >= 0 && (t as usize) < nodes {
+                bus_z_base[t as usize]
+            } else {
+                inv_s_base
+            };
+            let p = patch.0.scale(z_base);
+            if f >= 0 {
+                coo.push(f as usize, f as usize, p[(0, 0)]);
+            }
+            if t >= 0 {
+                coo.push(t as usize, t as usize, p[(1, 1)]);
+            }
+            if f >= 0 && t >= 0 {
+                coo.push(f as usize, t as usize, p[(0, 1)]);
+                coo.push(t as usize, f as usize, p[(1, 0)]);
+            }
         }
     }
 
-    // 2. Stamp Transformers (V_base from transformer device vn_lv_kv)
-    for (patch, dev, from, to) in trafos.iter() {
-        let vn = dev.vn_lv_kv;
-        let p = patch.0.scale((vn * vn) / s_base);
-        let f = from.0;
-        let t = to.0;
-        if f >= 0 {
-            coo.push(f as usize, f as usize, p[(0, 0)]);
+    // 2. Stamp Transformers using contiguous slice iteration
+    if let Ok(chunks) = trafos.contiguous_iter() {
+        for (patch_slice, dev_slice, from_slice, to_slice) in chunks {
+            let len = patch_slice.len();
+            for i in 0..len {
+                let vn = dev_slice[i].vn_lv_kv;
+                let z_base = (vn * vn) * inv_s_base;
+                let p = patch_slice[i].0.scale(z_base);
+                let f = from_slice[i].0;
+                let t = to_slice[i].0;
+                if f >= 0 {
+                    coo.push(f as usize, f as usize, p[(0, 0)]);
+                }
+                if t >= 0 {
+                    coo.push(t as usize, t as usize, p[(1, 1)]);
+                }
+                if f >= 0 && t >= 0 {
+                    coo.push(f as usize, t as usize, p[(0, 1)]);
+                    coo.push(t as usize, f as usize, p[(1, 0)]);
+                }
+            }
         }
-        if t >= 0 {
-            coo.push(t as usize, t as usize, p[(1, 1)]);
-        }
-        if f >= 0 && t >= 0 {
-            coo.push(f as usize, t as usize, p[(0, 1)]);
-            coo.push(t as usize, f as usize, p[(1, 0)]);
+    } else {
+        for (patch, dev, from, to) in trafos.iter() {
+            let vn = dev.vn_lv_kv;
+            let z_base = (vn * vn) * inv_s_base;
+            let p = patch.0.scale(z_base);
+            let f = from.0;
+            let t = to.0;
+            if f >= 0 {
+                coo.push(f as usize, f as usize, p[(0, 0)]);
+            }
+            if t >= 0 {
+                coo.push(t as usize, t as usize, p[(1, 1)]);
+            }
+            if f >= 0 && t >= 0 {
+                coo.push(f as usize, t as usize, p[(0, 1)]);
+                coo.push(t as usize, f as usize, p[(1, 0)]);
+            }
         }
     }
 
     // 3. Add ground shunts (EShunt) directly to diagonal
-    for (ad, topo, vbase) in y_br.iter() {
-        let y_pu = ad.0 * (vbase.0 * vbase.0) / s_base;
-        if topo.0[0] >= 0 && topo.0[1] < 0 {
-            coo.push(topo.0[0] as usize, topo.0[0] as usize, y_pu);
-        } else if topo.0[1] >= 0 && topo.0[0] < 0 {
-            coo.push(topo.0[1] as usize, topo.0[1] as usize, y_pu);
-        } else if topo.0[0] >= 0 && topo.0[1] >= 0 {
-            let idx0 = topo.0[0] as usize;
-            let idx1 = topo.0[1] as usize;
-            coo.push(idx0, idx0, y_pu);
-            coo.push(idx1, idx1, y_pu);
-            coo.push(idx0, idx1, -y_pu);
-            coo.push(idx1, idx0, -y_pu);
+    if let Ok(chunks) = y_br.contiguous_iter() {
+        for (ad_slice, topo_slice, vbase_slice) in chunks {
+            let len = ad_slice.len();
+            for i in 0..len {
+                let y_pu = ad_slice[i].0 * ((vbase_slice[i].0 * vbase_slice[i].0) * inv_s_base);
+                let topo = &topo_slice[i].0;
+                if topo[0] >= 0 && topo[1] < 0 {
+                    coo.push(topo[0] as usize, topo[0] as usize, y_pu);
+                } else if topo[1] >= 0 && topo[0] < 0 {
+                    coo.push(topo[1] as usize, topo[1] as usize, y_pu);
+                } else if topo[0] >= 0 && topo[1] >= 0 {
+                    let idx0 = topo[0] as usize;
+                    let idx1 = topo[1] as usize;
+                    coo.push(idx0, idx0, y_pu);
+                    coo.push(idx1, idx1, y_pu);
+                    coo.push(idx0, idx1, -y_pu);
+                    coo.push(idx1, idx0, -y_pu);
+                }
+            }
+        }
+    } else {
+        for (ad, topo, vbase) in y_br.iter() {
+            let y_pu = ad.0 * ((vbase.0 * vbase.0) * inv_s_base);
+            if topo.0[0] >= 0 && topo.0[1] < 0 {
+                coo.push(topo.0[0] as usize, topo.0[0] as usize, y_pu);
+            } else if topo.0[1] >= 0 && topo.0[0] < 0 {
+                coo.push(topo.0[1] as usize, topo.0[1] as usize, y_pu);
+            } else if topo.0[0] >= 0 && topo.0[1] >= 0 {
+                let idx0 = topo.0[0] as usize;
+                let idx1 = topo.0[1] as usize;
+                coo.push(idx0, idx0, y_pu);
+                coo.push(idx1, idx1, y_pu);
+                coo.push(idx0, idx1, -y_pu);
+                coo.push(idx1, idx0, -y_pu);
+            }
         }
     }
 
