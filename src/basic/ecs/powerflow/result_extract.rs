@@ -8,12 +8,11 @@ use crate::basic::{
 
 use super::{
     structure_update::VoltageChangeEvent,
-    systems::{PowerFlowMat, PowerFlowResult},
+    systems::PowerFlowResult,
 };
 use crate::prelude::ecs::network::SolverStage::Solve;
 
 pub fn extract_powerflow_results(
-    mat: Res<PowerFlowMat>,
     res: Res<PowerFlowResult>,
     buses: Res<NodeLookup>,
     mut q: Query<&mut VBusPu>,
@@ -24,10 +23,9 @@ pub fn extract_powerflow_results(
     if !res.converged {
         return;
     }
-    let v = &mat.reorder.transpose() * &res.v;
     let v = match &node_agg {
-        Some(node_agg) => &node_agg.expand_mat_v.cast() * &v,
-        None => v,
+        Some(node_agg) => &node_agg.expand_mat_v.cast() * &res.v,
+        None => res.v.clone_owned(),
     };
     for i in 0..v.len() {
         let entity = buses.get_entity(i as i64).unwrap();
