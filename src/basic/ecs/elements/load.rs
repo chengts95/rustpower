@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::io::pandapower::Load;
 
-use super::{bus::SnaptShotRegGroup, generator::*};
+use super::{
+    bus::{OutOfService, SnaptShotRegGroup},
+    generator::*,
+};
 
 #[derive(Component, Debug, Serialize, Deserialize, Clone)]
 pub struct LoadCfg {
@@ -37,14 +40,15 @@ pub struct LoadBundle {
     pub uncontrollable: Option<Uncontrollable>,
     pub name: Option<Name>,
     pub sn_mva: Option<SnMva>,
+    pub out: Option<OutOfService>,
 }
 
 impl From<&Load> for LoadBundle {
     fn from(load: &Load) -> Self {
         Self {
             target_bus: TargetBus(load.bus),
-            target_p: TargetPMW(-load.p_mw),
-            target_q: TargetQMVar(-load.q_mvar),
+            target_p: TargetPMW(-load.p_mw * load.scaling),
+            target_q: TargetQMVar(-load.q_mvar * load.scaling),
             cfg: LoadCfg {
                 scaling: load.scaling,
                 load_type: load.type_.clone(),
@@ -56,6 +60,7 @@ impl From<&Load> for LoadBundle {
             uncontrollable: (!load.controllable.unwrap_or(true)).then_some(Uncontrollable),
             name: load.name.clone().map(Name::new),
             sn_mva: load.sn_mva.map(SnMva),
+            out: (!load.in_service).then_some(OutOfService),
         }
     }
 }

@@ -46,6 +46,55 @@ pub struct TransformerDevice {
     #[serde(flatten)]
     pub tap: Option<TapChanger>,
 }
+
+impl TransformerDevice {
+    /// Returns true if the tap changer is installed on the low-voltage side.
+    #[inline]
+    pub fn is_lv_tap(&self) -> bool {
+        self.tap
+            .as_ref()
+            .and_then(|t| t.side.as_deref())
+            .map_or(false, |s| s.eq_ignore_ascii_case("lv") || s == "2")
+    }
+
+    /// Computes the effective electrical tap parameters `(ratio, shift_degree, z_scale, tap_factor)`.
+    pub fn effective_tap_params(&self) -> (f64, f64, f64, f64) {
+        let is_lv = self.is_lv_tap();
+
+        let (pos, neutral, step_p, step_d) = self.tap.as_ref().map_or(
+            (0.0, 0.0, 0.0, 0.0),
+            |tap| (
+                tap.pos.unwrap_or(0.0),
+                tap.neutral.unwrap_or(0.0),
+                tap.step_percent.unwrap_or(0.0),
+                tap.step_degree.unwrap_or(0.0),
+            ),
+        );
+        let n_steps = pos - neutral;
+        let tap_factor = 1.0 + n_steps * 0.01 * step_p;
+
+        let (ratio, shift_deg, z_scale) = if is_lv {
+            (
+                1.0 / tap_factor,
+                self.shift_degree - n_steps * step_d,
+                tap_factor * tap_factor,
+            )
+        } else {
+            (
+                tap_factor,
+                self.shift_degree + n_steps * step_d,
+                1.0,
+            )
+        };
+        (ratio, shift_deg, z_scale, tap_factor)
+    }
+
+    /// Computes the effective phase shift angle in degrees including tap changer adjustments.
+    #[inline]
+    pub fn effective_shift_degree(&self) -> f64 {
+        self.effective_tap_params().1
+    }
+}
 #[cfg(feature = "arrow")]
 /// Represents the electrical and modeling parameters of a transformer.
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -224,37 +273,8 @@ pub mod trans_systems {
         parent: Entity,
         dev: &TransformerDevice,
     ) {
-        let is_lv = dev
-            .tap
-            .as_ref()
-            .and_then(|t| t.side.as_deref())
-            .map_or(false, |s| s.eq_ignore_ascii_case("lv") || s == "2");
-
-        let (pos, neutral, step_p, step_d) = dev.tap.as_ref().map_or(
-            (0.0, 0.0, 0.0, 0.0),
-            |tap| (
-                tap.pos.unwrap_or(0.0),
-                tap.neutral.unwrap_or(0.0),
-                tap.step_percent.unwrap_or(0.0),
-                tap.step_degree.unwrap_or(0.0),
-            ),
-        );
-        let n_steps = pos - neutral;
-        let tap_factor = 1.0 + n_steps * 0.01 * step_p;
-
-        let (ratio, shift_deg, z_scale) = if is_lv {
-            (
-                1.0 / tap_factor,
-                dev.shift_degree - n_steps * step_d,
-                tap_factor * tap_factor,
-            )
-        } else {
-            (
-                tap_factor,
-                dev.shift_degree + n_steps * step_d,
-                1.0,
-            )
-        };
+        let (ratio, shift_deg, z_scale, tap_factor) = dev.effective_tap_params();
+        let is_lv = dev.is_lv_tap();
 
         let v_base = dev.vn_lv_kv;
         let z_base = v_base * v_base / dev.sn_mva;
