@@ -5,7 +5,7 @@ use super::new_dsdvbus2::JacobianPattern2;
 
 use bevy_ecs::prelude::Resource;
 
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 #[allow(non_snake_case)]
 pub struct NewtonCache {
     pub npv: usize,
@@ -16,6 +16,8 @@ pub struct NewtonCache {
     #[allow(non_snake_case)]
     pub F: DVector<f64>,
     pub s_calc: DVector<Complex64>,
+    pub v_m: DVector<f64>,
+    pub v_a: DVector<f64>,
 }
 
 use super::new_dsdvbus3::fill_jacobian_v3;
@@ -73,7 +75,7 @@ pub fn newton_pf<Solver: Solve>(
     tolerance: Option<f64>,
     max_iter: Option<usize>,
     solver: &mut Solver,
-    cache_opt: Option<&mut NewtonCache>,
+    mut cache_opt: Option<&mut NewtonCache>,
 ) -> Result<(DVector<Complex64>, usize), (String, DVector<Complex64>, usize)> {
     let mut v = v_init.clone();
     let max_iter = max_iter.unwrap_or(100);
@@ -92,7 +94,7 @@ pub fn newton_pf<Solver: Solve>(
     let mut local_F = DVector::zeros(0);
     let mut local_s_calc = DVector::zeros(0);
 
-    let (j_pattern, j_values, ibus, F, s_calc) = if let Some(c) = cache_opt {
+    let (j_pattern, j_values, ibus, F, s_calc, mut cache_vm, mut cache_va) = if let Some(ref mut c) = cache_opt {
         if c.j_pattern.is_none() {
             c.j_pattern = Some(JacobianPattern2::build_from_permuted(Ybus.col_offsets(), Ybus.row_indices(), npv, npq));
             c.j_values = vec![0.0; c.j_pattern.as_ref().unwrap().nnz_j];
@@ -108,6 +110,8 @@ pub fn newton_pf<Solver: Solve>(
             &mut c.ibus,
             &mut c.F,
             &mut c.s_calc,
+            Some(&mut c.v_m),
+            Some(&mut c.v_a),
         )
     } else {
         local_j_pattern = Some(JacobianPattern2::build_from_permuted(Ybus.col_offsets(), Ybus.row_indices(), npv, npq));
@@ -121,6 +125,8 @@ pub fn newton_pf<Solver: Solve>(
             &mut local_ibus,
             &mut local_F,
             &mut local_s_calc,
+            None,
+            None,
         )
     };
     csc_matvec_and_scalc(
@@ -141,6 +147,10 @@ pub fn newton_pf<Solver: Solve>(
     );
 
     if norm < tol {
+        if let (Some(target_vm), Some(target_va)) = (cache_vm, cache_va) {
+            *target_vm = v.map(|e| e.simd_modulus());
+            *target_va = v.map(|e| e.simd_argument());
+        }
         return Ok((v, 0));
     }
 
@@ -216,12 +226,25 @@ pub fn newton_pf<Solver: Solve>(
         );
 
         if norm2 < tol {
+            if let (Some(target_vm), Some(target_va)) = (cache_vm, cache_va) {
+                *target_vm = v_m;
+                *target_va = v_a;
+            }
             return Ok((v, it + 1));
         }
 
         if F.norm() < tol {
+            if let (Some(target_vm), Some(target_va)) = (cache_vm, cache_va) {
+                *target_vm = v_m;
+                *target_va = v_a;
+            }
             return Ok((v, it + 1));
         }
+    }
+
+    if let (Some(target_vm), Some(target_va)) = (cache_vm, cache_va) {
+        *target_vm = v_m;
+        *target_va = v_a;
     }
 
     Err((String::from("Did not converge!"), v, max_iter))

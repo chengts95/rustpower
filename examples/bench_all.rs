@@ -48,6 +48,7 @@ fn run_benchmark(name: &str, net: Network, iterations: u32) {
     
     // Warmup
     pf_net.run_pf();
+    pf_net.post_process();
     
     let res = pf_net
         .world()
@@ -64,9 +65,17 @@ fn run_benchmark(name: &str, net: Network, iterations: u32) {
     let max_v = vm.iter().fold(f64::MIN, |a, &b| a.max(b));
     println!("  Vm range: [{:.4}, {:.4}]", min_v, max_v);
 
-    timeit!(name, iterations, || {
+    timeit!(format!("{:<12} [Pure Solve]", name), iterations, || {
         pf_net.run_pf();
     });
+    timeit!(format!("{:<12} [PostProcess]", name), iterations, || {
+        pf_net.post_process();
+    });
+    timeit!(format!("{:<12} [Solve+Post ]", name), iterations, || {
+        pf_net.run_pf();
+        pf_net.post_process();
+    });
+    println!();
 }
 
 fn main() {

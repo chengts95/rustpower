@@ -9,7 +9,7 @@ use bevy_app::App;
 #[cfg(feature = "python")]
 use nalgebra::DVector;
 #[cfg(feature = "python")]
-use nalgebra_sparse::{CooMatrix, CscMatrix, CsrMatrix};
+use nalgebra_sparse::CsrMatrix;
 #[cfg(feature = "python")]
 use numpy::{IntoPyArray, PyArrayMethods};
 #[cfg(feature = "python")]
@@ -155,7 +155,7 @@ impl NewtonSolver {
         cfg.tol = Some(tol);
 
         let converged = self.app.world_mut().run_system_once(
-            |mut mat: ResMut<PowerFlowMat>,
+            |mat: ResMut<PowerFlowMat>,
              mut solver_res: ResMut<PowerFlowSolver>,
              cfg: Res<PowerFlowConfig>,
              mut cache: Option<ResMut<crate::basic::newtonpf::NewtonCache>>,
