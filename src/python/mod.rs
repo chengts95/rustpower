@@ -82,11 +82,14 @@ pub fn rustpower(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<handles::SwitchHandle>()?;
 
     // Register Solver as a submodule
-    let solver_module = PyModule::new(py, "rustpower.solver")?;
+    let solver_module = PyModule::new(py, "solver")?;
     solver_module.add_class::<solver::NewtonSolver>()?;
     m.add_submodule(&solver_module)?;
 
-    // Attempt robust sys.modules registration so 'import rustpower.solver' works
+    // Also export NewtonSolver directly in root module for convenience
+    m.add_class::<solver::NewtonSolver>()?;
+
+    // Register in sys.modules so 'import rustpower.solver' works
     let sys = py.import("sys")?;
     let modules: Bound<'_, pyo3::types::PyDict> = sys.getattr("modules")?.downcast_into()?;
     modules.set_item("rustpower.solver", &solver_module)?;
