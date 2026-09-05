@@ -4,6 +4,8 @@ Official Performance Benchmark: Pandapower vs LightSim2Grid vs RustPower
 
 import time
 import warnings
+warnings.filterwarnings('ignore')
+
 import numpy as np
 import pandapower as pp
 import pandapower.networks as pn
@@ -11,8 +13,6 @@ from lightsim2grid.gridmodel import init_from_pandapower
 from lightsim2grid.solver import KLUSolver, AlgorithmType
 import rustpower
 import lightsim2grid
-
-warnings.filterwarnings('ignore')
 
 TOL = 1e-6
 MAX_ITER = 20
@@ -55,7 +55,7 @@ def run_benchmark(net_name, net):
     # LS2G Pure Solver
     ls_model = init_from_pandapower(net)
     ls_model.change_solver(AlgorithmType.NRSing_KLU)
-    ls_model.ac_pf(V_init_flat.copy(), MAX_ITER, TOL) 
+    ls_model.ac_pf(V_init_flat, MAX_ITER, TOL) 
 
     Ybus = ls_model.get_Ybus_solver()
     Sbus = ls_model.get_Sbus_solver()
@@ -66,13 +66,13 @@ def run_benchmark(net_name, net):
     ls_solver = KLUSolver()
 
     # Warmup
-    ls_solver.compute_pf(Ybus, V_init_compensated.copy(), Sbus, slack_ids, slack_weights, pv, pq, MAX_ITER, TOL)
+    ls_solver.compute_pf(Ybus, V_init_compensated, Sbus, slack_ids, slack_weights, pv, pq, MAX_ITER, TOL)
     ls2g_iters = ls_solver.get_nb_iter()
 
     times_ls2g_cold = []
     for _ in range(NUM_TRIALS_COLD):
         start = time.perf_counter()
-        ls_solver.compute_pf(Ybus, V_init_compensated.copy(), Sbus, slack_ids, slack_weights, pv, pq, MAX_ITER, TOL)
+        ls_solver.compute_pf(Ybus, V_init_compensated, Sbus, slack_ids, slack_weights, pv, pq, MAX_ITER, TOL)
         times_ls2g_cold.append(time.perf_counter() - start)
     ls2g_cold_ms = np.mean(times_ls2g_cold) * 1000
 
@@ -98,7 +98,7 @@ def run_benchmark(net_name, net):
         Ybus_csr.indices,
         Ybus_csr.data,
         Sbus_pp,
-        V_init_compensated.copy(),
+        V_init_compensated,
         p_vec,
         p_inv,
         len(pv_idx),
@@ -112,18 +112,19 @@ def run_benchmark(net_name, net):
     times_rp_cold = []
     for _ in range(NUM_TRIALS_COLD):
         s = NewtonSolver()
+        start = time.perf_counter()
         s.setup_context(
             Ybus_csr.indptr,
             Ybus_csr.indices,
             Ybus_csr.data,
             Sbus_pp,
-            V_init_compensated.copy(),
+            V_init_compensated,
             p_vec,
             p_inv,
             len(pv_idx),
             len(pq_idx),
         )
-        start = time.perf_counter()
+   
         s.solve(MAX_ITER, TOL)
         # Extract post-processed bus powers including slack bus
         _ = s.get_scalc()
@@ -156,11 +157,11 @@ def run_benchmark(net_name, net):
     # 2. LightSim2Grid (C++ GridModel: AC Solve + Branch Flows)
     ls_model = init_from_pandapower(net)
     ls_model.change_solver(AlgorithmType.NRSing_KLU)
-    ls_model.ac_pf(V_init_flat.copy(), MAX_ITER, TOL) # Warmup
+    ls_model.ac_pf(V_init_flat, MAX_ITER, TOL) # Warmup
     times_ls2g_hot = []
     for _ in range(NUM_TRIALS_HOT):
         start = time.perf_counter()
-        ls_model.ac_pf(V_init_flat.copy(), MAX_ITER, TOL)
+        ls_model.ac_pf(V_init_flat, MAX_ITER, TOL)
         times_ls2g_hot.append(time.perf_counter() - start)
     ls2g_hot_ms = np.mean(times_ls2g_hot) * 1000
     ls2g_hot_min = np.min(times_ls2g_hot) * 1000
@@ -168,33 +169,35 @@ def run_benchmark(net_name, net):
 
     # 3. RustPower NewtonSolver (Pure Numerical Core)
     rp_solver.enable_cache(True)
+    rp_solver.set_v_init(V_init_compensated)
     rp_solver.solve(MAX_ITER, TOL) # Warmup
     times_rp_hot = []
     for _ in range(NUM_TRIALS_HOT):
         start = time.perf_counter()
+        rp_solver.set_v_init(V_init_compensated)
         rp_solver.solve(MAX_ITER, TOL)
         _ = rp_solver.get_scalc()
         times_rp_hot.append(time.perf_counter() - start)
     rp_hot_ms = np.mean(times_rp_hot) * 1000
     rp_hot_min = np.min(times_rp_hot) * 1000
+    rp_hot_max = np.max(times_rp_hot) * 1000
     rp_hot_iters = rp_solver.get_iterations()
 
     # 4. RustPower PowerGrid (Full End-to-End GridModel: AC Solve + Vectorized Post-Processing)
     rp_grid = rustpower.PowerGrid.from_pandapower(net)
     rp_grid.enable_cache(True)
     # Warmup and explicit post-processing (primes cache, bus_calc, and ECS tables)
-    rp_grid.solve(V_init_flat.copy())
+    rp_grid.solve(V_init_flat)
     rp_grid.post_process()
 
     times_rp_grid_hot = []
     for _ in range(NUM_TRIALS_HOT):
         start = time.perf_counter()
-        r = rp_grid.solve(V_init_flat.copy())
+        r = rp_grid.solve(V_init_flat)
         rp_grid.post_process()
         times_rp_grid_hot.append(time.perf_counter() - start)
     pp_hot_max = np.max(times_pp_hot) * 1000
     ls2g_hot_max = np.max(times_ls2g_hot) * 1000
-    rp_hot_max = np.max(times_rp_hot) * 1000
     rp_grid_hot_ms = np.mean(times_rp_grid_hot) * 1000
     rp_grid_hot_min = np.min(times_rp_grid_hot) * 1000
     rp_grid_hot_max = np.max(times_rp_grid_hot) * 1000

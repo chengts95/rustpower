@@ -1,287 +1,404 @@
-#[cfg(feature = "python")]
-use crate::basic::ecs::elements::PFCommonData;
-#[cfg(feature = "python")]
-use crate::basic::ecs::network::PowerFlowSolver;
-#[cfg(feature = "python")]
-use crate::basic::ecs::powerflow::systems::{PowerFlowConfig, PowerFlowMat, PowerFlowResult};
-#[cfg(feature = "python")]
-use bevy_app::App;
-#[cfg(feature = "python")]
-use nalgebra::DVector;
+//! Python bindings for the native Newton-Raphson power flow solver.
+
 #[cfg(feature = "python")]
 use numpy::{IntoPyArray, PyArrayMethods};
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 
-/// Low-level Newton-Raphson power flow solver.
+#[cfg(feature = "python")]
+fn extract_complex(obj: &Bound<'_, PyAny>) -> PyResult<num_complex::Complex64> {
+    if let Ok(c) = obj.downcast::<pyo3::types::PyComplex>() {
+        Ok(num_complex::Complex64::new(c.real(), c.imag()))
+    } else if let Ok(f) = obj.extract::<f64>() {
+        Ok(num_complex::Complex64::new(f, 0.0))
+    } else {
+        Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+            "Expected complex or float value",
+        ))
+    }
+}
+
+/// Unified index extraction supporting int32, int64, usize numpy arrays, and Python lists.
+#[cfg(feature = "python")]
+fn extract_indices(obj: &Bound<'_, PyAny>) -> PyResult<Vec<usize>> {
+    if let Ok(arr) = obj.downcast::<numpy::PyArray1<i64>>() {
+        let ro = arr.readonly();
+        Ok(ro.as_slice()?.iter().map(|&x| x as usize).collect())
+    } else if let Ok(arr) = obj.downcast::<numpy::PyArray1<i32>>() {
+        let ro = arr.readonly();
+        Ok(ro.as_slice()?.iter().map(|&x| x as usize).collect())
+    } else if let Ok(arr) = obj.downcast::<numpy::PyArray1<usize>>() {
+        let ro = arr.readonly();
+        Ok(ro.as_slice()?.to_vec())
+    } else if let Ok(list) = obj.extract::<Vec<usize>>() {
+        Ok(list)
+    } else {
+        Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+            "Expected 1D integer array or list of indices (int32, int64, or usize)",
+        ))
+    }
+}
+
+/// Zero-copy (when possible) access to 1D complex or float arrays.
+#[cfg(feature = "python")]
+fn with_complex_slice<R>(
+    obj: &Bound<'_, PyAny>,
+    f: impl FnOnce(&[num_complex::Complex64]) -> PyResult<R>,
+) -> PyResult<R> {
+    if let Ok(arr) = obj.downcast::<numpy::PyArray1<num_complex::Complex64>>() {
+        let ro = arr.readonly();
+        f(ro.as_slice()?)
+    } else if let Ok(arr) = obj.downcast::<numpy::PyArray1<f64>>() {
+        let ro = arr.readonly();
+        let vec: Vec<num_complex::Complex64> = ro
+            .as_slice()?
+            .iter()
+            .map(|&x| num_complex::Complex64::new(x, 0.0))
+            .collect();
+        f(&vec)
+    } else if let Ok(seq) = obj.downcast::<pyo3::types::PySequence>() {
+        let len = seq.len()?;
+        let mut vec = Vec::with_capacity(len);
+        for i in 0..len {
+            let item = seq.get_item(i)?;
+            vec.push(extract_complex(&item)?);
+        }
+        f(&vec)
+    } else {
+        Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+            "Expected 1D complex or float array",
+        ))
+    }
+}
+
+#[cfg(feature = "python")]
+fn to_py_err<E: std::fmt::Display>(e: E) -> PyErr {
+    let msg = e.to_string();
+    if msg.contains("out of bounds") || msg.contains("out of range") {
+        PyErr::new::<pyo3::exceptions::PyIndexError, _>(msg)
+    } else if msg.contains("mismatch") {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(msg)
+    } else {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(msg)
+    }
+}
+use  crate::native::solver::NewtonSolver as NativeNewtonSolver;
+/// High-performance Newton-Raphson power flow solver.
 ///
-/// This class provides direct access to the underlying solver logic, bypassing
-/// the PowerGrid high-level abstraction. It expects pre-built Y-bus matrices
-/// and handles permutations manually.
+/// Direct wrapper around native Rust `crate::solver::NewtonSolver`.
 #[cfg(feature = "python")]
 #[pyclass(unsendable)]
 pub struct NewtonSolver {
-    app: App,
-    p_vec: Vec<usize>,
-    p_inv: Vec<usize>,
+    inner: NativeNewtonSolver,
 }
 
 #[cfg(feature = "python")]
 #[pymethods]
 impl NewtonSolver {
-    /// Create a new NewtonSolver instance with default config.
     #[new]
     fn new() -> Self {
-        let mut app = App::new();
-        app.insert_resource(PowerFlowSolver::default());
-        app.insert_resource(PFCommonData {
-            sbase: 100.0,
-            f_hz: 50.0,
-            wbase: 2.0 * std::f64::consts::PI * 50.0,
-        });
-        app.insert_resource(PowerFlowConfig {
-            max_it: Some(10),
-            tol: Some(1e-8),
-        });
-
         Self {
-            app,
-            p_vec: Vec::new(),
-            p_inv: Vec::new(),
+            inner: NativeNewtonSolver::new(),
         }
     }
 
-    /// Optimized context setup using the transpose trick.
-    /// Converts the provided Y-bus matrix from CSR to CSC format, applies the given permutations,
+    /// Setup solver context by specifying node type partitions directly.
     ///
-    /// y_indptr, y_indices, y_data: CSR representation of the Y-bus matrix.
-    /// s_bus: Complex power injections.
-    /// v_init: Initial voltage guess.
-    /// p_vec, p_inv: Permutation vectors.
-    /// npv, npq: Number of PV and PQ buses.
+    /// Accepts integer arrays (int32/int64/usize or list) and complex arrays (complex128/float64).
+    /// Automatically concatenates `[pq, pv, slack_bus]` to construct the `[PQ | PV | Slack]`
+    /// solver permutation vector, builds inverse mapping, and infers `npv` and `npq`.
+    #[pyo3(signature = (y_indptr, y_indices, y_data, s_bus, v_init, pq, pv, slack_bus))]
+    fn setup_from_nodes(
+        &mut self,
+        y_indptr: &Bound<'_, PyAny>,
+        y_indices: &Bound<'_, PyAny>,
+        y_data: &Bound<'_, PyAny>,
+        s_bus: &Bound<'_, PyAny>,
+        v_init: &Bound<'_, PyAny>,
+        pq: &Bound<'_, PyAny>,
+        pv: &Bound<'_, PyAny>,
+        slack_bus: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let indptr = extract_indices(y_indptr)?;
+        let indices = extract_indices(y_indices)?;
+        let pq_vec = extract_indices(pq)?;
+        let pv_vec = extract_indices(pv)?;
+        let slack_vec = extract_indices(slack_bus)?;
+
+        with_complex_slice(y_data, |data| {
+            with_complex_slice(s_bus, |s_raw| {
+                with_complex_slice(v_init, |v_raw| {
+                    self.inner
+                        .setup_from_nodes(
+                            v_raw.len(),
+                            &indptr,
+                            &indices,
+                            data,
+                            s_raw,
+                            v_raw,
+                            &pq_vec,
+                            &pv_vec,
+                            &slack_vec,
+                        )
+                        .map_err(to_py_err)
+                })
+            })
+        })
+    }
+
+    /// Setup solver context using explicitly provided permutation vectors.
+    ///
+    /// Accepts integer arrays (int32/int64/usize or list) and complex arrays (complex128/float64).
     #[pyo3(signature = (y_indptr, y_indices, y_data, s_bus, v_init, p_vec_in, p_inv_in, npv, npq))]
     fn setup_context(
         &mut self,
-        y_indptr: Bound<'_, numpy::PyArray1<i32>>,
-        y_indices: Bound<'_, numpy::PyArray1<i32>>,
-        y_data: Bound<'_, numpy::PyArray1<num_complex::Complex64>>,
-        s_bus: Bound<'_, numpy::PyArray1<num_complex::Complex64>>,
-        v_init: Bound<'_, numpy::PyArray1<num_complex::Complex64>>,
-        p_vec_in: Bound<'_, numpy::PyArray1<i64>>,
-        p_inv_in: Bound<'_, numpy::PyArray1<i64>>,
+        y_indptr: &Bound<'_, PyAny>,
+        y_indices: &Bound<'_, PyAny>,
+        y_data: &Bound<'_, PyAny>,
+        s_bus: &Bound<'_, PyAny>,
+        v_init: &Bound<'_, PyAny>,
+        p_vec_in: &Bound<'_, PyAny>,
+        p_inv_in: &Bound<'_, PyAny>,
         npv: usize,
         npq: usize,
     ) -> PyResult<()> {
-        let n = v_init.len()?;
+        let indptr = extract_indices(y_indptr)?;
+        let indices = extract_indices(y_indices)?;
+        let p_vec = extract_indices(p_vec_in)?;
+        let p_inv = extract_indices(p_inv_in)?;
 
-        let p_vec: Vec<usize> = p_vec_in
-            .readonly()
-            .as_slice()?
-            .iter()
-            .map(|&x| x as usize)
-            .collect();
-        let p_inv: Vec<usize> = p_inv_in
-            .readonly()
-            .as_slice()?
-            .iter()
-            .map(|&x| x as usize)
-            .collect();
+        with_complex_slice(y_data, |data| {
+            with_complex_slice(s_bus, |s_raw| {
+                with_complex_slice(v_init, |v_raw| {
+                    // p_vec is from_perm (new -> old), p_inv is to_perm (old -> new)
+                    self.inner
+                        .setup_context(
+                            v_raw.len(),
+                            &indptr,
+                            &indices,
+                            data,
+                            s_raw,
+                            v_raw,
+                            p_inv,
+                            p_vec,
+                            npv,
+                            npq,
+                        )
+                        .map_err(to_py_err)
+                })
+            })
+        })
+    }
 
-        let indptr: Vec<usize> = y_indptr
-            .readonly()
-            .as_slice()?
-            .iter()
-            .map(|&x| x as usize)
-            .collect();
-        let indices: Vec<usize> = y_indices
-            .readonly()
-            .as_slice()?
-            .iter()
-            .map(|&x| x as usize)
-            .collect();
-        let y_data_ro = y_data.readonly();
-        let data = y_data_ro.as_slice()?;
+    /// Update the entire initial voltage vector (in original bus order).
+    fn set_v_init(&mut self, v_init: &Bound<'_, PyAny>) -> PyResult<()> {
+        with_complex_slice(v_init, |v_slice| {
+            self.inner.set_v_init(v_slice).map_err(to_py_err)
+        })
+    }
 
-        // Use the ultra-fast O(NNZ) sort-free permutation utility
-        let y_perm_csc = crate::basic::sparse::utils::permute_csr_to_csc_sort_free(
-            n, &indptr, &indices, data, &p_vec, &p_inv,
-        );
+    /// Update initial voltage for a single bus (in original bus index).
+    fn set_v_init_at(&mut self, bus: usize, v: &Bound<'_, PyAny>) -> PyResult<()> {
+        let val = extract_complex(v)?;
+        self.inner.set_v_init_at(bus, val).map_err(to_py_err)
+    }
 
-        let s_raw = DVector::from_vec(s_bus.readonly().as_slice()?.to_vec());
-        let v_raw = DVector::from_vec(v_init.readonly().as_slice()?.to_vec());
+    /// Batch update initial voltage for specified bus indices.
+    fn update_v_init_batch(
+        &mut self,
+        bus_indices: &Bound<'_, PyAny>,
+        v_values: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let buses = extract_indices(bus_indices)?;
+        with_complex_slice(v_values, |values| {
+            self.inner.update_v_init_batch(&buses, values).map_err(to_py_err)
+        })
+    }
 
-        // Permute Vectors
-        let mut s_perm = DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
-        let mut v_perm = DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
-        for (i, &old_idx) in p_vec.iter().enumerate() {
-            s_perm[i] = s_raw[old_idx];
-            v_perm[i] = v_raw[old_idx];
-        }
+    /// Initial voltage vector in original bus order.
+    #[getter]
+    fn v_init<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
+        let v = self.inner.v_init().map_err(to_py_err)?;
+        Ok(v.into_pyarray(py))
+    }
 
-        self.app.insert_resource(PowerFlowMat {
-            y_bus: y_perm_csc,
-            s_bus: s_perm,
-            v_bus_init: v_perm,
-            npv,
-            npq,
-            to_perm: p_vec.clone(),
-            from_perm: p_inv.clone(),
-        });
+    #[setter]
+    fn set_v_init_property(&mut self, v_init: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.set_v_init(v_init)
+    }
 
-        self.p_vec = p_vec;
-        self.p_inv = p_inv;
-        Ok(())
+    /// Update the entire bus power injection vector Sbus (in original bus order).
+    fn set_s_bus(&mut self, s_bus: &Bound<'_, PyAny>) -> PyResult<()> {
+        with_complex_slice(s_bus, |s_slice| {
+            self.inner.set_s_bus(s_slice).map_err(to_py_err)
+        })
+    }
+
+    /// Update Sbus injection for a single bus (in original bus index).
+    fn set_s_bus_at(&mut self, bus: usize, s: &Bound<'_, PyAny>) -> PyResult<()> {
+        let val = extract_complex(s)?;
+        self.inner.set_s_bus_at(bus, val).map_err(to_py_err)
+    }
+
+    /// Batch update Sbus injections for specified bus indices.
+    fn update_s_bus_batch(
+        &mut self,
+        bus_indices: &Bound<'_, PyAny>,
+        s_values: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let buses = extract_indices(bus_indices)?;
+        with_complex_slice(s_values, |values| {
+            self.inner.update_s_bus_batch(&buses, values).map_err(to_py_err)
+        })
+    }
+
+    /// Bus power injection vector Sbus in original bus order.
+    #[getter]
+    fn s_bus<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
+        let s = self.inner.s_bus().map_err(to_py_err)?;
+        Ok(s.into_pyarray(py))
+    }
+
+    #[setter]
+    fn set_s_bus_property(&mut self, s_bus: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.set_s_bus(s_bus)
     }
 
     /// Enable or disable Jacobian caching for this solver.
-    /// When enabled, the solver reuses the symbolic factorization and matrix patterns
-    /// across multiple solves, significantly speeding up consecutive computations on
-    /// the same network structure.
     #[pyo3(signature = (enable=true))]
     fn enable_cache(&mut self, enable: bool) -> PyResult<()> {
-        let world = self.app.world_mut();
-        if enable {
-            if !world.contains_resource::<crate::basic::newtonpf::NewtonCache>() {
-                world.insert_resource(crate::basic::newtonpf::NewtonCache::default());
-            }
-        } else {
-            world.remove_resource::<crate::basic::newtonpf::NewtonCache>();
-        }
+        self.inner.enable_cache(enable);
+        Ok(())
+    }
+
+    /// Reset internal cache and linear solver state.
+    fn reset_cache(&mut self) -> PyResult<()> {
+        self.inner.reset_cache();
         Ok(())
     }
 
     /// Run the solver. Returns True if converged.
-    #[pyo3(signature = (max_iter=10, tol=1e-6))]
-    fn solve(&mut self, max_iter: usize, tol: f64) -> PyResult<bool> {
-        use bevy_ecs::prelude::*;
-        use bevy_ecs::system::RunSystemOnce;
+    /// If return_residual is true, returns (converged, residual).
+    #[pyo3(signature = (max_iter=10, tol=1e-6, return_residual=false))]
+    fn solve<'py>(
+        &mut self,
+        py: Python<'py>,
+        max_iter: usize,
+        tol: f64,
+        return_residual: bool,
+    ) -> PyResult<PyObject> {
+        let (converged, residual) = self.inner.solve(max_iter, tol).map_err(to_py_err)?;
+        if return_residual {
+            Ok((converged, residual).into_pyobject(py)?.to_owned().into_any().unbind())
+        } else {
+            Ok(converged.into_pyobject(py)?.to_owned().into_any().unbind())
+        }
+    }
 
-        // Update the resource
-        let mut cfg = self
-            .app
-            .world_mut()
-            .get_resource_or_insert_with(|| PowerFlowConfig::default());
-        cfg.max_it = Some(max_iter);
-        cfg.tol = Some(tol);
+    /// Maximum power mismatch norm ||F||_inf after the last solve.
+    fn get_residual(&self) -> PyResult<f64> {
+        Ok(self.inner.residual())
+    }
 
-        let converged = self
-            .app
-            .world_mut()
-            .run_system_once(
-                |mat: ResMut<PowerFlowMat>,
-                 mut solver_res: ResMut<PowerFlowSolver>,
-                 cfg: Res<PowerFlowConfig>,
-                 mut cache: Option<ResMut<crate::basic::newtonpf::NewtonCache>>,
-                 mut cmd: Commands| {
-                    let mat_ref = mat.into_inner();
-                    let result = crate::basic::newton_pf(
-                        &mat_ref.y_bus,
-                        &mat_ref.s_bus,
-                        &mut mat_ref.v_bus_init,
-                        mat_ref.npv,
-                        mat_ref.npq,
-                        cfg.tol,
-                        cfg.max_it,
-                        &mut solver_res.solver,
-                        cache.as_deref_mut(),
-                    );
+    /// Maximum power mismatch norm ||F||_inf after the last solve.
+    #[getter]
+    fn residual_norm(&self) -> PyResult<f64> {
+        Ok(self.inner.residual())
+    }
 
-                    let (converged, its, v_final) = match result {
-                        Ok((v, i)) => (true, i, v),
-                        Err((_err, v, i)) => (false, i, v),
-                    };
+    /// Get whether the last solve converged.
+    #[getter]
+    fn converged(&self) -> PyResult<bool> {
+        self.inner.converged().map_err(to_py_err)
+    }
 
-                    cmd.insert_resource(PowerFlowResult {
-                        v: v_final,
-                        iterations: its,
-                        converged,
-                    });
-
-                    converged
-                },
-            )
-            .map_err(|_| {
-                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    "Solver system failed or resources missing",
-                )
-            })?;
-
-        Ok(converged)
+    /// Get the total number of buses in the network.
+    #[getter]
+    fn n_buses(&self) -> PyResult<usize> {
+        self.inner.n_buses().map_err(to_py_err)
     }
 
     /// Get the final complex bus voltages in original order.
-    fn get_voltage<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
-        let world = self.app.world();
-        let res = world.get_resource::<PowerFlowResult>().ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Solve has not been run")
-        })?;
+    fn get_voltage<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
+        let v = self.inner.voltage().map_err(to_py_err)?;
+        Ok(v.into_pyarray(py))
+    }
 
-        let n = res.v.len();
-        let mut v_final = vec![num_complex::Complex64::new(0.0, 0.0); n];
-        for (i, &val) in res.v.as_slice().iter().enumerate() {
-            // Restore original order using p_vec mapping
-            // Since v_perm[i] = v_orig[p_vec[i]]
-            v_final[self.p_vec[i]] = val;
-        }
+    /// Get the final voltage magnitudes (p.u.) in original bus order.
+    fn get_voltage_magnitude<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+        let vm = self.inner.vm().map_err(to_py_err)?;
+        Ok(vm.into_pyarray(py))
+    }
 
-        Ok(v_final.into_pyarray(py))
+    /// Voltage magnitude vector in original bus order.
+    #[getter]
+    fn vm<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+        self.get_voltage_magnitude(py)
+    }
+
+    /// Get the final voltage angles in original bus order.
+    #[pyo3(signature = (deg=false))]
+    fn get_voltage_angle<'py>(&self, py: Python<'py>, deg: bool) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+        let va = self.inner.va(deg).map_err(to_py_err)?;
+        Ok(va.into_pyarray(py))
+    }
+
+    /// Voltage angle vector in radians in original bus order.
+    #[getter]
+    fn va<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+        self.get_voltage_angle(py, false)
+    }
+
+    /// Voltage angle vector in degrees in original bus order.
+    #[getter]
+    fn va_deg<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+        self.get_voltage_angle(py, true)
     }
 
     /// Get the number of iterations taken by the solver.
     fn get_iterations(&self) -> PyResult<usize> {
-        let world = self.app.world();
-        let res = world.get_resource::<PowerFlowResult>().ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Solve has not been run")
-        })?;
-        Ok(res.iterations)
+        self.inner.iterations().map_err(to_py_err)
+    }
+
+    /// Number of iterations taken by the solver.
+    #[getter(iterations)]
+    fn py_iterations(&self) -> PyResult<usize> {
+        self.inner.iterations().map_err(to_py_err)
     }
 
     /// Get the calculated bus power injection vector (S_calc = V * (Ybus * V)^*) in original bus order.
-    /// If NewtonCache is enabled and populated, this extracts S_calc directly without matrix multiplication.
-    /// If cache is empty or not enabled, it performs one matrix multiplication and vector conjugate product.
-    fn get_scalc<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
-        let world = self.app.world();
-        let res = world.get_resource::<PowerFlowResult>().ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Solve has not been run")
-        })?;
-        let mat = world.get_resource::<PowerFlowMat>().ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("PowerFlowMat not initialized")
-        })?;
+    fn get_scalc<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
+        let s = self.inner.scalc().map_err(to_py_err)?;
+        Ok(s.into_pyarray(py))
+    }
 
-        let n = res.v.len();
-        let mut s_orig = vec![num_complex::Complex64::new(0.0, 0.0); n];
+    /// Calculated complex bus power injections S_calc in original bus order.
+    #[getter(scalc)]
+    fn py_scalc<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
+        self.get_scalc(py)
+    }
 
-        if let Some(cache) = world.get_resource::<crate::basic::newtonpf::NewtonCache>() {
-            if cache.s_calc.len() == n {
-                for (i, &val) in cache.s_calc.as_slice().iter().enumerate() {
-                    s_orig[self.p_vec[i]] = val;
-                }
-                return Ok(s_orig.into_pyarray(py));
-            }
-        }
+    /// Get calculated active power injection P_calc in original bus order.
+    fn get_p_injections<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+        let p = self.inner.p_calc().map_err(to_py_err)?;
+        Ok(p.into_pyarray(py))
+    }
 
-        // Fallback: If cache is empty, do one csc_matvec_and_scalc
-        let mut ibus = vec![num_complex::Complex64::new(0.0, 0.0); n];
-        let mut scalc_perm = vec![num_complex::Complex64::new(0.0, 0.0); n];
-        crate::basic::newtonpf::csc_matvec_and_scalc(
-            mat.y_bus.col_offsets(),
-            mat.y_bus.row_indices(),
-            mat.y_bus.values(),
-            res.v.as_slice(),
-            &mut ibus,
-            &mut scalc_perm,
-        );
+    /// Calculated active power injection P_calc in original bus order.
+    #[getter]
+    fn p_calc<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+        self.get_p_injections(py)
+    }
 
-        for (i, &val) in scalc_perm.iter().enumerate() {
-            s_orig[self.p_vec[i]] = val;
-        }
+    /// Get calculated reactive power injection Q_calc in original bus order.
+    fn get_q_injections<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+        let q = self.inner.q_calc().map_err(to_py_err)?;
+        Ok(q.into_pyarray(py))
+    }
 
-        Ok(s_orig.into_pyarray(py))
+    /// Calculated reactive power injection Q_calc in original bus order.
+    #[getter]
+    fn q_calc<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+        self.get_q_injections(py)
     }
 }
