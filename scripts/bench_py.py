@@ -167,8 +167,7 @@ def run_benchmark(net_name, net):
     ls2g_hot_min = np.min(times_ls2g_hot) * 1000
     ls2g_hot_iters = ls_model.get_solver().get_nb_iter()
 
-    # 3. RustPower NewtonSolver (Pure Numerical Core)
-    rp_solver.enable_cache(True)
+    # 3. RustPower NewtonSolver (Pure Numerical Core, cache is always enabled by default)
     rp_solver.set_v_init(V_init_compensated)
     rp_solver.solve(MAX_ITER, TOL) # Warmup
     times_rp_hot = []

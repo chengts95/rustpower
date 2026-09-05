@@ -13,25 +13,33 @@
 - **Native ECS data schema (from 0.3.0)**  
   Since version `0.3.0`, RustPower includes native ECS component definitions under `elements/`, allowing full ECS-native modeling without reliance on external Pandapower imports.
 
-- **High-Performance Python Bindings (from 0.5.0)**
-  A transactional Python API allows seamless integration with the Python data science ecosystem (Pandas, NumPy) while maintaining Rust's performance.
+- **High-Performance Python Bindings (from 0.5.0, enhanced in 0.5.2)**  
+  A transactional Python API allows seamless integration with the Python data science ecosystem (Pandas, NumPy) while maintaining Rust's performance. Supports DCPF warm starts, and matrix caching.
 
-- **Composable file format via `bevy_archive`**  
-  RustPower introduces a plugin-based snapshot and archive system built on [`bevy_archive`](https://github.com/chengts95/bevy_archive), enabling modular, component-level persistence and state restoration.
+- **Composable file format via `bevy_archive` (0.5.0)**  
+  RustPower introduces a plugin-based snapshot and archive system built on [`bevy_archive`](https://github.com/chengts95/bevy_archive), enabling modular, component-level persistence and state restoration via Apache Arrow / Parquet, TOML, and CSV.
 
 - **Strictly data-driven design philosophy**  
   The framework follows the principles of data-oriented programming. System behavior is not hardcoded but driven entirely by data presence and scheduling. All algorithms are implemented as composable plugins.
 
 ## 🔌 Built-in Plugin System
 
-- **Base plugin set**
-  - Power flow solver
-  - Structure initialization
-  - Node tagging and matrix builder
-- **Optional plugin**
-  - Q-limit adjustment (`QLimPlugin`) that dynamically changes PV→PQ bus types during iteration
-- **Time series plugin**
-  - Provides scheduled actions, time-stepping, and state recording using ECS resources and systems
+- **Base plugin set (`BasePFPlugin`)**
+  - Structure initialization & topological classification
+  - Node tagging and CSC matrix builder
+  - Newton-Raphson power flow solver
+- **DCPF initialization plugin (`DcpfNewtonPfPlugin`)**
+  - Calculates DC power flow linear solution to initialize voltage angles, improving convergence on stressed networks.
+- **Iwamoto optimal multiplier plugin (`IwamotoPlugin`)**
+  - Deceleration step-size multiplier solver for ill-conditioned and heavily loaded power systems.
+- **Q-limit adjustment plugin (`QLimPlugin`)**
+  - Automatically checks and enforces generator reactive power limits by dynamically switching PV→PQ bus types during iteration.
+- **Switch plugins (`SwitchPluginTypeA`, `SwitchPluginTypeB`)**
+  - Node-merging or admittance-based modeling of breaker and switch elements.
+- **Time series plugin (`TimeSeriesDefaultPlugins`)**
+  - Provides scheduled actions, time-stepping, and state recording using ECS resources and systems.
+- **Archive plugin (`ArchivePlugin`)**
+  - Apache Arrow and Parquet snapshot persistence.
 
 ## 💡 Philosophy
 
@@ -125,12 +133,35 @@ fn main() {
 }
 ```
 
+### ⚡ DCPF-Initialized Power Flow
+
+For stressed or large networks where flat-start ($V_i = 1.0 \angle 0^\circ$) struggles or takes many iterations, `DcpfNewtonPfPlugin` solves a DC power flow linear system first to obtain realistic initial phase angles:
+
+```rust,ignore
+use rustpower::prelude::{
+    default_app,
+    ecs::dcpf::{DcpfNewtonPfPlugin, DcpfSolverActive},
+    PPNetwork, PowerFlowResult,
+};
+
+let mut app = default_app();
+app.add_plugins(DcpfNewtonPfPlugin);
+app.world_mut().insert_resource(DcpfSolverActive);
+
+app.world_mut().insert_resource(PPNetwork(net));
+app.update();
+```
+
+
+
 ---
 
 #### 💡 Extending the Simulation with Custom Plugins
 
 RustPower supports injecting additional numerical logic through plugins:
 
+* **`DcpfNewtonPfPlugin`** performs DC power flow angle pre-initialization
+* **`IwamotoPlugin`** provides optimal multiplier step-size deceleration
 * **`QLimPlugin`** automatically applies generator Q-limit clamping during iteration
 * Additional plugins can be written to:
 
