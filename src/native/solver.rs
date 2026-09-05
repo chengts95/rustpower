@@ -8,7 +8,7 @@ use num_complex::Complex64;
 
 use crate::basic::ecs::powerflow::systems::{PowerFlowMat, PowerFlowResult};
 use crate::basic::newton_pf;
-use crate::basic::newtonpf::{csc_matvec_and_scalc, fill_f_from_scalc, NewtonCache};
+use crate::basic::newtonpf::{csc_matvec_and_scalc, NewtonCache};
 use crate::basic::solver::{DefaultSolver, Solve};
 use crate::basic::sparse::utils::permute_csr_to_csc_sort_free;
 
@@ -21,8 +21,8 @@ pub struct NewtonSolver {
     pub mat: Option<PowerFlowMat>,
     /// Sparse linear solver instance (e.g. KLU or Faer LU).
     pub linear_solver: DefaultSolver,
-    /// Optional cache for Newton Jacobian sparsity pattern, values, and buffers.
-    pub cache: Option<NewtonCache>,
+    /// Newton solver cache holding Jacobian sparsity pattern, values, and buffers.
+    pub cache: NewtonCache,
     /// Power flow calculation result (final voltage, iterations, convergence status).
     pub result: Option<PowerFlowResult>,
     /// Maximum power mismatch norm ||F||_inf after the last solve.
@@ -35,13 +35,16 @@ impl Default for NewtonSolver {
     }
 }
 
+// ============================================================================
+// 1. 状态管理与初始化配置 (State Management & Context Initialization)
+// ============================================================================
 impl NewtonSolver {
     /// Create a new `NewtonSolver` instance.
     pub fn new() -> Self {
         Self {
             mat: None,
             linear_solver: DefaultSolver::default(),
-            cache: None,
+            cache: NewtonCache::default(),
             result: None,
             last_residual: 0.0,
         }
@@ -68,7 +71,7 @@ impl NewtonSolver {
     pub fn result(&self) -> Result<&PowerFlowResult, &'static str> {
         self.result
             .as_ref()
-            .ok_or("Solve has not been run yet")
+            .ok_or("Solve has not been run or did not converge; call solve first")
     }
 
     /// Internal setup worker.
@@ -98,8 +101,8 @@ impl NewtonSolver {
             v_perm[new_idx] = v_raw[old_idx];
         }
 
-        // Clean up stale cache and reset linear solver factorization
-        self.cache = None;
+        // Invalidate cached Jacobian pattern and reset linear solver factorization for new network
+        self.cache.j_pattern = None;
         self.linear_solver.reset();
         self.result = None;
         self.last_residual = 0.0;
@@ -314,24 +317,54 @@ impl NewtonSolver {
         Ok(s_orig)
     }
 
-    /// Enable or disable Jacobian caching.
-    pub fn enable_cache(&mut self, enable: bool) {
-        if enable {
-            if self.cache.is_none() {
-                self.cache = Some(NewtonCache::default());
-            }
-        } else {
-            self.cache = None;
-        }
-    }
-
-    /// Explicitly reset cache and linear solver factorizations.
-    pub fn reset_cache(&mut self) {
-        self.cache = None;
+    /// Explicitly clear cached Jacobian pattern, linear solver factorizations, and Newton buffers.
+    pub fn clear_cache(&mut self) {
+        self.cache.j_pattern = None;
         self.linear_solver.reset();
         self.last_residual = 0.0;
     }
 
+    /// Alias for `clear_cache`.
+    #[inline(always)]
+    pub fn reset_cache(&mut self) {
+        self.clear_cache();
+    }
+
+    /// Permutation mapping: original bus index -> permuted solver index (`p_inv`).
+    #[inline(always)]
+    pub fn to_perm(&self) -> Result<&[usize], &'static str> {
+        Ok(&self.mat()?.to_perm)
+    }
+
+    /// Inverse permutation mapping: permuted solver index -> original bus index (`p_vec`).
+    #[inline(always)]
+    pub fn from_perm(&self) -> Result<&[usize], &'static str> {
+        Ok(&self.mat()?.from_perm)
+    }
+
+    /// Number of PV buses configured in the solver.
+    #[inline(always)]
+    pub fn npv(&self) -> Result<usize, &'static str> {
+        Ok(self.mat()?.npv)
+    }
+
+    /// Number of PQ buses configured in the solver.
+    #[inline(always)]
+    pub fn npq(&self) -> Result<usize, &'static str> {
+        Ok(self.mat()?.npq)
+    }
+
+    /// Total number of buses configured in the solver.
+    #[inline(always)]
+    pub fn n_buses(&self) -> Result<usize, &'static str> {
+        Ok(self.mat()?.to_perm.len())
+    }
+}
+
+// ============================================================================
+// 2. 核心数值求解 (Core Numerical Solve)
+// ============================================================================
+impl NewtonSolver {
     /// Run the Newton-Raphson power flow calculation.
     ///
     /// Direct mathematical execution using [`PowerFlowMat`].
@@ -351,7 +384,7 @@ impl NewtonSolver {
             Some(tol),
             Some(max_iter),
             &mut self.linear_solver,
-            self.cache.as_mut(),
+            Some(&mut self.cache),
         );
 
         let (converged, its, v_final) = match res {
@@ -359,33 +392,11 @@ impl NewtonSolver {
             Err((_err, v, i)) => (false, i, v),
         };
 
-        // Compute residual norm cheaply from cache if present, or fallback
-        let residual = if let Some(ref c) = self.cache {
-            if c.F.len() > 0 {
-                c.F.as_slice().iter().fold(0.0f64, |acc, &x| acc.max(x.abs()))
-            } else {
-                0.0
-            }
+        // Compute residual norm directly from cache.F
+        let residual = if self.cache.F.len() > 0 {
+            self.cache.F.as_slice().iter().fold(0.0f64, |acc, &x| acc.max(x.abs()))
         } else {
-            let n_bus = v_final.len();
-            let mut ibus = vec![Complex64::new(0.0, 0.0); n_bus];
-            let mut scalc = vec![Complex64::new(0.0, 0.0); n_bus];
-            csc_matvec_and_scalc(
-                mat.y_bus.col_offsets(),
-                mat.y_bus.row_indices(),
-                mat.y_bus.values(),
-                v_final.as_slice(),
-                &mut ibus,
-                &mut scalc,
-            );
-            let mut f = vec![0.0; mat.npv + 2 * mat.npq];
-            fill_f_from_scalc::<false>(
-                &scalc,
-                mat.s_bus.as_slice(),
-                mat.npq,
-                mat.npv + mat.npq,
-                &mut f,
-            )
+            0.0
         };
 
         self.last_residual = residual;
@@ -404,6 +415,29 @@ impl NewtonSolver {
         Ok((converged, residual))
     }
 
+    /// Get the maximum power mismatch norm ||F||_inf after the last solve.
+    #[inline(always)]
+    pub fn residual(&self) -> f64 {
+        self.last_residual
+    }
+
+    /// Get the iteration count of the last solve.
+    #[inline(always)]
+    pub fn iterations(&self) -> Result<usize, &'static str> {
+        Ok(self.result()?.iterations)
+    }
+
+    /// Get whether the last solve converged.
+    #[inline(always)]
+    pub fn converged(&self) -> Result<bool, &'static str> {
+        Ok(self.result()?.converged)
+    }
+}
+
+// ============================================================================
+// 3. 后处理与电气数据读取 (Post-Processing & Data Extraction)
+// ============================================================================
+impl NewtonSolver {
     /// Get final complex bus voltages in original bus order.
     pub fn voltage(&self) -> Result<Vec<Complex64>, &'static str> {
         let mat = self.mat()?;
@@ -447,14 +481,11 @@ impl NewtonSolver {
         let res = self.result()?;
         let n = res.v.len();
         let mut s_orig = vec![Complex64::new(0.0, 0.0); n];
-
-        if let Some(ref cache) = self.cache {
-            if cache.s_calc.len() == n {
-                for (perm_idx, &old_idx) in mat.from_perm.iter().enumerate() {
-                    s_orig[old_idx] = cache.s_calc[perm_idx];
-                }
-                return Ok(s_orig);
+        if self.cache.s_calc.len() == n {
+            for (perm_idx, &old_idx) in mat.from_perm.iter().enumerate() {
+                s_orig[old_idx] = self.cache.s_calc[perm_idx];
             }
+            return Ok(s_orig);
         }
 
         let mut ibus = vec![Complex64::new(0.0, 0.0); n];
@@ -486,27 +517,141 @@ impl NewtonSolver {
         Ok(s.iter().map(|c| c.im).collect())
     }
 
-    /// Get the maximum power mismatch norm ||F||_inf after the last solve.
-    #[inline(always)]
-    pub fn residual(&self) -> f64 {
-        self.last_residual
-    }
+    /// In-place result extraction directly into caller-provided slices.
+    ///
+    /// Zero heap allocations: directly scatters internal permuted vectors into output slices
+    /// in original bus order. Any slice provided as `None` is skipped.
+    ///
+    /// # Arguments
+    /// * `v` - Optional slice for complex bus voltages (length `n_buses`).
+    /// * `vm` - Optional slice for voltage magnitudes (length `n_buses`).
+    /// * `va` - Optional slice for voltage angles in radians (length `n_buses`).
+    /// * `va_deg` - Optional slice for voltage angles in degrees (length `n_buses`).
+    /// * `scalc` - Optional slice for complex bus power injections (length `n_buses`).
+    /// * `p_calc` - Optional slice for active power injections (length `n_buses`).
+    /// * `q_calc` - Optional slice for reactive power injections (length `n_buses`).
+    pub fn extract_results(
+        &self,
+        mut v: Option<&mut [Complex64]>,
+        mut vm: Option<&mut [f64]>,
+        mut va: Option<&mut [f64]>,
+        mut va_deg: Option<&mut [f64]>,
+        mut scalc: Option<&mut [Complex64]>,
+        mut p_calc: Option<&mut [f64]>,
+        mut q_calc: Option<&mut [f64]>,
+    ) -> Result<(), &'static str> {
+        let mat = self.mat()?;
+        let res = self.result()?;
+        let n = res.v.len();
 
-    /// Get the iteration count of the last solve.
-    #[inline(always)]
-    pub fn iterations(&self) -> Result<usize, &'static str> {
-        Ok(self.result()?.iterations)
-    }
+        if let Some(ref s) = v {
+            if s.len() != n {
+                return Err("v slice length mismatch with number of buses");
+            }
+        }
+        if let Some(ref s) = vm {
+            if s.len() != n {
+                return Err("vm slice length mismatch with number of buses");
+            }
+        }
+        if let Some(ref s) = va {
+            if s.len() != n {
+                return Err("va slice length mismatch with number of buses");
+            }
+        }
+        if let Some(ref s) = va_deg {
+            if s.len() != n {
+                return Err("va_deg slice length mismatch with number of buses");
+            }
+        }
+        if let Some(ref s) = scalc {
+            if s.len() != n {
+                return Err("scalc slice length mismatch with number of buses");
+            }
+        }
+        if let Some(ref s) = p_calc {
+            if s.len() != n {
+                return Err("p_calc slice length mismatch with number of buses");
+            }
+        }
+        if let Some(ref s) = q_calc {
+            if s.len() != n {
+                return Err("q_calc slice length mismatch with number of buses");
+            }
+        }
 
-    /// Get whether the last solve converged.
-    #[inline(always)]
-    pub fn converged(&self) -> Result<bool, &'static str> {
-        Ok(self.result()?.converged)
-    }
+        // 1. Scatter voltage-related fields
+        let has_v = v.is_some();
+        let has_vm = vm.is_some();
+        let has_va = va.is_some();
+        let has_va_deg = va_deg.is_some();
 
-    /// Total number of buses configured in the solver.
-    #[inline(always)]
-    pub fn n_buses(&self) -> Result<usize, &'static str> {
-        Ok(self.mat()?.to_perm.len())
+        if has_v || has_vm || has_va || has_va_deg {
+            let deg_factor = 180.0 / std::f64::consts::PI;
+            for (perm_idx, &old_idx) in mat.from_perm.iter().enumerate() {
+                let val = res.v[perm_idx];
+                if let Some(ref mut s) = v {
+                    s[old_idx] = val;
+                }
+                if let Some(ref mut s) = vm {
+                    s[old_idx] = val.norm();
+                }
+                if let Some(ref mut s) = va {
+                    s[old_idx] = val.im.atan2(val.re);
+                }
+                if let Some(ref mut s) = va_deg {
+                    s[old_idx] = val.im.atan2(val.re) * deg_factor;
+                }
+            }
+        }
+
+        // 2. Scatter power injection-related fields
+        let has_s = scalc.is_some();
+        let has_p = p_calc.is_some();
+        let has_q = q_calc.is_some();
+
+        if has_s || has_p || has_q {
+            if self.cache.s_calc.len() == n {
+                for (perm_idx, &old_idx) in mat.from_perm.iter().enumerate() {
+                    let val = self.cache.s_calc[perm_idx];
+                    if let Some(ref mut s) = scalc {
+                        s[old_idx] = val;
+                    }
+                    if let Some(ref mut s) = p_calc {
+                        s[old_idx] = val.re;
+                    }
+                    if let Some(ref mut s) = q_calc {
+                        s[old_idx] = val.im;
+                    }
+                }
+                return Ok(());
+            }
+
+            // Fallback: If cache not populated, compute csc_matvec_and_scalc
+            let mut ibus = vec![Complex64::new(0.0, 0.0); n];
+            let mut scalc_perm = vec![Complex64::new(0.0, 0.0); n];
+            csc_matvec_and_scalc(
+                mat.y_bus.col_offsets(),
+                mat.y_bus.row_indices(),
+                mat.y_bus.values(),
+                res.v.as_slice(),
+                &mut ibus,
+                &mut scalc_perm,
+            );
+            for (perm_idx, &old_idx) in mat.from_perm.iter().enumerate() {
+                let val = scalc_perm[perm_idx];
+                if let Some(ref mut s) = scalc {
+                    s[old_idx] = val;
+                }
+                if let Some(ref mut s) = p_calc {
+                    s[old_idx] = val.re;
+                }
+                if let Some(ref mut s) = q_calc {
+                    s[old_idx] = val.im;
+                }
+            }
+        }
+
+        Ok(())
     }
 }

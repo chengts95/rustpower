@@ -138,8 +138,8 @@ def run_tests():
     # Test 6: setup_context Safeguard (Cache & Symbolic Invalidation)
     # ------------------------------------------------------------------
     print("\n[Test 5] setup_context & setup_from_nodes Cache Invalidation Safeguard...")
-    # Enable cache on solver
-    solver.enable_cache(True)
+    # Cache is always enabled by default; assert enable_cache attribute was cleanly removed
+    assert not hasattr(solver, "enable_cache"), "enable_cache should be removed from NewtonSolver"
     solver.solve() # Populates NewtonCache and KLU factorizations
     
     # Now switch network to Case 39 on the same solver instance
@@ -171,13 +171,57 @@ def run_tests():
     print("  ✓ Re-setup cleanly invalidated stale cache and solved new grid flawlessly!")
 
     # ------------------------------------------------------------------
-    # Test 7: reset_cache Method
+    # Test 7: reset_cache and clear_cache API
     # ------------------------------------------------------------------
-    print("\n[Test 6] reset_cache API...")
+    print("\n[Test 6] reset_cache & clear_cache API...")
     solver.reset_cache()
     conv_after_reset = solver.solve()
     assert conv_after_reset is True
-    print("  ✓ reset_cache successfully reset internal solver state")
+    solver.clear_cache()
+    conv_after_clear = solver.solve()
+    assert conv_after_clear is True
+    print("  ✓ reset_cache and clear_cache successfully reset internal solver state")
+
+    # ------------------------------------------------------------------
+    # Test 8: extract_results In-Place Zero-Allocation API
+    # ------------------------------------------------------------------
+    print("\n[Test 7] extract_results In-Place Zero-Allocation API...")
+    n = solver.n_buses
+    buf_v = np.zeros(n, dtype=np.complex128)
+    buf_vm = np.zeros(n, dtype=np.float64)
+    buf_va = np.zeros(n, dtype=np.float64)
+    buf_va_deg = np.zeros(n, dtype=np.float64)
+    buf_scalc = np.zeros(n, dtype=np.complex128)
+    buf_p = np.zeros(n, dtype=np.float64)
+    buf_q = np.zeros(n, dtype=np.float64)
+
+    # Full extraction into pre-allocated memory
+    solver.extract_results(
+        v=buf_v,
+        vm=buf_vm,
+        va=buf_va,
+        va_deg=buf_va_deg,
+        scalc=buf_scalc,
+        p_calc=buf_p,
+        q_calc=buf_q,
+    )
+
+    np.testing.assert_allclose(buf_v, solver.get_voltage(), rtol=1e-12)
+    np.testing.assert_allclose(buf_vm, solver.vm, rtol=1e-12)
+    np.testing.assert_allclose(buf_va, solver.va, rtol=1e-12)
+    np.testing.assert_allclose(buf_va_deg, solver.va_deg, rtol=1e-12)
+    np.testing.assert_allclose(buf_scalc, solver.get_scalc(), rtol=1e-12)
+    np.testing.assert_allclose(buf_p, solver.p_calc, rtol=1e-12)
+    np.testing.assert_allclose(buf_q, solver.q_calc, rtol=1e-12)
+    print("  ✓ Full in-place extract_results matches all property outputs (rtol < 1e-12)")
+
+    # Partial extraction (only vm and va_deg)
+    sub_vm = np.zeros(n, dtype=np.float64)
+    sub_va_deg = np.zeros(n, dtype=np.float64)
+    solver.extract_results(vm=sub_vm, va_deg=sub_va_deg)
+    np.testing.assert_allclose(sub_vm, solver.vm, rtol=1e-12)
+    np.testing.assert_allclose(sub_va_deg, solver.va_deg, rtol=1e-12)
+    print("  ✓ Partial in-place extract_results(vm, va_deg) works correctly")
 
     print("\n" + "=" * 60)
     print("🎉 ALL NEWTONSOLVER API TESTS PASSED SUCCESSFULLY!")

@@ -82,16 +82,21 @@ fn to_py_err<E: std::fmt::Display>(e: E) -> PyErr {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(msg)
     }
 }
-use  crate::native::solver::NewtonSolver as NativeNewtonSolver;
+
+use crate::native::solver::NewtonSolver as NativeNewtonSolver;
+
 /// High-performance Newton-Raphson power flow solver.
 ///
-/// Direct wrapper around native Rust `crate::solver::NewtonSolver`.
+/// Direct wrapper around native Rust `crate::native::solver::NewtonSolver`.
 #[cfg(feature = "python")]
 #[pyclass(unsendable)]
 pub struct NewtonSolver {
     inner: NativeNewtonSolver,
 }
 
+// ============================================================================
+// 1. 状态管理与初始化配置 (State Management & Setup Context)
+// ============================================================================
 #[cfg(feature = "python")]
 #[pymethods]
 impl NewtonSolver {
@@ -264,35 +269,80 @@ impl NewtonSolver {
         self.set_s_bus(s_bus)
     }
 
-    /// Enable or disable Jacobian caching for this solver.
-    #[pyo3(signature = (enable=true))]
-    fn enable_cache(&mut self, enable: bool) -> PyResult<()> {
-        self.inner.enable_cache(enable);
+    /// Explicitly clear cached symbolic pattern, factorizations, and Newton buffers.
+    fn clear_cache(&mut self) -> PyResult<()> {
+        self.inner.clear_cache();
         Ok(())
     }
 
-    /// Reset internal cache and linear solver state.
+    /// Reset internal cache and linear solver state (alias for clear_cache).
     fn reset_cache(&mut self) -> PyResult<()> {
-        self.inner.reset_cache();
+        self.inner.clear_cache();
         Ok(())
     }
 
-    /// Run the solver. Returns True if converged.
-    /// If return_residual is true, returns (converged, residual).
-    #[pyo3(signature = (max_iter=10, tol=1e-6, return_residual=false))]
-    fn solve<'py>(
+    /// Permutation mapping: original bus index -> permuted solver index (`p_inv`).
+    #[getter]
+    fn to_perm<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<usize>>> {
+        let perm = self.inner.to_perm().map_err(to_py_err)?;
+        Ok(perm.to_vec().into_pyarray(py))
+    }
+
+    /// Alias for `to_perm` (`p_inv`).
+    #[getter]
+    fn p_inv<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<usize>>> {
+        self.to_perm(py)
+    }
+
+    /// Inverse permutation mapping: permuted solver index -> original bus index (`p_vec`).
+    #[getter]
+    fn from_perm<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<usize>>> {
+        let perm = self.inner.from_perm().map_err(to_py_err)?;
+        Ok(perm.to_vec().into_pyarray(py))
+    }
+
+    /// Alias for `from_perm` (`p_vec`).
+    #[getter]
+    fn p_vec<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<usize>>> {
+        self.from_perm(py)
+    }
+
+    /// Number of PV buses configured in the solver.
+    #[getter]
+    fn npv(&self) -> PyResult<usize> {
+        self.inner.npv().map_err(to_py_err)
+    }
+
+    /// Number of PQ buses configured in the solver.
+    #[getter]
+    fn npq(&self) -> PyResult<usize> {
+        self.inner.npq().map_err(to_py_err)
+    }
+
+    /// Total number of buses configured in the solver.
+    #[getter]
+    fn n_buses(&self) -> PyResult<usize> {
+        self.inner.n_buses().map_err(to_py_err)
+    }
+
+    // ========================================================================
+    // 2. 核心数值求解 (Core Numerical Solve)
+    // ========================================================================
+
+    /// Run the Newton-Raphson power flow solver. Returns True if converged.
+    ///
+    /// Detailed results and convergence statistics can be inspected via:
+    /// - `.converged` (bool)
+    /// - `.residual_norm` (float, maximum power mismatch ||F||_inf)
+    /// - `.iterations` (int)
+    #[pyo3(signature = (max_iter=10, tol=1e-6))]
+    fn solve(
         &mut self,
-        py: Python<'py>,
         max_iter: usize,
         tol: f64,
-        return_residual: bool,
-    ) -> PyResult<PyObject> {
-        let (converged, residual) = self.inner.solve(max_iter, tol).map_err(to_py_err)?;
-        if return_residual {
-            Ok((converged, residual).into_pyobject(py)?.to_owned().into_any().unbind())
-        } else {
-            Ok(converged.into_pyobject(py)?.to_owned().into_any().unbind())
-        }
+    ) -> PyResult<bool> {
+        let (converged, _residual) = self.inner.solve(max_iter, tol).map_err(to_py_err)?;
+        Ok(converged)
     }
 
     /// Maximum power mismatch norm ||F||_inf after the last solve.
@@ -312,11 +362,20 @@ impl NewtonSolver {
         self.inner.converged().map_err(to_py_err)
     }
 
-    /// Get the total number of buses in the network.
-    #[getter]
-    fn n_buses(&self) -> PyResult<usize> {
-        self.inner.n_buses().map_err(to_py_err)
+    /// Get the number of iterations taken by the solver.
+    fn get_iterations(&self) -> PyResult<usize> {
+        self.inner.iterations().map_err(to_py_err)
     }
+
+    /// Number of iterations taken by the solver.
+    #[getter(iterations)]
+    fn py_iterations(&self) -> PyResult<usize> {
+        self.inner.iterations().map_err(to_py_err)
+    }
+
+    // ========================================================================
+    // 3. 后处理与电气数据读取 (Post-Processing & Data Extraction)
+    // ========================================================================
 
     /// Get the final complex bus voltages in original order.
     fn get_voltage<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
@@ -355,17 +414,6 @@ impl NewtonSolver {
         self.get_voltage_angle(py, true)
     }
 
-    /// Get the number of iterations taken by the solver.
-    fn get_iterations(&self) -> PyResult<usize> {
-        self.inner.iterations().map_err(to_py_err)
-    }
-
-    /// Number of iterations taken by the solver.
-    #[getter(iterations)]
-    fn py_iterations(&self) -> PyResult<usize> {
-        self.inner.iterations().map_err(to_py_err)
-    }
-
     /// Get the calculated bus power injection vector (S_calc = V * (Ybus * V)^*) in original bus order.
     fn get_scalc<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
         let s = self.inner.scalc().map_err(to_py_err)?;
@@ -400,5 +448,82 @@ impl NewtonSolver {
     #[getter]
     fn q_calc<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
         self.get_q_injections(py)
+    }
+
+    /// In-place result extraction directly into caller-provided NumPy arrays.
+    ///
+    /// Zero heap allocations: directly scatters computed electrical quantities into
+    /// the provided pre-allocated 1D arrays in original bus order.
+    /// Any argument passed as `None` (default) is skipped.
+    ///
+    /// # Parameters
+    /// - `v`: Optional 1D `complex128` array for complex voltages.
+    /// - `vm`: Optional 1D `float64` array for voltage magnitudes (p.u.).
+    /// - `va`: Optional 1D `float64` array for voltage angles (radians).
+    /// - `va_deg`: Optional 1D `float64` array for voltage angles (degrees).
+    /// - `scalc`: Optional 1D `complex128` array for complex power injections.
+    /// - `p_calc`: Optional 1D `float64` array for active power injections.
+    /// - `q_calc`: Optional 1D `float64` array for reactive power injections.
+    #[pyo3(signature = (v=None, vm=None, va=None, va_deg=None, scalc=None, p_calc=None, q_calc=None))]
+    fn extract_results(
+        &self,
+        v: Option<&Bound<'_, numpy::PyArray1<num_complex::Complex64>>>,
+        vm: Option<&Bound<'_, numpy::PyArray1<f64>>>,
+        va: Option<&Bound<'_, numpy::PyArray1<f64>>>,
+        va_deg: Option<&Bound<'_, numpy::PyArray1<f64>>>,
+        scalc: Option<&Bound<'_, numpy::PyArray1<num_complex::Complex64>>>,
+        p_calc: Option<&Bound<'_, numpy::PyArray1<f64>>>,
+        q_calc: Option<&Bound<'_, numpy::PyArray1<f64>>>,
+    ) -> PyResult<()> {
+        let mut v_rw = v.map(|arr| arr.readwrite());
+        let mut vm_rw = vm.map(|arr| arr.readwrite());
+        let mut va_rw = va.map(|arr| arr.readwrite());
+        let mut va_deg_rw = va_deg.map(|arr| arr.readwrite());
+        let mut scalc_rw = scalc.map(|arr| arr.readwrite());
+        let mut p_calc_rw = p_calc.map(|arr| arr.readwrite());
+        let mut q_calc_rw = q_calc.map(|arr| arr.readwrite());
+
+        let v_slice = match v_rw.as_mut() {
+            Some(rw) => Some(rw.as_slice_mut().map_err(to_py_err)?),
+            None => None,
+        };
+        let vm_slice = match vm_rw.as_mut() {
+            Some(rw) => Some(rw.as_slice_mut().map_err(to_py_err)?),
+            None => None,
+        };
+        let va_slice = match va_rw.as_mut() {
+            Some(rw) => Some(rw.as_slice_mut().map_err(to_py_err)?),
+            None => None,
+        };
+        let va_deg_slice = match va_deg_rw.as_mut() {
+            Some(rw) => Some(rw.as_slice_mut().map_err(to_py_err)?),
+            None => None,
+        };
+        let scalc_slice = match scalc_rw.as_mut() {
+            Some(rw) => Some(rw.as_slice_mut().map_err(to_py_err)?),
+            None => None,
+        };
+        let p_calc_slice = match p_calc_rw.as_mut() {
+            Some(rw) => Some(rw.as_slice_mut().map_err(to_py_err)?),
+            None => None,
+        };
+        let q_calc_slice = match q_calc_rw.as_mut() {
+            Some(rw) => Some(rw.as_slice_mut().map_err(to_py_err)?),
+            None => None,
+        };
+
+        self.inner
+            .extract_results(
+                v_slice,
+                vm_slice,
+                va_slice,
+                va_deg_slice,
+                scalc_slice,
+                p_calc_slice,
+                q_calc_slice,
+            )
+            .map_err(to_py_err)?;
+
+        Ok(())
     }
 }
