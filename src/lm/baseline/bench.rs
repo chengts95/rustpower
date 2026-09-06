@@ -17,7 +17,7 @@
 //! cargo test --release --features klu lm_ablation -- --nocapture
 //! ```
 
-#[cfg(all(test, feature = "klu"))]
+#[cfg(all(test, any(feature = "klu", feature = "klu_dyn")))]
 mod tests {
     use crate::basic::ecs::elements::PPNetwork;
     use crate::basic::ecs::network::{DataOps, PowerFlow, PowerGrid};

@@ -367,5 +367,5 @@ pub fn newton_pf_ne<Solver: Solve>(
 
 // All tests in this module need the SuiteSparse LDL backend (and its
 // fixtures need `klu`); gate at module level so the imports stay valid.
-#[cfg(all(test, feature = "klu", feature = "ldl"))]
+#[cfg(all(test, any(feature = "klu", feature = "klu_dyn"), feature = "ldl"))]
 mod tests;
