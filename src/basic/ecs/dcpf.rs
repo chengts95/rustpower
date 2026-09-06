@@ -1,8 +1,7 @@
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
-use nalgebra::DVector;
 
-use crate::basic::dcpf::{newton_pf_dcpf_serial, DcpfModel};
+use crate::basic::dcpf::{DcpfModel, newton_pf_dcpf_serial};
 use crate::basic::ecs::elements::*;
 use crate::basic::ecs::network::{PowerFlowSolver, SolverStage};
 use crate::basic::ecs::plugin::{ActiveSolver, DefaultSolverSet, PowerFlowSolverSet};
@@ -99,21 +98,7 @@ pub fn ecs_run_dcpf_pf(
         cache.as_deref_mut(),
     );
 
-    let (v_perm, iterations, converged) = match res {
-        Ok((v, iters)) => (v, iters, true),
-        Err((_, v, iters)) => (v, iters, false),
-    };
-
-    let mut v_orig = DVector::from_element(mat.v_bus_init.len(), num_complex::Complex64::new(0.0, 0.0));
-    for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
-        v_orig[orig_idx] = v_perm[new_idx];
-    }
-
-    cmd.insert_resource(PowerFlowResult {
-        v: v_orig,
-        iterations,
-        converged,
-    });
+    cmd.insert_resource(super::network::result_from_permuted(&mat, res));
 }
 
 /// Ensures DcpfModel resource exists before solve if DcpfSolverActive is set.

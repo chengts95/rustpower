@@ -442,7 +442,7 @@ pub fn fill_j_and_jt_exp(
 
 #[cfg(test)]
 mod tests {
-    //! V4 vs V3: bitwise-identical output on synthetic fixtures and on the
+    //! V4 vs V3: numerical agreement on synthetic fixtures and on the
     //! IEEE118 system, plus a fill-only timing comparison (assembly cost
     //! isolated — no solver involved).
     //!
@@ -518,6 +518,16 @@ mod tests {
         );
     }
 
+    fn assert_jacobians_agree(a: &[f64], b: &[f64]) {
+        assert_eq!(a.len(), b.len());
+        // Main's V3 derives magnitude entries from angle entries, while V4
+        // retains some direct products. Equivalent arithmetic can round differently.
+        for (slot, (&x, &y)) in a.iter().zip(b).enumerate() {
+            let tolerance = 16.0 * f64::EPSILON * (1.0 + x.abs().max(y.abs()));
+            assert!((x - y).abs() <= tolerance, "Jacobian slot {slot}: {x} != {y}");
+        }
+    }
+
     fn assert_v4_matches_v3(ybus: &CscMatrix<Complex64>, npv: usize, npq: usize) {
         let nb = ybus.ncols();
         let pat = JacobianPattern2::build_from_permuted(ybus.col_offsets(), ybus.row_indices(), npv, npq);
@@ -528,7 +538,7 @@ mod tests {
         let mut j_v4 = vec![0.0; pat.nnz_j];
         fill_v4_block(ybus, &pat, &v, &vnorm, &scalc, npv, npq, &mut j_v4);
 
-        assert_eq!(j_v3, j_v4, "V4 block view disagrees with V3");
+        assert_jacobians_agree(&j_v3, &j_v4);
     }
 
     #[test]
@@ -587,7 +597,7 @@ mod tests {
         let mut j_v4 = vec![0.0; pat.nnz_j];
         fill_v4_block(ybus, &pat, &v, &vnorm, &scalc, npv, npq, &mut j_v4);
 
-        assert_eq!(j_v3, j_v4, "V4 block view disagrees with V3 on IEEE118");
+        assert_jacobians_agree(&j_v3, &j_v4);
     }
 
     fn timeit(label: &str, repeats: usize, mut f: impl FnMut()) -> Duration {

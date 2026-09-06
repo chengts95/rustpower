@@ -319,7 +319,7 @@ pub fn newton_pf_lm<Solver: Solve>(
 // method; the test prints the full α × {GN-LM, exact-LM} table and asserts
 // the window.
 
-#[cfg(all(test, feature = "klu"))]
+#[cfg(all(test, any(feature = "klu", feature = "klu_dyn")))]
 pub(crate) mod tests {
     use super::*;
     use crate::lm::residual::fixtures::*;
@@ -354,7 +354,15 @@ pub(crate) mod tests {
             let v_init = nalgebra::DVector::from_vec(v.clone());
             let mut s = KLUSolver::default();
             let r = crate::basic::newtonpf::newton_pf(
-                &ybus, &sbus, &v_init, n_pv, n_pq, Some(1e-10), Some(50), &mut s,
+                &ybus,
+                &sbus,
+                &v_init,
+                n_pv,
+                n_pq,
+                Some(1e-10),
+                Some(50),
+                &mut s,
+                None,
             );
             match r {
                 Ok((v_new, it)) => {
@@ -377,7 +385,7 @@ pub(crate) mod tests {
         let sbus = nalgebra::DVector::from_vec(s_spec.iter().map(|s| s * alpha).collect::<Vec<_>>());
         let v_flat = nalgebra::DVector::from_vec(flat_start(&v_star, n_act, n_pq));
         let mut s1 = KLUSolver::default();
-        let nr = crate::basic::newtonpf::newton_pf(&ybus, &sbus, &v_flat, n_pv, n_pq, Some(1e-10), Some(100), &mut s1);
+        let nr = crate::basic::newtonpf::newton_pf(&ybus, &sbus, &v_flat, n_pv, n_pq, Some(1e-10), Some(100), &mut s1, None);
         let mut s2 = KLUSolver::default();
         let iw = crate::basic::iwamoto::newton_pf_iwamoto(&ybus, &sbus, &v_flat, n_pv, n_pq, Some(1e-10), Some(100), &mut s2);
         let gn = run_alpha(alpha, false);
@@ -399,7 +407,15 @@ pub(crate) mod tests {
             let v_init = nalgebra::DVector::from_vec(flat_start(&v_star, n_pv + n_pq, n_pq));
             let mut s1 = KLUSolver::default();
             let nr = crate::basic::newtonpf::newton_pf(
-                &ybus, &sbus, &v_init, n_pv, n_pq, Some(1e-10), Some(100), &mut s1,
+                &ybus,
+                &sbus,
+                &v_init,
+                n_pv,
+                n_pq,
+                Some(1e-10),
+                Some(100),
+                &mut s1,
+                None,
             );
             match &nr {
                 Ok((_, it)) => println!("α={alpha:4.2} | {it:3}"),
@@ -424,7 +440,15 @@ pub(crate) mod tests {
 
             let mut s1 = KLUSolver::default();
             let nr = crate::basic::newtonpf::newton_pf(
-                &ybus, &sbus, &v_init, n_pv, n_pq, Some(1e-10), Some(100), &mut s1,
+                &ybus,
+                &sbus,
+                &v_init,
+                n_pv,
+                n_pq,
+                Some(1e-10),
+                Some(100),
+                &mut s1,
+                None,
             );
             let mut s2 = KLUSolver::default();
             let iw = crate::basic::iwamoto::newton_pf_iwamoto(
@@ -484,7 +508,15 @@ pub(crate) mod tests {
             let v_flat = nalgebra::DVector::from_vec(flat_start(&v_star, n_act, n_pq));
             let mut s1 = KLUSolver::default();
             let nr = crate::basic::newtonpf::newton_pf(
-                &ybus, &sbus_d, &v_flat, n_pv, n_pq, Some(1e-10), Some(100), &mut s1,
+                &ybus,
+                &sbus_d,
+                &v_flat,
+                n_pv,
+                n_pq,
+                Some(1e-10),
+                Some(100),
+                &mut s1,
+                None,
             );
             let nr_res = match &nr {
                 Ok(_) => f64::NAN,
@@ -547,7 +579,15 @@ pub(crate) mod tests {
                 let mut s = KLUSolver::default();
                 let t = Instant::now();
                 let r = crate::basic::newtonpf::newton_pf(
-                    ybus, &sbus, &v_init, npv, npq, Some(1e-8), Some(100), &mut s,
+                    ybus,
+                    &sbus,
+                    &v_init,
+                    npv,
+                    npq,
+                    Some(1e-8),
+                    Some(100),
+                    &mut s,
+                    None,
                 );
                 match r {
                     Ok((_, it)) => println!("  NR α={alpha:5.2} ✓ it={it:2} t={:?}", t.elapsed()),
@@ -627,7 +667,15 @@ pub(crate) mod tests {
             let mut s0 = KLUSolver::default();
             let t = Instant::now();
             let nr = crate::basic::newtonpf::newton_pf(
-                ybus, &sbus_d, &v_init, npv, npq, Some(1e-8), Some(100), &mut s0,
+                ybus,
+                &sbus_d,
+                &v_init,
+                npv,
+                npq,
+                Some(1e-8),
+                Some(100),
+                &mut s0,
+                None,
             );
             let t_nr = t.elapsed();
             let (v_nr, it_nr) = nr.expect("NR 在可解区必须收敛");
@@ -954,7 +1002,15 @@ pub(crate) mod tests {
             // 1) 生产 newton_pf（原封不动的原路径）
             let mut s1 = KLUSolver::default();
             let nr = crate::basic::newtonpf::newton_pf(
-                ybus, &sbus, &v_init, npv, npq, Some(1e-8), Some(100), &mut s1,
+                ybus,
+                &sbus,
+                &v_init,
+                npv,
+                npq,
+                Some(1e-8),
+                Some(100),
+                &mut s1,
+                None,
             );
             let (nr_ok, nr_it) = match &nr {
                 Ok((_, it)) => (true, *it),

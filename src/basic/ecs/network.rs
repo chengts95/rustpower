@@ -156,32 +156,29 @@ pub fn ecs_run_pf(
         cache.as_deref_mut(),
     );
 
-    let n = mat.v_bus_init.len();
-    match v {
-        Ok((v_perm, iterations)) => {
-            let mut v_orig =
-                nalgebra::DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
-            for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
-                v_orig[orig_idx] = v_perm[new_idx];
-            }
-            cmd.insert_resource(PowerFlowResult {
-                v: v_orig,
-                iterations,
-                converged: true,
-            });
-        }
-        Err((_err, v_perm_err, its)) => {
-            let mut v_orig =
-                nalgebra::DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
-            for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
-                v_orig[orig_idx] = v_perm_err[new_idx];
-            }
-            cmd.insert_resource(PowerFlowResult {
-                v: v_orig,
-                iterations: its,
-                converged: false,
-            });
-        }
+    cmd.insert_resource(result_from_permuted(&mat, v));
+}
+
+/// Convert a numerical solver result into the natural bus order used by ECS.
+pub(crate) fn result_from_permuted(
+    mat: &PowerFlowMat,
+    result: Result<
+        (nalgebra::DVector<num_complex::Complex64>, usize),
+        (String, nalgebra::DVector<num_complex::Complex64>, usize),
+    >,
+) -> PowerFlowResult {
+    let (v_perm, iterations, converged) = match result {
+        Ok((v, it)) => (v, it, true),
+        Err((_, v, it)) => (v, it, false),
+    };
+    let mut v = nalgebra::DVector::zeros(v_perm.len());
+    for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
+        v[orig_idx] = v_perm[new_idx];
+    }
+    PowerFlowResult {
+        v,
+        iterations,
+        converged,
     }
 }
 
@@ -215,33 +212,7 @@ pub fn iwamoto_run_pf(
         &mut solver.solver,
     );
 
-    let n = mat.v_bus_init.len();
-    match v {
-        Ok((v_perm, iterations)) => {
-            let mut v_orig =
-                nalgebra::DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
-            for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
-                v_orig[orig_idx] = v_perm[new_idx];
-            }
-            cmd.insert_resource(PowerFlowResult {
-                v: v_orig,
-                iterations,
-                converged: true,
-            });
-        }
-        Err((_err, v_perm_err, its)) => {
-            let mut v_orig =
-                nalgebra::DVector::from_element(n, num_complex::Complex64::new(0.0, 0.0));
-            for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
-                v_orig[orig_idx] = v_perm_err[new_idx];
-            }
-            cmd.insert_resource(PowerFlowResult {
-                v: v_orig,
-                iterations: its,
-                converged: false,
-            });
-        }
-    }
+    cmd.insert_resource(result_from_permuted(&mat, v));
 }
 impl PowerGrid {
     pub fn app(&self) -> &App {

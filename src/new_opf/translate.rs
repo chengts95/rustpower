@@ -67,10 +67,10 @@ pub fn attach_line_flow_limits(world: &mut World, net: &Network) {
 
     let sn_mva = net.sn_mva;
     for (i, line) in lines.iter().enumerate() {
-        if !line.in_service || line.max_i_ka == 0.0 {
+        if !line.in_service || line.max_i_ka.unwrap_or(0.0) == 0.0 {
             continue;
         }
-        let rate_pu = line.max_i_ka * vbases_kv[i] * 3f64.sqrt() / sn_mva;
+        let rate_pu = line.max_i_ka.unwrap_or(0.0) * vbases_kv[i] * 3f64.sqrt() / sn_mva;
         world
             .entity_mut(line_ents[i])
             .insert(BranchFlowLimit { rate_a_pu: rate_pu });
@@ -149,14 +149,14 @@ mod tests {
         let mut n_attached = 0usize;
         for (i, line) in lines.iter().enumerate() {
             let comp = pf_net.world().entity(line_ents[i]).get::<BranchFlowLimit>();
-            if !line.in_service || line.max_i_ka == 0.0 {
+            if !line.in_service || line.max_i_ka.unwrap_or(0.0) == 0.0 {
                 assert!(comp.is_none(), "line {i} got a limit but shouldn't");
             } else {
                 let bfl = comp.unwrap_or_else(|| panic!("line {i} missing limit"));
                 // Spot check the formula against the from-bus vbase
                 let bus_idx = net.bus.iter().position(|b| b.index == line.from_bus).unwrap();
                 let vbase = net.bus[bus_idx].vn_kv;
-                let expect = line.max_i_ka * vbase * 3f64.sqrt() / net.sn_mva;
+                let expect = line.max_i_ka.unwrap_or(0.0) * vbase * 3f64.sqrt() / net.sn_mva;
                 assert!((bfl.rate_a_pu - expect).abs() < 1e-12,
                     "line {i}: got {:.6}, expected {:.6}", bfl.rate_a_pu, expect);
                 n_attached += 1;

@@ -12,7 +12,7 @@
 //! Run (release, all backends, with phase breakdowns):
 //! `cargo test --release --features "klu ldl qdldl probe" ldl_vs_klu -- --nocapture`
 
-#[cfg(all(test, feature = "klu", feature = "ldl"))]
+#[cfg(all(test, any(feature = "klu", feature = "klu_dyn"), feature = "ldl"))]
 mod tests {
     #[cfg(feature = "probe")]
     use crate::basic::solver::{klu_probe, ldl_probe, qdldl_probe};

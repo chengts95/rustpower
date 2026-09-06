@@ -329,6 +329,7 @@ mod tests {
             Some(1e-8),
             Some(10),
             &mut solver,
+            None,
         )
         .expect("Old PF failed");
 
@@ -344,6 +345,7 @@ mod tests {
                 Some(1e-8),
                 Some(10),
                 &mut solver,
+                None,
             );
         }
         let duration_old = start_old.elapsed() / 10;

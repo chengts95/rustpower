@@ -360,7 +360,7 @@ pub fn newton_pf_gn<Solver: Solve>(
     }
 }
 
-#[cfg(all(test, feature = "klu"))]
+#[cfg(all(test, any(feature = "klu", feature = "klu_dyn")))]
 mod tests {
     use super::*;
     use crate::lm::residual::fixtures::load_ieee39_mat;
@@ -402,7 +402,7 @@ mod tests {
 
         let mut s_nr = KLUSolver::default();
         let (v_nr, it_nr) =
-            newton_pf(ybus, &sbus, &v_init, npv, npq, Some(1e-12), Some(100), &mut s_nr)
+            newton_pf(ybus, &sbus, &v_init, npv, npq, Some(1e-12), Some(100), &mut s_nr, None)
                 .expect("NR should converge");
         let mut s_gn = KLUSolver::default();
         let (v_gn, it_gn) =

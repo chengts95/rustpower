@@ -2,10 +2,7 @@ use bevy_ecs::prelude::*;
 use nalgebra::*;
 use nalgebra_sparse::*;
 use num_complex::Complex64;
-use std::f64::consts::PI;
 
-use crate::basic::new_dsdvbus2::JacobianPattern2;
-use crate::basic::new_dsdvbus3::fill_jacobian_v3;
 use crate::basic::solver::Solve;
 use crate::new_pf::systems::{NetworkOperators, PFOrder};
 
@@ -23,79 +20,18 @@ pub fn run_newton_pf<S: Solve>(
     max_iter: usize,
     tol: f64,
 ) -> Result<(DVector<Complex64>, usize), String> {
-    let mut v = v_init.clone();
-    let n_bus = npv + npq;
-    let n_state = npv + 2 * npq;
-
-    let j_pattern =
-        JacobianPattern2::build_from_permuted(ybus.col_offsets(), ybus.row_indices(), npv, npq);
-    let mut j_values = vec![0.0; j_pattern.nnz_j];
-    let mut f_vec = DVector::zeros(n_state);
-
-    let mut v_m = v.map(|e| e.norm());
-    let mut v_a = v.map(|e| e.arg());
-    let mut v_norm = v.map(|e| Complex64::from_polar(1.0, e.arg()));
-
-    for it in 0..max_iter {
-        let ibus = ybus * &v;
-        let s_calc = v.component_mul(&ibus.map(|e| e.conj()));
-        let mis = &s_calc - sbus;
-
-        // Assemble mismatch vector F
-        for i in 0..n_bus {
-            f_vec[i] = mis[i].re;
-        }
-        for i in 0..npq {
-            f_vec[n_bus + i] = mis[i].im;
-        }
-
-        if f_vec.norm() < tol {
-            return Ok((v, it));
-        }
-
-        fill_jacobian_v3::<false>(
-            ybus,
-            v.as_slice(),
-            v_norm.as_slice(),
-            s_calc.as_slice(),
-            &j_pattern.j_col_ptrs,
-            &j_pattern.pq_ends,
-            &j_pattern.active_ends,
-            &j_pattern.diag_ptrs,
-            npv,
-            npq,
-            &mut j_values,
-        );
-
-        solver
-            .solve(
-                &mut j_pattern.j_col_ptrs.clone(), // This clone is bad for perf, but Solve trait requires mut
-                &mut j_pattern.j_row_indices.clone(),
-                &mut j_values,
-                f_vec.data.as_mut_slice(),
-                n_state,
-            )
-            .map_err(|e| e.to_string())?;
-
-        let dx = &f_vec;
-
-        // Update x
-        for i in 0..n_bus {
-            v_a[i] -= dx[i];
-            v_a[i] = v_a[i].rem_euclid(2.0 * PI);
-        }
-        for i in 0..npq {
-            v_m[i] -= dx[n_bus + i];
-        }
-
-        // Reconstruct V
-        for i in 0..v.len() {
-            v_norm[i] = Complex64::from_polar(1.0, v_a[i]);
-            v[i] = v_m[i] * v_norm[i];
-        }
-    }
-
-    Err("Newton-Raphson failed to converge".to_string())
+    crate::basic::newtonpf::newton_pf(
+        ybus,
+        sbus,
+        v_init,
+        npv,
+        npq,
+        Some(tol),
+        Some(max_iter),
+        solver,
+        None,
+    )
+    .map_err(|(message, _, _)| message)
 }
 
 /// Thin Bevy System Wrapper
@@ -106,4 +42,40 @@ pub fn newton_pf_system(
 ) {
     let Some(_ybus) = &ops.ybus else { return };
     // Integration with ECS components would go here.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct NoLinearSolve;
+    impl Solve for NoLinearSolve {
+        fn solve(
+            &mut self,
+            _: &mut [usize],
+            _: &mut [usize],
+            _: &mut [f64],
+            _: &mut [f64],
+            _: usize,
+        ) -> Result<(), &'static str> {
+            panic!("the initial residual already satisfies the infinity-norm tolerance");
+        }
+        fn reset(&mut self) {}
+    }
+
+    #[test]
+    fn initial_convergence_uses_inf_norm() {
+        let ybus = CscMatrix::identity(2);
+        let v = DVector::from_element(2, Complex64::new(1.0, 0.0));
+        // Both retained residuals are below tol, but their Euclidean norm is above it.
+        let sbus = DVector::from_vec(vec![
+            Complex64::new(0.25, -0.75),
+            Complex64::new(99.0, 99.0),
+        ]);
+        let (actual, iterations) =
+            run_newton_pf(&ybus, &sbus, &v, 0, 1, &mut NoLinearSolve, 0, 1.0).unwrap();
+        assert_eq!(iterations, 0);
+        assert_eq!(actual, v);
+    }
 }

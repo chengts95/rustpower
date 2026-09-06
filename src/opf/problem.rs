@@ -224,9 +224,9 @@ impl OPFData {
 
         // Run Newton-Raphson power flow
         let mut solver = DefaultSolver::default();
-        let v_p = match newton_pf(&ybus_p, &sbus_p, &v_init_p, npv, npq, None, None, &mut solver) {
+        let v_p = match newton_pf(&ybus_p, &sbus_p, &v_init_p, npv, npq, None, None, &mut solver, None) {
             Ok((v, _)) => v,
-            Err((_, v)) => v,
+            Err((_, v, _)) => v,
         };
 
         // Unpermute: original bus b is at permuted index inv_perm[b]

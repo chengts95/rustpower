@@ -25,13 +25,15 @@ pub struct PowerFlowConfig {
 /// number of iterations taken, and whether the solution converged.
 #[derive(Debug, Default, Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PowerFlowResult {
-    pub v: DVector<Complex64>, // Final voltage vector after convergence
+    pub v: DVector<Complex64>, // Final voltage vector in original bus order
     pub iterations: usize,     // Number of iterations taken
     pub converged: bool,       // Convergence status
 }
 
 /// Resource holding various matrices required for power flow calculations, including the reordered
 /// matrix, admittance matrix (Y-bus), and the power injection vector (S-bus).
+/// Newton, Iwamoto, DCPF-initialized Newton, and LM all consume the same
+/// `[PQ | PV | slack]` ordering; `from_perm` maps their outputs back to bus order.
 #[derive(Debug, Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PowerFlowMat {
     pub y_bus: CscMatrix<Complex<f64>>, // Y-bus admittance matrix

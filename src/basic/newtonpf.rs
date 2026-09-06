@@ -231,7 +231,7 @@ pub fn newton_pf<Solver: Solve>(
             s_calc.as_mut_slice(),
         );
 
-        let norm2 = fill_f_from_scalc::<false>(
+        let norm_inf = fill_f_from_scalc::<false>(
             s_calc.as_slice(),
             Sbus.as_slice(),
             npq,
@@ -239,15 +239,13 @@ pub fn newton_pf<Solver: Solve>(
             F.as_mut_slice(),
         );
 
-        if norm2 < tol {
+        if norm_inf < tol {
             if let (Some(target_vm), Some(target_va)) = (cache_vm, cache_va) {
                 *target_vm = v_m;
                 *target_va = v_a;
             }
             return Ok((v, it + 1));
         }
-
-  
     }
 
     if let (Some(target_vm), Some(target_va)) = (cache_vm, cache_va) {
@@ -285,14 +283,27 @@ pub(crate) fn fill_f_from_scalc<const SPEC_MINUS_CALC: bool>(
     n_active: usize,
     f: &mut [f64],
 ) -> f64 {
+    fill_f_from_power::<SPEC_MINUS_CALC>(|i| scalc[i], sbus, npq, n_active, f)
+}
+
+/// Shared reduced mismatch assembly for cached powers and on-demand powers.
+/// Returns the infinity norm of the retained P (active) and Q (PQ) equations.
+#[inline(always)]
+pub(crate) fn fill_f_from_power<const SPEC_MINUS_CALC: bool>(
+    mut scalc: impl FnMut(usize) -> Complex64,
+    sbus: &[Complex64],
+    npq: usize,
+    n_active: usize,
+    f: &mut [f64],
+) -> f64 {
     let mut max_norm: f64 = 0.0;
 
     // PQ: P and Q
     for i in 0..npq {
         let mis = if SPEC_MINUS_CALC {
-            sbus[i] - scalc[i]
+            sbus[i] - scalc(i)
         } else {
-            scalc[i] - sbus[i]
+            scalc(i) - sbus[i]
         };
 
         f[i] = mis.re;
@@ -304,9 +315,9 @@ pub(crate) fn fill_f_from_scalc<const SPEC_MINUS_CALC: bool>(
     // PV: P only
     for i in npq..n_active {
         let mis = if SPEC_MINUS_CALC {
-            sbus[i] - scalc[i]
+            sbus[i] - scalc(i)
         } else {
-            scalc[i] - sbus[i]
+            scalc(i) - sbus[i]
         };
 
         f[i] = mis.re;

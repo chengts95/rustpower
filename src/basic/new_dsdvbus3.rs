@@ -64,13 +64,15 @@ pub fn fill_jacobian_v3<const FLAT: bool>(
         let j_ptr = j_values.as_mut_ptr();
         let seg_len = active_end + pq_end;
         let (j11_col, j12_col) = if FLAT {
-            (2 * j_col_ptrs[k] + seg_len, 2 * j_col_ptrs[n_active + k] + seg_len)
+            (
+                2 * j_col_ptrs[k] + seg_len,
+                2 * j_col_ptrs[n_active + k] + seg_len,
+            )
         } else {
             (j_col_ptrs[k], j_col_ptrs[n_active + k])
         };
         let j21_col = j11_col + active_end;
         let j22_col = j12_col + active_end;
-
 
         let out_j11 = jslice!(j_ptr, j11_col, active_end);
         let out_j21 = jslice!(j_ptr, j21_col, pq_end);
@@ -145,9 +147,12 @@ pub fn fill_jacobian_v3<const FLAT: bool>(
         let diag_offset = diag_ptrs[k] - y_start;
         let j_ptr = j_values.as_mut_ptr();
         let seg_len = active_end + pq_end;
-        let j11_col = if FLAT { 2 * j_col_ptrs[k] + seg_len } else { j_col_ptrs[k] };
+        let j11_col = if FLAT {
+            2 * j_col_ptrs[k] + seg_len
+        } else {
+            j_col_ptrs[k]
+        };
         let j21_col = j11_col + active_end;
-
 
         let out_j11 = jslice!(j_ptr, j11_col, active_end);
         let out_j21 = jslice!(j_ptr, j21_col, pq_end);
