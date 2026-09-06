@@ -31,6 +31,20 @@ pub(crate) fn residual(
     (res_inf, merit)
 }
 
+/// Retain the power injections for the following operator fill.
+/// Trial-point evaluations can continue using `residual` without storing powers.
+pub(crate) fn residual_with_power(
+    ybus: &CscMatrix<Complex64>, sbus: &[Complex64], ibus: &mut [Complex64],
+    scalc: &mut [Complex64], n_act: usize, npq: usize,
+    v: &[Complex64], out: &mut [f64],
+) -> (f64, f64) {
+    use crate::basic::newtonpf::{csc_matvec_and_scalc, fill_f_from_scalc};
+    csc_matvec_and_scalc(ybus.col_offsets(), ybus.row_indices(), ybus.values(), v, ibus, scalc);
+    let norm = fill_f_from_scalc::<false>(scalc, sbus, npq, n_act, out);
+    let merit = 0.5 * out[..n_act + npq].iter().map(|r| r * r).sum::<f64>();
+    (norm, merit)
+}
+
 /// Test networks shared by the exact and GN drivers: the ill-conditioned
 /// 14-bus case (ext_ref case2, renumbering-invariant) and the IEEE39
 /// `PowerFlowMat` loader.

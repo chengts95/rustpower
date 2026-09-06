@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-scripts/plot_time_breakdown.py
+performance/plot_time_breakdown.py
 
 Per-Newton-iteration cost split: Assembly vs LU re-factorisation.
 
@@ -17,11 +17,11 @@ assembly times under the assumption that LU cost is version-invariant:
     N_iter = (T_total_V0 − T_total_V2) / (ASM_V0 − ASM_V2)     [ms / ms]
 
 Usage (from repo root):
-    python scripts/plot_time_breakdown.py
+    python performance/plot_time_breakdown.py
 
 Outputs:
-    paper/time_breakdown.pdf
-    paper/time_breakdown.png
+    target/research/performance/jacobian/time_breakdown.pdf
+    target/research/performance/jacobian/time_breakdown.png
 """
 
 import matplotlib
@@ -160,7 +160,8 @@ fig.legend(handles=[h_asm, h_lu], loc='lower center', ncol=2, fontsize=6.8,
            columnspacing=1.2, handlelength=2.4, handletextpad=0.6)
 
 # ─── Save ──────────────────────────────────────────────────────────────────────
-out = Path('paper/time_breakdown')
+out = Path('target/research/performance/jacobian/time_breakdown')
+out.parent.mkdir(parents=True, exist_ok=True)
 fig.savefig(str(out) + '.pdf', bbox_inches='tight', dpi=300)
 fig.savefig(str(out) + '.png', bbox_inches='tight', dpi=300)
 print(f'Saved {out}.pdf and {out}.png')

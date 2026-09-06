@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-scripts/plot_solve_breakdown.py
+performance/plot_solve_breakdown.py
 
 Per-solve cost breakdown: Assembly vs KLU-init vs KLU-iterative.
 
@@ -14,10 +14,10 @@ as horizontal stacked bars:
 KLU init and KLU steady are version-invariant (same bars for V0/V1/V2);
 only the Assembly bar shrinks V0→V2.
 
-Data source: paper/solve_breakdown.csv (written by bench_jacobian_fill Rust test).
+Data source: target/research/performance/jacobian/solve_breakdown.csv (written by bench_jacobian_fill Rust test).
 
 Usage:
-    python scripts/plot_solve_breakdown.py
+    python performance/plot_solve_breakdown.py
 """
 
 import matplotlib
@@ -27,7 +27,7 @@ import matplotlib.patches as mpatches
 import pandas as pd
 from pathlib import Path
 
-df = pd.read_csv('paper/solve_breakdown.csv')
+df = pd.read_csv('target/research/performance/jacobian/solve_breakdown.csv')
 
 SYSTEMS   = ['IEEE 39', 'IEEE 118', 'PEGASE 9241']
 VERSIONS  = ['V0', 'V1', 'V2']
@@ -140,7 +140,8 @@ fig.text(
     fontsize=5.5, color='0.45')
 
 # ─── Save ──────────────────────────────────────────────────────────────────────
-out = Path('paper/solve_breakdown')
+out = Path('target/research/performance/jacobian/solve_breakdown')
+out.parent.mkdir(parents=True, exist_ok=True)
 fig.savefig(str(out) + '.pdf', bbox_inches='tight', dpi=300)
 fig.savefig(str(out) + '.png', bbox_inches='tight', dpi=300)
 print(f'Saved {out}.pdf and {out}.png')

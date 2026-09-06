@@ -5,7 +5,7 @@ Measures:
   2. Post-processing via internal DEBUG prints
   3. Total Python-measured wall time per solve()
 
-Run with: python -u scripts/profile_solve.py
+Run with: python -u performance/profile_solve.py
 (requires release build: maturin develop --release)
 """
 import rustpower

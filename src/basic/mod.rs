@@ -28,7 +28,8 @@ mod test_jacobian_pattern;
 mod test_symbolic_ranges;
 
 #[cfg(all(test, any(feature = "klu", feature = "klu_dyn")))]
-mod bench_jacobian_fill;
-
-#[cfg(all(test, any(feature = "klu", feature = "klu_dyn")))]
 mod bench_symbolic_analysis;
+
+#[cfg(feature = "benchmark")]
+#[path = "../../performance/access.rs"]
+pub mod benchmark_internals;
