@@ -1,6 +1,6 @@
 # LM完整性能报告
 
-最终报告已统一保存到 [BENCHMARK_REPORT.md](/home/cts/pp/paper/BENCHMARK_REPORT.md)。
+ 
 
 包含八条实现、四级消融、KLU/QDLDL后端比较、全部计时分项、算法参数、迭代次数和680次逐轮记录；CSV位于 `/home/cts/pp/data/`。
 
