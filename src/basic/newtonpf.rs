@@ -77,6 +77,23 @@ pub fn newton_pf<Solver: Solve>(
     solver: &mut Solver,
     mut cache_opt: Option<&mut NewtonCache>,
 ) -> Result<(DVector<Complex64>, usize), (String, DVector<Complex64>, usize)> {
+    newton_pf_with_fill::<Solver, false>(Ybus, Sbus, v_init, npv, npq,
+        tolerance, max_iter, solver, cache_opt)
+}
+
+/// Compile-time fill selection for controlled ACPF comparisons; default remains V3.
+#[allow(non_snake_case, clippy::too_many_arguments)]
+pub(crate) fn newton_pf_with_fill<Solver: Solve, const OPERATOR: bool>(
+    Ybus: &CscMatrix<Complex64>,
+    Sbus: &DVector<Complex64>,
+    v_init: &DVector<Complex64>,
+    npv: usize,
+    npq: usize,
+    tolerance: Option<f64>,
+    max_iter: Option<usize>,
+    solver: &mut Solver,
+    mut cache_opt: Option<&mut NewtonCache>,
+) -> Result<(DVector<Complex64>, usize), (String, DVector<Complex64>, usize)> {
     let mut v = v_init.clone();
     let max_iter = max_iter.unwrap_or(100);
     let tol = tolerance.unwrap_or(1e-6);
@@ -183,7 +200,10 @@ pub fn newton_pf<Solver: Solve>(
     };
 
     for it in 0..max_iter {
-        fill_jacobian_v3::<false>(
+        let fill = if OPERATOR {
+            super::new_dsdvbus4::fill_jacobian_v4::<false>
+        } else { fill_jacobian_v3 };
+        fill(
             Ybus,
             v.as_slice(),
             v_norm.as_slice(),
@@ -239,6 +259,9 @@ pub fn newton_pf<Solver: Solve>(
             F.as_mut_slice(),
         );
 
+        if !norm_inf.is_finite() {
+            return Err(("Non-finite power-flow residual".into(), v, it + 1));
+        }
         if norm_inf < tol {
             if let (Some(target_vm), Some(target_va)) = (cache_vm, cache_va) {
                 *target_vm = v_m;
@@ -309,7 +332,9 @@ pub(crate) fn fill_f_from_power<const SPEC_MINUS_CALC: bool>(
         f[i] = mis.re;
         f[n_active + i] = mis.im;
 
-        max_norm = max_norm.max(mis.re.abs()).max(mis.im.abs());
+        max_norm = if mis.re.is_finite() && mis.im.is_finite() {
+            max_norm.max(mis.re.abs()).max(mis.im.abs())
+        } else { f64::INFINITY };
     }
 
     // PV: P only
@@ -322,7 +347,7 @@ pub(crate) fn fill_f_from_power<const SPEC_MINUS_CALC: bool>(
 
         f[i] = mis.re;
 
-        max_norm = max_norm.max(mis.re.abs());
+        max_norm = if mis.re.is_finite() { max_norm.max(mis.re.abs()) } else { f64::INFINITY };
     }
 
     max_norm
@@ -361,5 +386,27 @@ pub(crate) fn csc_matvec_and_scalc(
 
     for i in 0..v.len() {
         scalc[i] = v[i] * ibus[i].conj();
+    }
+}
+
+#[cfg(test)]
+mod residual_finiteness_tests {
+    use super::*;
+    #[test]
+    fn nonfinite_retained_equations_cannot_converge() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for (bus, reactive) in [(0,false),(0,true),(1,false)] {
+                let mut s=vec![Complex64::new(0.,0.);2];
+                if reactive {s[bus].im=bad;} else {s[bus].re=bad;}
+                for reverse in [false,true] {
+                    let norm=if reverse {
+                        fill_f_from_scalc::<true>(&s,&[Complex64::new(0.,0.);2],1,2,&mut [0.;3])
+                    } else {
+                        fill_f_from_scalc::<false>(&s,&[Complex64::new(0.,0.);2],1,2,&mut [0.;3])
+                    };
+                    assert_eq!(norm,f64::INFINITY);
+                }
+            }
+        }
     }
 }

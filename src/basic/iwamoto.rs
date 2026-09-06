@@ -75,7 +75,7 @@ pub fn newton_pf_iwamoto<Solver: Solve>(
     };
 
     for it in 0..max_iter {
-        fill_jacobian_v3::<false>(
+        fill_jacobian_v3(
             Ybus,
             v.as_slice(),
             v_norm.as_slice(),
