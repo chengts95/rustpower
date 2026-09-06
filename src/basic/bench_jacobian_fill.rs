@@ -253,15 +253,12 @@ fn compare_assembly(name: &str, mat: &PowerFlowMat, repeats: usize) {
         );
     });
     let t_fill3_only = timeit("V3  fill_jacobian_v3 (pure fill)", repeats, || {
-        fill_jacobian_v3::<false>(
+        fill_jacobian_v3(
             &mat.y_bus,
             v.as_slice(),
             v_norm.as_slice(),
             scalc_v3.as_slice(),
-            &j_pattern.j_col_ptrs,
-            &j_pattern.pq_ends,
-            &j_pattern.active_ends,
-            &j_pattern.diag_ptrs,
+            &j_pattern,
             npv,
             npq,
             &mut j_values,
@@ -276,15 +273,12 @@ fn compare_assembly(name: &str, mat: &PowerFlowMat, repeats: usize) {
             ibus_v3.as_mut_slice(),
             scalc_v3.as_mut_slice(),
         );
-        fill_jacobian_v3::<false>(
+        fill_jacobian_v3(
             &mat.y_bus,
             v.as_slice(),
             v_norm.as_slice(),
             scalc_v3.as_slice(),
-            &j_pattern.j_col_ptrs,
-            &j_pattern.pq_ends,
-            &j_pattern.active_ends,
-            &j_pattern.diag_ptrs,
+            &j_pattern,
             npv,
             npq,
             &mut j_values,
@@ -399,15 +393,12 @@ fn compare_klu_breakdown(name: &str, mat: &PowerFlowMat, repeats: usize) {
         );
     });
     let _t_fill = timeit("  - Pure fill_jacobian_v3     ", repeats, || {
-        fill_jacobian_v3::<false>(
+        fill_jacobian_v3(
             &mat.y_bus,
             v_conv.as_slice(),
             v_norm.as_slice(),
             scalc_v3.as_slice(),
-            &j_pattern.j_col_ptrs,
-            &j_pattern.pq_ends,
-            &j_pattern.active_ends,
-            &j_pattern.diag_ptrs,
+            &j_pattern,
             npv,
             npq,
             &mut j_values,
@@ -422,15 +413,12 @@ fn compare_klu_breakdown(name: &str, mat: &PowerFlowMat, repeats: usize) {
             ibus_v3.as_mut_slice(),
             scalc_v3.as_mut_slice(),
         );
-        fill_jacobian_v3::<false>(
+        fill_jacobian_v3(
             &mat.y_bus,
             v_conv.as_slice(),
             v_norm.as_slice(),
             scalc_v3.as_slice(),
-            &j_pattern.j_col_ptrs,
-            &j_pattern.pq_ends,
-            &j_pattern.active_ends,
-            &j_pattern.diag_ptrs,
+            &j_pattern,
             npv,
             npq,
             &mut j_values,

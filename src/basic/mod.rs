@@ -5,6 +5,7 @@ pub(crate) mod dsbr_dv;
 pub(crate) mod d2sbus_dv2;
 pub(crate) mod d2sbr_dv2;
 pub mod iwamoto;
+pub mod jacobian_cache;
 #[cfg(test)]
 pub(crate) mod new_dsdvbus; // kept only for test_jacobian_pattern
 pub(crate) mod new_dsdvbus2;

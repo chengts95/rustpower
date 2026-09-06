@@ -5,8 +5,8 @@ use nalgebra_sparse::CscMatrix;
 use num_complex::Complex64;
 use num_traits::Zero;
 
-use super::new_dsdvbus2::JacobianPattern2;
-use super::new_dsdvbus3::fill_jacobian_v3;
+use super::jacobian_cache::JacobianCache;
+use super::new_dsdvbus4::fill_jacobian_v4;
 use super::newtonpf::{csc_matvec_and_scalc, csc_matvec_complex, fill_f_from_scalc};
 use super::solver::Solve;
 
@@ -27,9 +27,9 @@ pub fn newton_pf_iwamoto<Solver: Solve>(
     let tol = tolerance.unwrap_or(1e-6);
 
     let j_pattern =
-        JacobianPattern2::build_from_permuted(Ybus.col_offsets(), Ybus.row_indices(), npv, npq);
+        JacobianCache::build_from_permuted(Ybus.col_offsets(), Ybus.row_indices(), npv, npq);
     let n_state = npv + 2 * npq;
-    let mut j_values = vec![0.0; j_pattern.nnz_j];
+    let mut j_values = vec![0.0; j_pattern.j_row_indices.len()];
 
     let n_bus = npv + npq;
     let mut ibus = DVector::zeros(v.len());
@@ -75,7 +75,7 @@ pub fn newton_pf_iwamoto<Solver: Solve>(
     };
 
     for it in 0..max_iter {
-        fill_jacobian_v3(
+        fill_jacobian_v4::<false>(
             Ybus,
             v.as_slice(),
             v_norm.as_slice(),

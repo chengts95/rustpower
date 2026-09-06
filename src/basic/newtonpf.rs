@@ -1,7 +1,7 @@
 #![allow(unused)]
 use std::f64::consts::PI;
 
-use super::new_dsdvbus2::JacobianPattern2;
+use super::jacobian_cache::JacobianCache as V4JacobianCache;
 
 use bevy_ecs::prelude::Resource;
 
@@ -10,7 +10,7 @@ use bevy_ecs::prelude::Resource;
 pub struct NewtonCache {
     pub npv: usize,
     pub npq: usize,
-    pub j_pattern: Option<JacobianPattern2>,
+    pub j_pattern: Option<V4JacobianCache>,
     pub j_values: Vec<f64>,
     pub ibus: DVector<Complex64>,
     #[allow(non_snake_case)]
@@ -20,7 +20,7 @@ pub struct NewtonCache {
     pub v_a: DVector<f64>,
 }
 
-use super::new_dsdvbus3::fill_jacobian_v3;
+use super::new_dsdvbus4::fill_jacobian_v4;
 use super::solver::Solve;
 use super::sparse::slice::*;
 use nalgebra::*;
@@ -61,29 +61,12 @@ impl<T: Clone + Zero + Scalar + ClosedAddAssign> Slice for CscMatrix<T> {
 // ─── Default solver: newton_pf ────────────────────────────────────────────────
 
 /// Newton-Raphson power flow under the `[PQ | PV | slack]` bus ordering.
-/// Branch-free Jacobian assembly via `JacobianPattern2` + `fill_jacobian_v2`.
+/// Jacobian assembly via the V4 cache and `fill_jacobian_v4`, without quadrant-start tables.
 ///
 /// Requires `Ybus`, `Sbus`, `v_init` already permuted into `[PQ | PV | slack]`:
 /// PQ buses at indices `0..npq`, PV at `npq..npq+npv`, slack at `npq+npv..`.
 #[allow(non_snake_case, clippy::too_many_arguments)]
 pub fn newton_pf<Solver: Solve>(
-    Ybus: &CscMatrix<Complex64>,
-    Sbus: &DVector<Complex64>,
-    v_init: &DVector<Complex64>,
-    npv: usize,
-    npq: usize,
-    tolerance: Option<f64>,
-    max_iter: Option<usize>,
-    solver: &mut Solver,
-    mut cache_opt: Option<&mut NewtonCache>,
-) -> Result<(DVector<Complex64>, usize), (String, DVector<Complex64>, usize)> {
-    newton_pf_with_fill::<Solver, false>(Ybus, Sbus, v_init, npv, npq,
-        tolerance, max_iter, solver, cache_opt)
-}
-
-/// Compile-time fill selection for controlled ACPF comparisons; default remains V3.
-#[allow(non_snake_case, clippy::too_many_arguments)]
-pub(crate) fn newton_pf_with_fill<Solver: Solve, const OPERATOR: bool>(
     Ybus: &CscMatrix<Complex64>,
     Sbus: &DVector<Complex64>,
     v_init: &DVector<Complex64>,
@@ -114,13 +97,13 @@ pub(crate) fn newton_pf_with_fill<Solver: Solve, const OPERATOR: bool>(
     let (j_pattern, j_values, ibus, F, s_calc, mut cache_vm, mut cache_va) =
         if let Some(ref mut c) = cache_opt {
             if c.j_pattern.is_none() || c.npv != npv || c.npq != npq {
-                c.j_pattern = Some(JacobianPattern2::build_from_permuted(
+                c.j_pattern = Some(V4JacobianCache::build_from_permuted(
                     Ybus.col_offsets(),
                     Ybus.row_indices(),
                     npv,
                     npq,
                 ));
-                c.j_values = vec![0.0; c.j_pattern.as_ref().unwrap().nnz_j];
+                c.j_values = vec![0.0; c.j_pattern.as_ref().unwrap().j_row_indices.len()];
                 c.ibus = DVector::zeros(n_bus);
                 c.F = DVector::zeros(n_state);
                 c.s_calc = DVector::zeros(n_bus);
@@ -137,13 +120,13 @@ pub(crate) fn newton_pf_with_fill<Solver: Solve, const OPERATOR: bool>(
                 Some(&mut c.v_a),
             )
         } else {
-            local_j_pattern = Some(JacobianPattern2::build_from_permuted(
+            local_j_pattern = Some(V4JacobianCache::build_from_permuted(
                 Ybus.col_offsets(),
                 Ybus.row_indices(),
                 npv,
                 npq,
             ));
-            local_j_values = vec![0.0; local_j_pattern.as_ref().unwrap().nnz_j];
+            local_j_values = vec![0.0; local_j_pattern.as_ref().unwrap().j_row_indices.len()];
             local_ibus = DVector::zeros(n_bus);
             local_F = DVector::zeros(n_state);
             local_s_calc = DVector::zeros(n_bus);
@@ -200,10 +183,7 @@ pub(crate) fn newton_pf_with_fill<Solver: Solve, const OPERATOR: bool>(
     };
 
     for it in 0..max_iter {
-        let fill = if OPERATOR {
-            super::new_dsdvbus4::fill_jacobian_v4::<false>
-        } else { fill_jacobian_v3 };
-        fill(
+        fill_jacobian_v4::<false>(
             Ybus,
             v.as_slice(),
             v_norm.as_slice(),
