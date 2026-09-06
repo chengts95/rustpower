@@ -20,7 +20,7 @@ fn main() {
     }
     let name = std::env::args().nth(1).unwrap_or_else(|| "help".into());
     let output_key = match name.as_str() {
-        "lm-assembly" => Some("RUSTPOWER_NE_AUDIT_DIR"),
+        "lm-assembly" | "lm-ablation" => Some("RUSTPOWER_NE_AUDIT_DIR"),
         "lm-solvers" => Some("RUSTPOWER_CHOLESKY_OUTPUT"),
         "v4vsoperator" => Some("RUSTPOWER_V4_OPERATOR_OUTPUT"),
         _ => None,
@@ -47,6 +47,11 @@ fn main() {
             "command": std::env::args().collect::<Vec<_>>(),
             "git_commit": command("git", &["rev-parse", "HEAD"]),
             "working_tree_changes": command("git", &["status", "--porcelain"]),
+            "source_diff": command("git", &["diff", "HEAD", "--", "src/lm", "src/basic", "performance", "Cargo.toml", "Cargo.lock"]),
+            "input_sha256": command("sha256sum", &[
+                "cases/IEEE39/data.zip", "cases/IEEE118/data.zip", "cases/pegase9241/data.zip",
+                "target/research/lm_audit/6515rte_dc.json", "target/research/lm_audit/6515rte_flat.json",
+            ]),
             "rustc": command("rustc", &["--version"]),
             "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
             "cpu_info": std::fs::read_to_string("/proc/cpuinfo").unwrap_or_default().lines().find(|l| l.starts_with("model name")),
@@ -67,6 +72,7 @@ fn main() {
     match name.as_str() {
         "lm-check" => lm_comparison::operator_lm_matches_original_drivers(),
         "lm-assembly" => lm_comparison::benchmark_cached_normal_equations(),
+        "lm-ablation" => lm_comparison::benchmark_coo_ablation(),
         "lm-solvers" => lm_comparison::linear_solvers::benchmark_linear_solvers(),
         "acpf" => acpf::acpf_v3_vs_v4_fill(),
         "jacobian" => jacobian::bench_jacobian_fill(),
@@ -82,7 +88,7 @@ fn main() {
         "v4-fused" => v4::fused_vs_two_pass_perf_ieee118(),
         "v4vsoperator" => v4vsoperator::run(),
         "help" | "--help" => println!(
-            "cargo bench --bench comparison --features benchmark -- <入口>\nLM: lm-check, lm-assembly, lm-solvers\nACPF: acpf, jacobian, ecs, ecs-klu, ecs-lm, pf-builder, v3-v4, v4-fused, v4vsoperator\nOPF: opf, opf-assembly, opf-v4-v5, kkt"
+            "cargo bench --bench comparison --features benchmark -- <入口>\nLM: lm-check, lm-assembly, lm-ablation, lm-solvers\nACPF: acpf, jacobian, ecs, ecs-klu, ecs-lm, pf-builder, v3-v4, v4-fused, v4vsoperator\nOPF: opf, opf-assembly, opf-v4-v5, kkt"
         ),
         _ => panic!("未知性能入口：{name}；使用 --help 查看"),
     }

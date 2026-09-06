@@ -274,6 +274,13 @@ pub(crate) fn polar_trial(
     Ok(())
 }
 
+/// 增广解的后半段s = r + Jδ，因此预测下降量为
+/// ||s-r||²/2 + μδᵀDδ；无需另算Jᵀr。此式使用线性方程的求解关系。
+pub(crate) fn augmented_predicted_reduction(r: &[f64], s: &[f64], mu: f64, step_norm_squared: f64) -> f64 {
+    let jd_squared: f64 = s.iter().zip(r).map(|(s, r)| (s - r).powi(2)).sum();
+    0.5 * jd_squared + mu * step_norm_squared
+}
+
 /// Reduction of the *undamped* quadratic model. For either B = J'J or
 /// B = J'J + H(r), (B + mu W) delta = -g gives
 /// -g'delta - delta'B delta / 2 = (mu delta'W delta - g'delta) / 2.
