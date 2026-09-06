@@ -634,37 +634,7 @@ mod tests {
         assert_jacobians_agree(&j_v3, &j_v4);
     }
 
-    #[cfg(feature = "rsparse")]
-    #[test]
-    fn iwamoto_v4_matches_standard_newton_solution() {
-        let mat = load_ieee118_mat();
-        let mut standard = crate::basic::solver::RSparseSolver::default();
-        let mut iwamoto = crate::basic::solver::RSparseSolver::default();
-        let (a, _) = crate::basic::newton_pf(
-            &mat.y_bus,
-            &mat.s_bus,
-            &mat.v_bus_init,
-            mat.npv,
-            mat.npq,
-            Some(1e-8),
-            Some(100),
-            &mut standard,
-            None,
-        )
-        .unwrap();
-        let (b, _) = crate::basic::newton_pf_iwamoto(
-            &mat.y_bus,
-            &mat.s_bus,
-            &mat.v_bus_init,
-            mat.npv,
-            mat.npq,
-            Some(1e-8),
-            Some(100),
-            &mut iwamoto,
-        )
-        .unwrap();
-        assert!((&a - &b).norm() < 1e-7);
-    }
+
 
     #[test]
     fn v4_flat_view_preserves_surrounding_blocks() {

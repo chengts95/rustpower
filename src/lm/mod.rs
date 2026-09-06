@@ -29,10 +29,12 @@ pub mod flat;
 pub mod gn_flat;
 pub mod gn_triu;
 pub mod kernels;
-pub mod ldl_vs_klu;
 pub mod normal_eq;
 pub mod pattern;
 pub mod residual;
+pub mod step_control;
+
+pub use step_control::{DampingMetric, LmOptions, TrustRegionOptions};
 
 pub use block::BlockDesc;
 pub use cache::YbusAnalysisCache;

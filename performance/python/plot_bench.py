@@ -64,5 +64,7 @@ autolabel(rects3, ax1)
 autolabel(bars2, ax2)
 
 plt.tight_layout()
-plt.savefig('docs/performance_comparison.png', dpi=300)
-print("Benchmark plot saved to docs/performance_comparison.png")
+from pathlib import Path
+Path('target/research/performance').mkdir(parents=True, exist_ok=True)
+plt.savefig('target/research/performance/performance_comparison.png', dpi=300)
+print("Benchmark plot saved to target/research/performance/performance_comparison.png")

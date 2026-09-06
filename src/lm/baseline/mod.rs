@@ -1,18 +1,10 @@
-//! Ablation baselines for the LM assembly paper — the "write-it-like-a-
-//! stranger" floors that [`super::gn_flat`] (AUG-SDF) is measured against.
-//!
-//! * [`aug_coo`] — **AUG-COO**: the same GN-LM augmented system
-//!   `[μI Jᵀ; J −I]`, but assembled the way a general-purpose sparse stack
-//!   makes you do it: COO push + sort/convert **every μ try**, and a fresh
-//!   solver (full symbolic + numeric factorization) per solve. The J values
-//!   come from the shared offset kernel (`fill_jacobian_v4`) so the only
-//!   variables under test are assembly strategy and symbolic reuse.
-//!
-//! The NE-COO floor lives in [`super::normal_eq`] (`dumb_mode = true`).
+//! 历史装配基线：COO 重建与完整 Jacobian 后切片。
+//! 保留实现供研究参考；当前公平性能对照统一放在 `lm::comparison`。
+//! 注意这些历史驱动器可能每次试步创建求解器，不能直接归因于装配成本。
 
 #[cfg(feature = "qdldl")]
 pub mod aug_coo;
 #[cfg(feature = "qdldl")]
 pub mod full_slice;
 #[cfg(feature = "qdldl")]
-mod bench;
+mod tests;

@@ -290,6 +290,13 @@ pub fn fill_jt<const FLAT: bool>(
 /// `FLAT = false`: `h_vals` is the H block's own slice.
 /// `FLAT = true`: `h_vals` is the global values array (H col c at `2·cs[c]`).
 pub fn apply_mu_delta<const FLAT: bool>(pat: &KktPattern, h_vals: &mut [f64], dmu: f64) {
+    apply_mu_delta_weighted::<FLAT>(pat, h_vals, dmu, |_| 1.0);
+}
+
+/// Same diagonal fill with a weight for each retained state column.
+pub fn apply_mu_delta_weighted<const FLAT: bool>(
+    pat: &KktPattern, h_vals: &mut [f64], dmu: f64, weight: impl Fn(usize) -> f64,
+) {
     let cache = &pat.cache;
     let n_act = cache.n_active();
     let cs = &pat.graph.col_starts[..];
@@ -299,11 +306,11 @@ pub fn apply_mu_delta<const FLAT: bool>(pat: &KktPattern, h_vals: &mut [f64], dm
         // 本列自己的起始与对角偏移，现算。
         let h_col = if FLAT { 2 * cs[k] } else { cs[k] };
         unsafe {
-            *h_vals.get_unchecked_mut(h_col + diag_off[k]) += dmu;
+            *h_vals.get_unchecked_mut(h_col + diag_off[k]) += dmu * weight(k);
             if k < cache.n_pq() {
                 // |V| 列只为 PQ 母线存在，在这里才算它自己的起始。
                 let h_vcol = if FLAT { 2 * cs[n_act + k] } else { cs[n_act + k] };
-                *h_vals.get_unchecked_mut(h_vcol + active_ends[k] + diag_off[k]) += dmu;
+                *h_vals.get_unchecked_mut(h_vcol + active_ends[k] + diag_off[k]) += dmu * weight(n_act + k);
             }
         }
     }

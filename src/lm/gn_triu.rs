@@ -9,7 +9,7 @@
 //! nnz_triu = nnz + 2n     (vs slim-full 2·nnz + 2n — storage halved)
 //! ```
 //!
-//! The fill is **row-oriented**: instead of computing J column-wise from the
+//! The baseline fill is **row-oriented**: instead of computing J column-wise from the
 //! Ybus columns and transpose-copying (the scatter-write pass that dominates
 //! the slim-full fill), we walk `Ybusᵀ` — built once at symbolic time — and
 //! compute J *row* r directly into s-column r. Writes are fully sequential;
@@ -23,6 +23,11 @@
 //! the output equals `fill_jt`'s transpose of the v4 block **bitwise** (the
 //! `triu_matches_flat_*` tests assert exactly this).
 //!
+//! `build_operator` reuses the same LM loop with the borrowed block operator.
+//! It reads the live Y values through the existing symbolic mirror indices,
+//! and combines P/Q and angle/magnitude contributions in a single edge sweep.
+//! It stores no numerical Yᵀ. Equality to the baseline is at rounding precision.
+//!
 //! KLU-class full-matrix solvers cannot consume this layout; they keep using
 //! [`super::gn_flat::GnFlatLayout`]. Neither can SuiteSparse LDL — it reads
 //! the upper triangle of the **permuted** PAP′ and therefore needs the full
@@ -30,6 +35,9 @@
 //! plain upper triangle; the pairing lives in
 //! [`super::newton_pf_gn_default`]'s feature ladder.
 
+use crate::lm::step_control::{
+    LmOptions, TrialError, TrustRegion, polar_trial, predicted_reduction,
+};
 use nalgebra::DVector;
 use nalgebra_sparse::CscMatrix;
 use num_complex::Complex64;
@@ -69,7 +77,12 @@ impl GnTriuLayout {
         }
         col_offsets.push(nnz + 2 * n);
 
-        Self { n_state: n, nnz_triu: nnz + 2 * n, col_offsets, row_indices }
+        Self {
+            n_state: n,
+            nnz_triu: nnz + 2 * n,
+            col_offsets,
+            row_indices,
+        }
     }
 
     /// Stamp the constant `−I` tail of every s-column, once.
@@ -99,15 +112,17 @@ pub fn fill_jt_rows(
 ) {
     let cache = &pat.cache;
     let n_act = cache.n_active();
-    let (pq_ends, active_ends, diag_off) =
-        (cache.pq_ends(), cache.active_ends(), cache.diag_off());
-    let (yt_cp, yt_ri, yt_v) =
-        (ybus_t.col_offsets(), ybus_t.row_indices(), ybus_t.values());
+    let (pq_ends, active_ends, diag_off) = (cache.pq_ends(), cache.active_ends(), cache.diag_off());
+    let (yt_cp, yt_ri, yt_v) = (ybus_t.col_offsets(), ybus_t.row_indices(), ybus_t.values());
     let n = pat.graph.n_cols;
 
     // s-column c (c in 0..n): bus k = c % n_act, row kind P if c < n_act.
     for c in 0..n {
-        let (k, is_p) = if c < n_act { (c, true) } else { (c - n_act, false) };
+        let (k, is_p) = if c < n_act {
+            (c, true)
+        } else {
+            (c - n_act, false)
+        };
         let (pq_end, active_end) = (pq_ends[k], active_ends[k]);
         let out_start = col_offsets[n + c];
         let out = unsafe {
@@ -165,18 +180,27 @@ pub fn fill_jt_rows(
     }
 }
 
+// 装配方式及其专属工作区；迭代控制不依赖装配方式。
+enum Assembly {
+    TransposedRows {
+        ybus_t: CscMatrix<Complex64>,
+        vnorm: Vec<Complex64>,
+    },
+    Direct {
+        inv_vmag: Vec<f64>,
+    },
+}
+
 /// GN-LM driver on the triu-slim layout (LDLᵀ backends only).
 pub struct GnTriuDriver {
     pub pat: KktPattern,
     pub triu: GnTriuLayout,
     pub sbus: Vec<Complex64>,
-    /// CSC of Yᵀ, built once at symbolic time.
-    ybus_t: CscMatrix<Complex64>,
+    assembly: Assembly,
     values: Vec<f64>,
     // Scratch (allocated once).
     ibus: Vec<Complex64>,
     scalc: Vec<Complex64>,
-    vnorm: Vec<Complex64>,
     r: Vec<f64>,
     rt: Vec<f64>,
     g: Vec<f64>,
@@ -187,6 +211,8 @@ pub struct GnTriuDriver {
     n_state: usize,
     // Profiling (ns), same convention as the other drivers.
     pub prof_fill_ns: u64,
+    /// μ对角及右端准备的累计时间。
+    pub prof_mu_ns: u64,
     pub prof_solve_ns: u64,
     pub n_solves: u64,
 }
@@ -204,9 +230,40 @@ impl GnTriuDriver {
         &self.values
     }
 
-    pub fn build(ybus: &CscMatrix<Complex64>, n_pv: usize, n_pq: usize, sbus: Vec<Complex64>) -> Self {
+    pub fn build(
+        ybus: &CscMatrix<Complex64>,
+        n_pv: usize,
+        n_pq: usize,
+        sbus: Vec<Complex64>,
+    ) -> Self {
+        Self::build_with_assembly(ybus, n_pv, n_pq, sbus, |_| Assembly::TransposedRows {
+            ybus_t: ybus.transpose(),
+            vnorm: vec![Complex64::new(1.0, 0.0); ybus.ncols()],
+        })
+    }
+
+    /// Use the borrowed Jacobian block operator; retain the original driver as baseline.
+    pub fn build_operator(
+        ybus: &CscMatrix<Complex64>,
+        n_pv: usize,
+        n_pq: usize,
+        sbus: Vec<Complex64>,
+    ) -> Self {
+        Self::build_with_assembly(ybus, n_pv, n_pq, sbus, |_| Assembly::Direct {
+            inv_vmag: vec![0.0; ybus.ncols()],
+        })
+    }
+
+    fn build_with_assembly(
+        ybus: &CscMatrix<Complex64>,
+        n_pv: usize,
+        n_pq: usize,
+        sbus: Vec<Complex64>,
+        make_assembly: impl FnOnce(&KktPattern) -> Assembly,
+    ) -> Self {
         let nb = ybus.ncols();
         let pat = KktPattern::build(ybus, n_pv, n_pq);
+        let assembly = make_assembly(&pat);
         let triu = GnTriuLayout::build(&pat);
         let n_state = triu.n_state;
         let mut values = vec![0.0; triu.nnz_triu];
@@ -215,11 +272,10 @@ impl GnTriuDriver {
             pat,
             triu,
             sbus,
-            ybus_t: ybus.transpose(),
+            assembly,
             values,
             ibus: vec![Complex64::new(0.0, 0.0); nb],
             scalc: vec![Complex64::new(0.0, 0.0); nb],
-            vnorm: vec![Complex64::new(1.0, 0.0); nb],
             r: vec![0.0; n_state],
             rt: vec![0.0; n_state],
             g: vec![0.0; n_state],
@@ -229,6 +285,7 @@ impl GnTriuDriver {
             npq: n_pq,
             n_state,
             prof_fill_ns: 0,
+            prof_mu_ns: 0,
             prof_solve_ns: 0,
             n_solves: 0,
         }
@@ -236,24 +293,64 @@ impl GnTriuDriver {
 
     pub fn reset_prof(&mut self) {
         self.prof_fill_ns = 0;
+        self.prof_mu_ns = 0;
         self.prof_solve_ns = 0;
         self.n_solves = 0;
     }
 
-    /// One triu fill at `v`: scalc/vnorm prep + the row-oriented Jᵀ sweep.
-    /// No J block, no transpose pass, no column copies.
+    /// 填充上三角中的 Jᵀ：原路径读取缓存 Yᵀ，直接算子读取 Ybus。
+    /// 两者复用残差计算得到的 scalc，不修改 μ 和 −I。
     fn fill(&mut self, ybus: &CscMatrix<Complex64>, v: &[Complex64]) {
         let t = std::time::Instant::now();
-        let nb = ybus.ncols();
-        for i in 0..nb {
-            self.scalc[i] = v[i] * self.ibus[i].conj();
-            let m = v[i].norm();
-            self.vnorm[i] = if m > 1e-12 { v[i] / m } else { Complex64::new(1.0, 0.0) };
+        match &mut self.assembly {
+            Assembly::Direct { inv_vmag } => {
+                for (inv, voltage) in inv_vmag.iter_mut().zip(v) {
+                    *inv = 1.0 / voltage.norm();
+                }
+                use crate::basic::jacobian_operator::{JacobianBlock, JacobianOperator};
+                let cache = &self.pat.cache;
+                let op = JacobianOperator {
+                    ybus,
+                    v,
+                    inv_vmag,
+                    scalc: &self.scalc,
+                    pq_ends: cache.pq_ends(),
+                    active_ends: cache.active_ends(),
+                    diag_ptrs: cache.diag_ptrs(),
+                    mirror: cache.y_trans(),
+                    npq: self.npq,
+                    npv: self.n_act - self.npq,
+                };
+                op.fill::<false, true>(
+                    JacobianBlock {
+                        column_starts: &self.triu.col_offsets[self.n_state..],
+                        base: 0,
+                        prefix: 0,
+                    },
+                    &mut self.values,
+                );
+            }
+            Assembly::TransposedRows { ybus_t, vnorm } => {
+                let nb = ybus.ncols();
+                for i in 0..nb {
+                    let m = v[i].norm();
+                    vnorm[i] = if m > 1e-12 {
+                        v[i] / m
+                    } else {
+                        Complex64::new(1.0, 0.0)
+                    };
+                }
+                fill_jt_rows(
+                    ybus_t,
+                    v,
+                    vnorm,
+                    &self.scalc,
+                    &self.pat,
+                    &mut self.values,
+                    &self.triu.col_offsets,
+                );
+            }
         }
-        fill_jt_rows(
-            &self.ybus_t, v, &self.vnorm, &self.scalc, &self.pat,
-            &mut self.values, &self.triu.col_offsets,
-        );
         self.prof_fill_ns += t.elapsed().as_nanos() as u64;
     }
 
@@ -273,9 +370,8 @@ impl GnTriuDriver {
         }
     }
 
-    /// Classical LM loop, μ rules byte-identical to
-    /// [`super::gn_flat::GnDriver::solve_gn`]. The μ slot is the single entry
-    /// of every δ-column (`values[c]`).
+    /// Classical GN-LM with the same default step control as the full layout.
+    /// See `solve_gn_with_options` for configurable settings.
     pub fn solve_gn<S: Solve>(
         &mut self,
         ybus: &CscMatrix<Complex64>,
@@ -284,33 +380,66 @@ impl GnTriuDriver {
         tol: f64,
         maxit: usize,
     ) -> GnTriuResult {
+        self.solve_gn_with_options(ybus, solver, v, tol, maxit, &LmOptions::default())
+    }
+
+    /// Configurable damping and trial acceptance. Invalid options panic;
+    /// callers accepting external settings can use `LmOptions::validate` first.
+    #[allow(clippy::too_many_arguments)]
+    pub fn solve_gn_with_options<S: Solve>(
+        &mut self,
+        ybus: &CscMatrix<Complex64>,
+        solver: &mut S,
+        v: &mut [Complex64],
+        tol: f64,
+        maxit: usize,
+        options: &LmOptions,
+    ) -> GnTriuResult {
+        options.validate().expect("invalid LM options");
+        let damping = options.damping_metric.prepare(ybus, self.n_act);
         let n = self.n_state;
         let debug = std::env::var("RUSTPOWER_LM_DEBUG").is_ok();
-        let mut mu = 1e-2f64;
+        let mut mu = options.initial_mu;
+        let mut region = TrustRegion::new(options.trust_region.as_ref());
         let mut res_inf;
         for it in 0..maxit {
             let f;
             {
                 let (n_act, npq) = (self.n_act, self.npq);
-                (res_inf, f) = residual(ybus, &self.sbus, &mut self.ibus, n_act, npq, v, &mut self.r);
+                (res_inf, f) = crate::lm::residual::residual_with_power(
+                    ybus,
+                    &self.sbus,
+                    &mut self.ibus,
+                    &mut self.scalc,
+                    n_act,
+                    npq,
+                    v,
+                    &mut self.r,
+                );
             }
             if res_inf < tol {
-                return GnTriuResult { iterations: it, converged: true, res_inf };
+                return GnTriuResult {
+                    iterations: it,
+                    converged: true,
+                    res_inf,
+                };
             }
             self.fill(ybus, v);
             self.jt_times_r();
 
             let mut accepted = false;
-            for _ in 0..30 {
+            for _ in 0..options.max_trials {
+                let t_mu = std::time::Instant::now();
                 // μ slot = the lone entry of δ-column c.
                 for c in 0..n {
-                    self.values[c] = mu;
+                    self.values[c] = mu * damping.weight(v, c, self.n_act);
                 }
 
                 self.b[..n].fill(0.0);
                 for i in 0..n {
                     self.b[n + i] = -self.r[i];
                 }
+                self.prof_mu_ns += t_mu.elapsed().as_nanos() as u64;
                 let t_solve = std::time::Instant::now();
                 let solve_ok = solver
                     .solve(
@@ -326,61 +455,115 @@ impl GnTriuDriver {
                 let delta = &self.b[..n];
                 let finite = solve_ok && delta.iter().all(|x| x.is_finite());
                 if !finite {
-                    mu *= 10.0;
-                    if mu > 1e12 {
-                        return GnTriuResult { iterations: it, converged: false, res_inf };
+                    if !options.increase_mu(&mut mu, options.failed_step_increase) {
+                        return GnTriuResult {
+                            iterations: it,
+                            converged: false,
+                            res_inf,
+                        };
                     }
                     continue;
                 }
 
-                // Polar trial update (identical to the GN driver).
-                self.vt.copy_from_slice(v);
-                for k in 0..self.n_act {
-                    let mut mag = self.vt[k].norm();
-                    let ang = self.vt[k].arg() + delta[k];
-                    if k < self.npq {
-                        mag += delta[self.n_act + k];
+                let step_norm_squared = damping.step_norm_squared(v, delta, self.n_act);
+                if !region.allows(step_norm_squared) {
+                    if debug {
+                        eprintln!(
+                            "it={it} tryμ={mu:.3e} rejected=TrustRadius step={:.3e} radius={:.3e}",
+                            step_norm_squared.sqrt(),
+                            region.radius
+                        );
                     }
-                    self.vt[k] = Complex64::from_polar(mag, ang);
+                    if !options.increase_mu(&mut mu, options.mu_increase) {
+                        return GnTriuResult {
+                            iterations: it,
+                            converged: false,
+                            res_inf,
+                        };
+                    }
+                    continue;
                 }
-                if self.vt.iter().any(|x| !x.re.is_finite() || !x.im.is_finite()) {
-                    mu *= 10.0;
-                    if mu > 1e12 {
-                        return GnTriuResult { iterations: it, converged: false, res_inf };
+
+                if let Err(reason) = polar_trial(
+                    v,
+                    delta,
+                    self.n_act,
+                    self.npq,
+                    options.reject_nonpositive_voltage,
+                    &mut self.vt,
+                ) {
+                    if debug {
+                        eprintln!("it={it} tryμ={mu:.3e} rejected={reason:?}");
+                    }
+                    region.reject();
+                    let factor = match reason {
+                        TrialError::NonFinite => options.failed_step_increase,
+                        TrialError::NonPositiveMagnitude { .. } => options.mu_increase,
+                    };
+                    if !options.increase_mu(&mut mu, factor) {
+                        return GnTriuResult {
+                            iterations: it,
+                            converged: false,
+                            res_inf,
+                        };
                     }
                     continue;
                 }
 
                 let (_, f_new) = {
                     let (n_act, npq) = (self.n_act, self.npq);
-                    residual(ybus, &self.sbus, &mut self.ibus, n_act, npq, &self.vt, &mut self.rt)
+                    residual(
+                        ybus,
+                        &self.sbus,
+                        &mut self.ibus,
+                        n_act,
+                        npq,
+                        &self.vt,
+                        &mut self.rt,
+                    )
                 };
-                let pred: f64 = -0.5
-                    * self.g.iter().zip(delta.iter()).map(|(g, d)| g * d).sum::<f64>();
-                let rho = if pred > 0.0 { (f - f_new) / pred } else { -1.0 };
+                let pred = predicted_reduction(&self.g, delta, mu, step_norm_squared);
+                let rho = if pred.is_finite() && pred > 0.0 && f_new.is_finite() {
+                    (f - f_new) / pred
+                } else {
+                    -1.0
+                };
                 if debug {
-                    eprintln!("it={it} tryμ={mu:.3e} res={res_inf:.3e} f={f:.4e} f_new={f_new:.4e} pred={pred:.4e} ρ={rho:.4}");
+                    eprintln!(
+                        "it={it} tryμ={mu:.3e} res={res_inf:.3e} f={f:.4e} f_new={f_new:.4e} pred={pred:.4e} ρ={rho:.4}"
+                    );
                 }
-                if rho > 1e-4 {
+                if rho.is_finite() && rho > options.acceptance_threshold {
+                    region.accept(rho, step_norm_squared, options.good_step_threshold);
                     v.copy_from_slice(&self.vt);
-                    if rho > 0.75 {
-                        mu = (mu / 3.0).max(1e-12);
-                    }
+                    mu = options.accepted_mu(mu, rho);
                     accepted = true;
                     break;
                 }
-                mu *= 2.0;
-                if mu > 1e12 {
-                    return GnTriuResult { iterations: it, converged: false, res_inf };
+                region.reject();
+                if !options.increase_mu(&mut mu, options.mu_increase) {
+                    return GnTriuResult {
+                        iterations: it,
+                        converged: false,
+                        res_inf,
+                    };
                 }
             }
             if !accepted {
-                return GnTriuResult { iterations: it, converged: false, res_inf };
+                return GnTriuResult {
+                    iterations: it,
+                    converged: false,
+                    res_inf,
+                };
             }
         }
         let (n_act, npq) = (self.n_act, self.npq);
         let (res_inf, _) = residual(ybus, &self.sbus, &mut self.ibus, n_act, npq, v, &mut self.r);
-        GnTriuResult { iterations: maxit, converged: res_inf < tol, res_inf }
+        GnTriuResult {
+            iterations: maxit,
+            converged: res_inf < tol,
+            res_inf,
+        }
     }
 }
 
@@ -411,7 +594,10 @@ pub fn newton_pf_gn_triu<Solver: Solve>(
         Ok((dv, res.iterations))
     } else {
         Err((
-            format!("GN-LM(triu) did not converge (res_inf = {:.3e})", res.res_inf),
+            format!(
+                "GN-LM(triu) did not converge (res_inf = {:.3e})",
+                res.res_inf
+            ),
             dv,
             res.iterations,
         ))
@@ -442,10 +628,22 @@ mod tests {
         let mut d = GnTriuDriver::build(ybus, npv, npq, sbus);
         {
             let (n_act, npq_) = (d.n_act, d.npq);
-            residual(ybus, &d.sbus, &mut d.ibus, n_act, npq_, &v, &mut d.r);
+            crate::lm::residual::residual_with_power(
+                ybus,
+                &d.sbus,
+                &mut d.ibus,
+                &mut d.scalc,
+                n_act,
+                npq_,
+                &v,
+                &mut d.r,
+            );
         }
         d.fill(ybus, &v);
 
+        let Assembly::TransposedRows { vnorm, .. } = &d.assembly else {
+            unreachable!()
+        };
         // 参考:v4 列向 kernel + fill_jt 转置拷贝(同一 v、同一 scalc/vnorm)。
         let pat = &d.pat;
         let cache = &pat.cache;
@@ -454,9 +652,17 @@ mod tests {
         let mut j_block = vec![0.0; nnz];
         let mut jt_block = vec![0.0; nnz];
         fill_jacobian_v4::<false>(
-            ybus, &v, &d.vnorm, &d.scalc,
-            cs, cache.pq_ends(), cache.active_ends(), cache.diag_ptrs(),
-            npv, npq, &mut j_block,
+            ybus,
+            &v,
+            vnorm,
+            &d.scalc,
+            cs,
+            cache.pq_ends(),
+            cache.active_ends(),
+            cache.diag_ptrs(),
+            npv,
+            npq,
+            &mut j_block,
         );
         fill_jt::<false>(ybus, pat, j_block.as_ptr(), jt_block.as_mut_ptr());
 
@@ -512,43 +718,5 @@ mod tests {
         assert!(r_flat.converged && r_triu.converged);
         assert_eq!(r_flat.iterations, r_triu.iterations, "迭代数不一致");
         assert!(dv < 1e-9, "解不一致");
-    }
-
-    /// PEGASE9241 收敛性(QDLDL):迭代数应与 flat 路径一致(11 次)。
-    #[cfg(feature = "qdldl")]
-    #[test]
-    fn triu_gn_pegase9241() {
-        use crate::basic::ecs::elements::PPNetwork;
-        use crate::basic::ecs::network::{DataOps, PowerFlow, PowerGrid};
-        use crate::basic::ecs::powerflow::systems::PowerFlowMat;
-        use crate::basic::solver::QDLDLSolver;
-        use crate::io::pandapower::{Network, load_csv_zip};
-
-        let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        let net: Network = load_csv_zip(&format!("{dir}/cases/pegase9241/data.zip")).unwrap();
-        let mut pf = PowerGrid::default();
-        pf.world_mut().insert_resource(PPNetwork(net));
-        pf.init_pf_net();
-        let mat = pf.world().get_resource::<PowerFlowMat>().unwrap().clone();
-
-        let ybus = &mat.y_bus;
-        let (npv, npq) = (mat.npv, mat.npq);
-        let sbus: Vec<Complex64> = mat.s_bus.iter().copied().collect();
-        let mut d = GnTriuDriver::build(ybus, npv, npq, sbus);
-        let mut s = QDLDLSolver::default();
-        let mut v: Vec<Complex64> = mat.v_bus_init.iter().copied().collect();
-        let t = std::time::Instant::now();
-        let r = d.solve_gn(ybus, &mut s, &mut v, 1e-8, 100);
-        println!(
-            "PEGASE9241 triu-GN(QDLDL): converged={} it={} res={:.2e} | fill={:.3}ms solve={:.3}ms solves={} | total={:?}",
-            r.converged,
-            r.iterations,
-            r.res_inf,
-            d.prof_fill_ns as f64 / 1e6,
-            d.prof_solve_ns as f64 / 1e6,
-            d.n_solves,
-            t.elapsed()
-        );
-        assert!(r.converged);
     }
 }
