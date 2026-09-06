@@ -2,6 +2,7 @@
 // Existing benchmark imports resolve to the library's public API.
 pub use rustpower::*;
 mod acpf;
+mod bench;
 mod ecs;
 mod jacobian;
 mod kkt;
@@ -20,6 +21,7 @@ fn main() {
     }
     let name = std::env::args().nth(1).unwrap_or_else(|| "help".into());
     let output_key = match name.as_str() {
+        "opf" | "opf-assembly" | "opf-v4-v5" => Some("RUSTPOWER_OPF_OUTPUT"),
         "lm-assembly" | "lm-ablation" => Some("RUSTPOWER_NE_AUDIT_DIR"),
         "lm-solvers" => Some("RUSTPOWER_CHOLESKY_OUTPUT"),
         "v4vsoperator" => Some("RUSTPOWER_V4_OPERATOR_OUTPUT"),
@@ -27,10 +29,19 @@ fn main() {
     };
     if let Some(key) = output_key {
         let output = std::env::var(key).unwrap_or_else(|_| {
-            format!(
+            let root = format!(
                 "{}/target/research/performance/{name}",
                 env!("CARGO_MANIFEST_DIR")
-            )
+            );
+            if bench::option("--case").is_some() || bench::option("--repeats").is_some() {
+                format!(
+                    "{root}/checks/{}-r{}",
+                    bench::option("--case").unwrap_or("all".into()),
+                    bench::repeats()
+                )
+            } else {
+                root
+            }
         });
         std::fs::create_dir_all(&output).unwrap();
         unsafe {
@@ -60,8 +71,11 @@ fn main() {
             "blas_preload": std::env::var("LD_PRELOAD").ok(),
             "cholmod_library": std::env::var("RUSTPOWER_CHOLMOD_LIBRARY").ok(),
             "cholmod_threads": std::env::var("RUSTPOWER_CHOLMOD_THREADS").ok(),
-            "tolerance_inf": 1e-8, "max_iterations": 300,
-            "warmup_rounds": 1, "measured_rounds": 7
+            "tolerance_inf": if name.starts_with("opf") { None } else { Some(1e-8) },
+            "max_iterations": if name.starts_with("opf") { None } else { Some(300) },
+            "selected_case": bench::option("--case"),
+            "benchmark_source_sha256": command("sha256sum", &["performance/bench.rs", "performance/lm.rs", "performance/opf.rs", "performance/linear_solvers.rs"]),
+            "warmup_rounds": 1, "measured_rounds": bench::repeats()
         });
         std::fs::write(
             format!("{output}/environment.json"),
@@ -79,16 +93,15 @@ fn main() {
         "ecs" => ecs::perf_pf_app_api(),
         "ecs-klu" => ecs::perf_pf_klu_breakdown(),
         "ecs-lm" => ecs::perf_pf_augmented_vs_normal(),
-        "opf" => opf_comparison::bench_full_opf_all_cases(),
-        "opf-assembly" => opf_comparison::bench_ablation_breakdown(),
-        "opf-v4-v5" => opf_comparison::bench_v4_vs_v5_endtoend(),
+        "opf" | "opf-assembly" => opf_comparison::benchmark(opf_comparison::VERSIONS),
+        "opf-v4-v5" => opf_comparison::benchmark(&["V4", "V5.0"]),
         "kkt" => kkt::bench_v5_2_kkt_prep(),
         "pf-builder" => pf_builder::compare_new_pf_performance(),
         "v3-v4" => v4::v4_vs_v3_perf_ieee118(),
         "v4-fused" => v4::fused_vs_two_pass_perf_ieee118(),
         "v4vsoperator" => v4vsoperator::run(),
         "help" | "--help" => println!(
-            "cargo bench --bench comparison --features benchmark -- <入口>\nLM: lm-check, lm-assembly, lm-ablation, lm-solvers\nACPF: acpf, jacobian, ecs, ecs-klu, ecs-lm, pf-builder, v3-v4, v4-fused, v4vsoperator\nOPF: opf, opf-assembly, opf-v4-v5, kkt"
+            "cargo bench --bench comparison --features benchmark -- <入口>\nLM: lm-check, lm-assembly, lm-ablation, lm-solvers\nACPF: acpf, jacobian, ecs, ecs-klu, ecs-lm, pf-builder, v3-v4, v4-fused, v4vsoperator\nOPF: opf, opf-assembly, opf-v4-v5, kkt\nLM/OPF可选：--case IEEE39 --repeats 7（另加1次预热）"
         ),
         _ => panic!("未知性能入口：{name}；使用 --help 查看"),
     }

@@ -1,348 +1,216 @@
-use rustpower::new_opf::*;
-use rustpower::opf::PipsOpt;
-use rustpower::opf::builder::opf_data_from_network;
+//! OPF性能入口：一份版本选择、一份计时、一份输出。
+//! 原生网络比较与pandapower同模型审计共用solve_version；不把两种输入混为同一实验。
+use crate::bench::{self, Report, timeit};
+use rustpower::{new_opf, opf};
+use serde_json::{Value, json};
 
-pub fn bench_ablation_breakdown() {
-    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    println!("\n| Case | Version | Iter | Hess | G/H | KKT | Solve | Overall |");
-    println!("|---|---|---|---|---|---|---|---|");
-    for case in ["IEEE39", "IEEE118", "pegase9241"] {
-        let path = format!("{}/cases/{}/data.zip", dir, case);
-        if !std::path::Path::new(&path).exists() {
-            continue;
-        }
-        let net = crate::io::pandapower::load_csv_zip(&path).unwrap();
-        let mut base_data = opf_data_from_network(&net);
-        if let Some(cfg) = crate::io::pandapower::load_opf_cfg_zip(&path) {
-            if case == "IEEE39" {
-                for g in 0..10i64 {
-                    if let Some(r) = cfg.get("gen", g) {
-                        base_data.cost_coeffs[g as usize] =
-                            [r.cp2_eur_per_mw2, r.cp1_eur_per_mw, r.cp0_eur];
-                    }
-                }
-            } else {
-                if let Some(r) = cfg.get("ext_grid", 0) {
-                    base_data.cost_coeffs[0] = [r.cp2_eur_per_mw2, r.cp1_eur_per_mw, r.cp0_eur];
-                }
-                for g in 0..54i64 {
-                    if let Some(r) = cfg.get("gen", g) {
-                        base_data.cost_coeffs[(1 + g) as usize] =
-                            [r.cp2_eur_per_mw2, r.cp1_eur_per_mw, r.cp0_eur];
-                    }
-                }
-            }
-        }
-        let mi = if case == "pegase9241" { 30 } else { 150 };
-        let x0 = base_data.warm_x0();
-        let (xmin, xmax) = base_data.bounds();
+pub const VERSIONS: &[&str] = &["V1", "V4", "V5.0", "V5.2", "V5.3", "V5.5", "V5.6"];
+const COLUMNS: &[bench::Columns] = &[
+    &[
+        ("converged", "收敛"),
+        ("message", "停止原因"),
+        ("iterations", "迭代"),
+        ("f", "目标值"),
+        ("balance_inf", "功率平衡∞"),
+        ("flow_violation", "支路平方功率越限"),
+        ("bound_violation", "变量越限"),
+    ],
+    &[
+        ("hess_ms", "Hessian/融合填充ms"),
+        ("gh_ms", "G/H区域ms"),
+        ("kkt_ms", "KKT区域ms"),
+        ("assembly_ms", "组装区域合计ms"),
+    ],
+    &[
+        ("first_solve_ms", "首次求解区域ms"),
+        ("later_solves_ms", "后续求解区域ms"),
+        ("total_ms", "总执行ms"),
+    ],
+    &[
+        ("klu_symbolic_ms", "KLU符号ms"),
+        ("klu_factor_ms", "KLU factor及fallback ms"),
+        ("klu_refactor_ms", "KLU refactor ms"),
+        ("klu_backsolve_ms", "KLU回代ms"),
+    ],
+    &[
+        ("first_factor_count", "首次factor次数"),
+        ("refactor_count", "refactor次数"),
+        ("factor_fallback_count", "fallback次数"),
+    ],
+];
 
-        let row = |case: &str, ver: &str, r: &PipsResult, overall: std::time::Duration| {
-            let t = &r.timing;
-            println!(
-                "| {} | {} | {} | {:?} | {:?} | {:?} | {:?} | {:?} | {:?} |",
-                case, ver, r.iterations, t.hess, t.gh, t.kkt, t.solve_sym, t.solve_num, overall
-            );
-        };
+pub fn options(max_it: usize) -> opf::PipsOpt {
+    opf::PipsOpt {
+        max_it,
+        cost_mult: 1e-4,
+        ..Default::default()
+    }
+}
+fn options_json(o: &opf::PipsOpt, version: &str) -> Value {
+    json!({"feastol":o.feastol,"gradtol":o.gradtol,"comptol":o.comptol,"costtol":o.costtol,
+        "max_it":o.max_it,"cost_mult":o.cost_mult,"merged_slacks":version != "V1"})
+}
 
-        // V1 legacy (opf_hessfcn, no merged slacks)
-        let t0 = std::time::Instant::now();
-        let r1 = crate::opf::pips::pips(
-            |x| crate::opf::cost::opf_costfcn(&base_data, x),
+/// 初值/边界复制由调用方放在计时外；优化路径的模型复制、缓存和后端初始化在此计时内。
+pub fn solve_version(
+    version: &str,
+    base: &opf::OPFData,
+    seed: Vec<f64>,
+    lower: Vec<f64>,
+    upper: Vec<f64>,
+    opt: opf::PipsOpt,
+) -> opf::PipsResult {
+    if version == "V1" {
+        return opf::pips::pips(
+            |x| opf::cost::opf_costfcn(base, x),
             |x| {
-                let (g, h, dg, dh) = crate::opf::constraints::opf_consfcn(&base_data, x);
+                let (g, h, dg, dh) = opf::constraints::opf_consfcn(base, x);
                 (h, g, dh, dg)
             },
-            |x, l, m, _z, c| crate::opf::hessian::opf_hessfcn(&base_data, x, l, m, c),
-            x0.clone(),
-            xmin.clone(),
-            xmax.clone(),
-            PipsOpt {
-                max_it: mi,
-                cost_mult: 1e-4,
-                merged_slacks: false,
-                ..Default::default()
-            },
+            |x, l, m, _z, c| opf::hessian::opf_hessfcn(base, x, l, m, c),
+            seed,
+            lower,
+            upper,
+            opt,
         );
-        let d1 = t0.elapsed();
-        row(case, "V1", &r1, d1);
-
-        let data = NewOPFData::new(base_data.clone());
-        let t0 = std::time::Instant::now();
-        let r4 = pips(
-            &data,
-            x0.clone(),
-            xmin.clone(),
-            xmax.clone(),
-            PipsOpt {
-                max_it: mi,
-                cost_mult: 1e-4,
-                ..Default::default()
-            },
-        );
-        let d4 = t0.elapsed();
-        row(case, "V4", &r4, d4);
-
-        let t0 = std::time::Instant::now();
-        let r5 = pips::pips_v5(
-            &data,
-            x0.clone(),
-            xmin.clone(),
-            xmax.clone(),
-            PipsOpt {
-                max_it: mi,
-                cost_mult: 1e-4,
-                ..Default::default()
-            },
-        );
-        let d5 = t0.elapsed();
-        row(case, "V5.0", &r5, d5);
-
-        let t0 = std::time::Instant::now();
-        let r52 = pips::pips_v5_2(
-            &data,
-            x0.clone(),
-            xmin.clone(),
-            xmax.clone(),
-            PipsOpt {
-                max_it: mi,
-                cost_mult: 1e-4,
-                ..Default::default()
-            },
-        );
-        let d52 = t0.elapsed();
-        row(case, "V5.2", &r52, d52);
-
-        let t0 = std::time::Instant::now();
-        let r53 = pips::pips_v5_3(
-            &data,
-            x0.clone(),
-            xmin.clone(),
-            xmax.clone(),
-            PipsOpt {
-                max_it: mi,
-                cost_mult: 1e-4,
-                ..Default::default()
-            },
-        );
-        let d53 = t0.elapsed();
-        row(case, "V5.3", &r53, d53);
-
-        let t0 = std::time::Instant::now();
-        let r55 = pips::pips_v5_5(
-            &data,
-            x0.clone(),
-            xmin.clone(),
-            xmax.clone(),
-            PipsOpt {
-                max_it: mi,
-                cost_mult: 1e-4,
-                ..Default::default()
-            },
-        );
-        let d55 = t0.elapsed();
-        row(case, "V5.5", &r55, d55);
     }
+    let solve = match version {
+        "V4" => new_opf::configurations::pips,
+        "V5.0" => new_opf::configurations::pips_v5,
+        "V5.2" => new_opf::configurations::pips_v5_2,
+        "V5.3" => new_opf::configurations::pips_v5_3,
+        "V5.5" => new_opf::configurations::pips_v5_5,
+        "V5.6" => new_opf::configurations::pips_v5_6,
+        _ => panic!("未知OPF版本：{version}"),
+    };
+    let data = new_opf::model::NewOPFData::new(base.clone());
+    solve(&data, seed, lower, upper, opt)
 }
 
-pub fn bench_v4_vs_v5_endtoend() {
-    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    println!("\n| Case | Path | f [EUR] | Iter | Total time |");
-    println!("|---|---|---|---|---|");
-    for case in ["IEEE39", "IEEE118", "pegase9241"] {
-        let path = format!("{}/cases/{}/data.zip", dir, case);
-        if !std::path::Path::new(&path).exists() {
-            continue;
-        }
-        let net = crate::io::pandapower::load_csv_zip(&path).unwrap();
-        let mut base_data = opf_data_from_network(&net);
-        if let Some(cfg) = crate::io::pandapower::load_opf_cfg_zip(&path) {
-            let ng_cfg = if case == "IEEE39" { 10 } else { 54 };
-            if case != "IEEE39" {
-                if let Some(r) = cfg.get("ext_grid", 0) {
-                    base_data.cost_coeffs[0] = [r.cp2_eur_per_mw2, r.cp1_eur_per_mw, r.cp0_eur];
-                }
-                for g in 0..ng_cfg {
-                    if let Some(r) = cfg.get("gen", g) {
-                        base_data.cost_coeffs[(1 + g) as usize] =
-                            [r.cp2_eur_per_mw2, r.cp1_eur_per_mw, r.cp0_eur];
-                    }
-                }
-            } else {
-                for g in 0..ng_cfg {
-                    if let Some(r) = cfg.get("gen", g) {
-                        base_data.cost_coeffs[g as usize] =
-                            [r.cp2_eur_per_mw2, r.cp1_eur_per_mw, r.cp0_eur];
-                    }
-                }
+/// 保留审计JSON字段；分项直接读取PipsTiming，首次/后续求解不是纯符号/数值分解。
+pub fn measurement(result: &opf::PipsResult, total_ms: f64) -> Value {
+    let t = &result.timing;
+    let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+    json!({"converged":result.converged,"iterations":result.iterations,"f":result.f,"message":result.message,
+        "total_ms":total_ms,"hess_ms":ms(t.hess),"gh_ms":ms(t.gh),"kkt_ms":ms(t.kkt),
+        "assembly_ms":ms(t.hess+t.gh+t.kkt),"first_solve_ms":ms(t.solve_sym),"later_solves_ms":ms(t.solve_num)})
+}
+
+/// 原有CSV成本配置只加载一次，所有版本共用同一模型和初值。
+fn load_case(case: &str) -> opf::OPFData {
+    let path = format!("{}/cases/{case}/data.zip", env!("CARGO_MANIFEST_DIR"));
+    let net = rustpower::io::pandapower::load_csv_zip(&path).unwrap();
+    let mut data = opf::builder::opf_data_from_network(&net);
+    if let Some(cfg) = rustpower::io::pandapower::load_opf_cfg_zip(&path) {
+        let (offset, count) = if case == "IEEE39" { (0, 10) } else { (1, 54) };
+        if offset == 1 {
+            if let Some(r) = cfg.get("ext_grid", 0) {
+                data.cost_coeffs[0] = [r.cp2_eur_per_mw2, r.cp1_eur_per_mw, r.cp0_eur];
             }
         }
-        let data = NewOPFData::new(base_data);
-        let x0 = data.warm_x0();
-        let (xmin, xmax) = data.bounds();
-        let mi = if case == "pegase9241" { 30 } else { 150 };
-
-        let t4 = std::time::Instant::now();
-        let r4 = pips(
-            &data,
-            x0.clone(),
-            xmin.clone(),
-            xmax.clone(),
-            PipsOpt {
-                max_it: mi,
-                cost_mult: 1e-4,
-                ..Default::default()
-            },
-        );
-        let d4 = t4.elapsed();
-        let t5 = std::time::Instant::now();
-        let r5 = pips::pips_v5(
-            &data,
-            x0.clone(),
-            xmin.clone(),
-            xmax.clone(),
-            PipsOpt {
-                max_it: mi,
-                cost_mult: 1e-4,
-                ..Default::default()
-            },
-        );
-        let d5 = t5.elapsed();
-        println!(
-            "| {} | V4.0 | {:.2} | {} | {:?} |",
-            case, r4.f, r4.iterations, d4
-        );
-        println!(
-            "| {} | V5.0 | {:.2} | {} | {:?} |",
-            case, r5.f, r5.iterations, d5
-        );
+        for g in 0..count {
+            if let Some(r) = cfg.get("gen", g) {
+                data.cost_coeffs[g as usize + offset] =
+                    [r.cp2_eur_per_mw2, r.cp1_eur_per_mw, r.cp0_eur];
+            }
+        }
     }
+    data
 }
 
-pub fn bench_full_opf_all_cases() {
-    let cases = ["IEEE39", "IEEE118", "pegase9241"];
-    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+/// 在计时外重新计算可行性；不以目标值相近代替约束检查。
+fn feasibility(data: &opf::OPFData, x: &[f64], lo: &[f64], hi: &[f64]) -> (f64, f64, f64) {
+    let (g, h, _, _) = opf::constraints::opf_consfcn(data, x);
+    let max = |values: Vec<f64>| {
+        values.into_iter().fold(
+            0.0_f64,
+            |a, b| {
+                if b.is_nan() { f64::INFINITY } else { a.max(b) }
+            },
+        )
+    };
+    let balance = max(g.into_iter().map(f64::abs).collect());
+    let flow = max(h);
+    let bounds = max(x
+        .iter()
+        .zip(lo)
+        .zip(hi)
+        .map(|((&x, &lo), &hi)| {
+            if !x.is_finite() {
+                f64::INFINITY
+            } else {
+                (lo - x).max(x - hi)
+            }
+        })
+        .collect());
+    (balance, flow, bounds)
+}
 
-    println!("\n| Case | Method | f [EUR] | Iter | Total Time | Speedup |");
-    println!("|---|---|---|---|---|---|");
-
+pub fn benchmark(versions: &[&str]) {
+    let out = std::env::var("RUSTPOWER_OPF_OUTPUT").expect("OPF输出目录");
+    let repeats = bench::repeats();
+    let mut report = Report::new(out, COLUMNS);
+    let cases: Vec<_> = ["IEEE39", "IEEE118", "pegase9241"]
+        .into_iter()
+        .filter(|c| bench::selected(c))
+        .collect();
+    assert!(!cases.is_empty(), "--case没有匹配的OPF算例");
     for case in cases {
-        let path = format!("{}/cases/{}/data.zip", dir, case);
-        if !std::path::Path::new(&path).exists() {
-            continue;
-        }
-
-        let net = crate::io::pandapower::load_csv_zip(&path).unwrap();
-        let mut base_data = opf_data_from_network(&net);
-
-        if case == "IEEE118" {
-            if let Some(opf_cfg) = crate::io::pandapower::load_opf_cfg_zip(&path) {
-                if let Some(row) = opf_cfg.get("ext_grid", 0) {
-                    base_data.cost_coeffs[0] =
-                        [row.cp2_eur_per_mw2, row.cp1_eur_per_mw, row.cp0_eur];
+        let base = load_case(case);
+        let max_it = if case == "pegase9241" { 30 } else { 150 };
+        let x0 = base.warm_x0();
+        let (lo, hi) = base.bounds();
+        println!(
+            "\n{case}：原生网络输入，KLU，节点={}，发电机={}，支路={}；预热1次、测量{repeats}次。",
+            base.nb, base.ng, base.nl
+        );
+        println!(
+            "初值：warm_x0；参数：{}",
+            options_json(&options(max_it), "V1")
+        );
+        println!(
+            "V1不合并slack，V4–V5.6合并；Hessian/融合填充范围随版本变化。总时间包含模型缓存构建及首次分解。"
+        );
+        for (round, version) in bench::runs(versions, repeats) {
+            let (seed, lower, upper) = (x0.clone(), lo.clone(), hi.clone());
+            #[cfg(feature = "probe")]
+            rustpower::basic::solver::klu_probe::reset();
+            let (result, total_ms) = timeit!(solve_version(
+                version,
+                &base,
+                seed,
+                lower,
+                upper,
+                options(max_it)
+            ));
+            let mut row = measurement(&result, total_ms);
+            // 独立检查前读取后端计时，避免诊断影响计数。
+            #[cfg(feature = "probe")]
+            {
+                use rustpower::basic::solver::klu_probe as p;
+                use std::sync::atomic::Ordering::Relaxed;
+                for (key, counter) in [
+                    ("klu_symbolic_ms", &p::SYM_NS),
+                    ("klu_factor_ms", &p::FACTOR_NS),
+                    ("klu_refactor_ms", &p::REFACTOR_NS),
+                    ("klu_backsolve_ms", &p::SOLVE_NS),
+                ] {
+                    row[key] = (counter.load(Relaxed) as f64 / 1e6).into();
                 }
-                for g in 0..54i64 {
-                    if let Some(row) = opf_cfg.get("gen", g) {
-                        base_data.cost_coeffs[(1 + g) as usize] =
-                            [row.cp2_eur_per_mw2, row.cp1_eur_per_mw, row.cp0_eur];
-                    }
+                for (key, counter) in [
+                    ("first_factor_count", &p::N_FIRST_FACTOR),
+                    ("refactor_count", &p::N_REFACTOR),
+                    ("factor_fallback_count", &p::N_FACTOR_FALLBACK),
+                ] {
+                    row[key] = counter.load(Relaxed).into();
                 }
             }
-        } else if case == "IEEE39" {
-            if let Some(opf_cfg) = crate::io::pandapower::load_opf_cfg_zip(&path) {
-                for g in 0..10i64 {
-                    if let Some(row) = opf_cfg.get("gen", g) {
-                        base_data.cost_coeffs[g as usize] =
-                            [row.cp2_eur_per_mw2, row.cp1_eur_per_mw, row.cp0_eur];
-                    }
-                }
-            }
+            let (balance, flow, bounds) = feasibility(&base, &result.x, &lo, &hi);
+            row.as_object_mut().unwrap().extend(json!({"case":case,"method":version,"version":version,"round":round,
+                "options":options_json(&options(max_it),version),"input":"native CSV ZIP / warm_x0", "backend":"KLU",
+                "balance_inf":balance,"flow_violation":flow,"bound_violation":bounds}).as_object().unwrap().clone());
+            report.push(row, version);
         }
-
-        let data_v3 = NewOPFData::new(base_data.clone());
-        let x0 = base_data.warm_x0();
-        let (xmin, xmax) = base_data.bounds();
-
-        let start_v1 = std::time::Instant::now();
-        let res_v1 = crate::opf::pips::pips(
-            |x| crate::opf::cost::opf_costfcn(&base_data, x),
-            |x| {
-                let (g, h, dg, dh) = crate::opf::constraints::opf_consfcn(&base_data, x);
-                (h, g, dh, dg)
-            },
-            |x, l, m, _z, c| crate::opf::hessian::opf_hessfcn(&base_data, x, l, m, c),
-            x0.clone(),
-            xmin.clone(),
-            xmax.clone(),
-            PipsOpt {
-                max_it: 150,
-                cost_mult: 1e-4,
-                merged_slacks: false,
-                ..Default::default()
-            },
-        );
-        let dur_v1 = start_v1.elapsed();
-
-        let start_v3 = std::time::Instant::now();
-        let res_v3 = pips(
-            &data_v3,
-            x0.clone(),
-            xmin.clone(),
-            xmax.clone(),
-            PipsOpt {
-                max_it: 150,
-                cost_mult: 1e-4,
-                merged_slacks: false,
-                ..Default::default()
-            },
-        );
-        let dur_v3 = start_v3.elapsed();
-
-        // V4 Benchmark
-        let v3_cache = v3_symbolic::V3SymbolicCache::analyze(&data_v3);
-        let start_v4 = std::time::Instant::now();
-        let res_v4 = crate::opf::pips::pips(
-            |x| crate::opf::cost::opf_costfcn(&data_v3, x),
-            |x| {
-                let (g, h, dg, dh) = crate::opf::constraints::opf_consfcn(&data_v3, x);
-                (h, g, dh, dg)
-            },
-            |x, lam_eq, mu_ineq, z_ineq, cost_mult| {
-                v4_numeric_rect::v4_rect_numeric_fill(
-                    &data_v3,
-                    &v3_cache,
-                    x,
-                    lam_eq,
-                    mu_ineq,
-                    Some(z_ineq),
-                    cost_mult,
-                )
-            },
-            x0,
-            xmin,
-            xmax,
-            PipsOpt {
-                max_it: 150,
-                cost_mult: 1e-4,
-                merged_slacks: true,
-                ..Default::default()
-            },
-        );
-        let dur_v4 = start_v4.elapsed();
-
-        let speedup3 = dur_v1.as_secs_f64() / dur_v3.as_secs_f64();
-        let speedup4 = dur_v1.as_secs_f64() / dur_v4.as_secs_f64();
-        println!(
-            "| {} | V1 | {:.2} | {} | {:?} | - |",
-            case, res_v1.f, res_v1.iterations, dur_v1
-        );
-        println!(
-            "| {} | V3 | {:.2} | {} | {:?} | {:.2}x |",
-            case, res_v3.f, res_v3.iterations, dur_v3, speedup3
-        );
-        println!(
-            "| {} | V4 | {:.2} | {} | {:?} | {:.2}x |",
-            case, res_v4.f, res_v4.iterations, dur_v4, speedup4
-        );
+        report.summary(case);
     }
 }
