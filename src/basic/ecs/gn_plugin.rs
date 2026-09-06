@@ -60,22 +60,7 @@ pub fn gn_run_pf(
         &mut state.solver,
     );
 
-    match v {
-        Ok((v, iterations)) => {
-            cmd.insert_resource(PowerFlowResult {
-                v,
-                iterations,
-                converged: true,
-            });
-        }
-        Err((_err, v_err, its)) => {
-            cmd.insert_resource(PowerFlowResult {
-                v: v_err,
-                iterations: its,
-                converged: false,
-            });
-        }
-    }
+    cmd.insert_resource(super::network::result_from_permuted(&mat, v));
 }
 
 /// Plugin for running power flow with classical Gauss–Newton LM.
@@ -121,5 +106,35 @@ mod tests {
             r_gn.converged, r_gn.iterations
         );
         assert!(r_gn.converged, "GN plugin failed to converge on IEEE39");
+        let mat = app_gn.world().resource::<PowerFlowMat>();
+        // This fixture must exercise a real permutation, not just identity ordering.
+        assert!(mat.from_perm.iter().enumerate().any(|(i, &bus)| i != bus));
+        for (ordered, &original) in mat.from_perm.iter().enumerate() {
+            assert_eq!(mat.to_perm[original], ordered);
+        }
+        let mut nr_solver = crate::basic::solver::DefaultSolver::default();
+        let nr = crate::basic::newtonpf::newton_pf(
+            &mat.y_bus,
+            &mat.s_bus,
+            &mat.v_bus_init,
+            mat.npv,
+            mat.npq,
+            Some(1e-8),
+            Some(100),
+            &mut nr_solver,
+            None,
+        ).expect("NR reference must converge").0;
+        // Numerical kernels consume PQ/PV/slack order; ECS exposes original order.
+        for (ordered, &original) in mat.from_perm.iter().enumerate() {
+            assert!((r_gn.v[original] - nr[ordered]).norm() < 1e-4,
+                    "GN-LM/NR bus-order mismatch at original bus {original}");
+        }
+        // Reusing the same app must not permute the voltages a second time.
+        app_gn.update();
+        let repeated = app_gn.world().resource::<PowerFlowResult>();
+        assert!(repeated.converged);
+        for (a, b) in repeated.v.iter().zip(r_gn.v.iter()) {
+            assert!((a - b).norm() < 1e-4);
+        }
     }
 }

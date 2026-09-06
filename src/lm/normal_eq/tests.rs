@@ -75,7 +75,7 @@ fn ne_ill_conditioned_behaves() {
 /// PEGASE9241 性能：NE 路径两种模式（笨=每轮重做符号 / 聪明=缓存 pattern
 /// 纯数值双指针乘法）的 wall time 与拆解；对照增广路径已测的
 /// LDL ≈147ms、KLU ≈460ms。
-#[cfg(all(feature = "klu", feature = "ldl"))]
+#[cfg(all(any(feature = "klu", feature = "klu_dyn"), feature = "ldl"))]
 #[test]
 fn ne_perf_pegase9241() {
     use crate::basic::ecs::elements::PPNetwork;

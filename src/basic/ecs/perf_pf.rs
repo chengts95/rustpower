@@ -3,7 +3,7 @@
 //! 每个 app 跑两次 `update()`：cold = 首次（含建网、符号分析、首分解），
 //! warm = 第二次（热路径）。release 下跑（加 probe 得各相位 breakdown）：
 //! `cargo test --release --features "klu probe" perf_pf -- --nocapture`
-#![cfg(all(test, feature = "klu"))]
+#![cfg(all(test, any(feature = "klu", feature = "klu_dyn")))]
 
 use bevy_app::App;
 use std::time::Instant;
@@ -112,7 +112,7 @@ fn perf_pf_klu_breakdown() {
     #[cfg(feature = "probe")]
     klu_probe::reset();
     let t = Instant::now();
-    let r = crate::basic::newtonpf::newton_pf(ybus, sbus, v_init, npv, npq, Some(1e-8), Some(100), &mut s);
+    let r = crate::basic::newtonpf::newton_pf(ybus, sbus, v_init, npv, npq, Some(1e-8), Some(100), &mut s, None);
     let total = t.elapsed();
     let it = r.map(|(_, it)| it).unwrap_or(usize::MAX);
     println!("NR      : total={total:9.?} it={it:2}");

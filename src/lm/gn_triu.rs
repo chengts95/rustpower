@@ -418,7 +418,7 @@ pub fn newton_pf_gn_triu<Solver: Solve>(
     }
 }
 
-#[cfg(all(test, feature = "klu"))]
+#[cfg(all(test, any(feature = "klu", feature = "klu_dyn")))]
 mod tests {
     use super::*;
     use crate::basic::new_dsdvbus4::fill_jacobian_v4;

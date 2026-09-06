@@ -15,35 +15,26 @@ pub(crate) fn residual(
     v: &[Complex64],
     out: &mut [f64],
 ) -> (f64, f64) {
-    let (y_cp, y_ri, y_v) = (ybus.col_offsets(), ybus.row_indices(), ybus.values());
-    for x in ibus.iter_mut() {
-        *x = Complex64::new(0.0, 0.0);
-    }
-    for j in 0..ybus.ncols() {
-        for p in y_cp[j]..y_cp[j + 1] {
-            ibus[y_ri[p]] += y_v[p] * v[j];
-        }
-    }
-    let mut res_inf = 0.0f64;
-    let mut f = 0.0;
-    for i in 0..n_act {
-        let s = v[i] * ibus[i].conj() - sbus[i];
-        out[i] = s.re;
-        res_inf = res_inf.max(s.re.abs());
-        f += s.re * s.re;
-        if i < npq {
-            out[n_act + i] = s.im;
-            res_inf = res_inf.max(s.im.abs());
-            f += s.im * s.im;
-        }
-    }
-    (res_inf, 0.5 * f)
+    use crate::basic::newtonpf::{csc_matvec_complex, fill_f_from_power};
+
+    csc_matvec_complex(
+        ybus.col_offsets(),
+        ybus.row_indices(),
+        ybus.values(),
+        v,
+        ibus,
+    );
+    let res_inf = fill_f_from_power::<false>(|i| v[i] * ibus[i].conj(), sbus, npq, n_act, out);
+    // LM retains its least-squares merit for step acceptance; convergence
+    // uses the same infinity norm as Newton and Iwamoto.
+    let merit = 0.5 * out[..n_act + npq].iter().map(|r| r * r).sum::<f64>();
+    (res_inf, merit)
 }
 
 /// Test networks shared by the exact and GN drivers: the ill-conditioned
 /// 14-bus case (ext_ref case2, renumbering-invariant) and the IEEE39
 /// `PowerFlowMat` loader.
-#[cfg(all(test, feature = "klu"))]
+#[cfg(all(test, any(feature = "klu", feature = "klu_dyn")))]
 pub(crate) mod fixtures {
     use nalgebra::DVector;
     use nalgebra_sparse::{CooMatrix, CscMatrix};
@@ -94,15 +85,20 @@ pub(crate) mod fixtures {
 
     /// The case in `[PQ | PV | slack]` order: PQ {1,2,4,5,7,8,10,11,13},
     /// PV {3,6,9,12}, slack {0}. Returns (ybus, n_pv, n_pq, v_star, s_spec).
-    pub(crate) fn ill_conditioned_case() -> (CscMatrix<Complex64>, usize, usize, Vec<Complex64>, Vec<Complex64>) {
+    pub(crate) fn ill_conditioned_case() -> (
+        CscMatrix<Complex64>,
+        usize,
+        usize,
+        Vec<Complex64>,
+        Vec<Complex64>,
+    ) {
         let order: Vec<usize> = [1, 2, 4, 5, 7, 8, 10, 11, 13, 3, 6, 9, 12, 0].into();
         let ybus = build_ybus(&order);
         let v_star_old = old_v_star();
 
         // Specified injections from the exact solution (old numbering, but
         // the network is renumbering-invariant — compute with the new one).
-        let yv = &ybus
-            * &DVector::from_vec(order.iter().map(|&b| v_star_old[b]).collect());
+        let yv = &ybus * &DVector::from_vec(order.iter().map(|&b| v_star_old[b]).collect());
         let s_spec: Vec<Complex64> = (0..NB)
             .map(|k| {
                 let v = v_star_old[order[k]];
@@ -137,5 +133,32 @@ pub(crate) mod fixtures {
             .get_resource::<crate::basic::ecs::powerflow::systems::PowerFlowMat>()
             .expect("init_pf_net did not produce a PowerFlowMat resource")
             .clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::basic::newtonpf::fill_f_from_scalc;
+
+    #[test]
+    fn lm_and_newton_share_reduced_inf_norm() {
+        let ybus = CscMatrix::identity(3);
+        let v = vec![Complex64::new(1.0, 0.0); 3];
+        let sbus = vec![
+            Complex64::new(0.25, -0.75),
+            Complex64::new(0.5, 100.0),
+            Complex64::new(100.0, 100.0),
+        ];
+        let mut ibus = vec![Complex64::new(0.0, 0.0); 3];
+        let mut lm_r = vec![0.0; 3];
+        let (norm_inf, merit) = residual(&ybus, &sbus, &mut ibus, 2, 1, &v, &mut lm_r);
+        let mut nr_r = vec![0.0; 3];
+        let nr_norm = fill_f_from_scalc::<false>(&v, &sbus, 1, 2, &mut nr_r);
+        assert_eq!(lm_r, vec![0.75, 0.5, 0.75]);
+        assert_eq!(lm_r, nr_r);
+        assert_eq!(norm_inf, 0.75);
+        assert_eq!(norm_inf, nr_norm);
+        assert_eq!(merit, 0.6875);
     }
 }
