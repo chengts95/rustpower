@@ -9,6 +9,38 @@ mod tests {
     use nalgebra_sparse::{CooMatrix, CscMatrix};
     use num_complex::Complex64;
 
+    #[test]
+    fn coo_conversion_preserves_solver_buffers_until_pattern_changes() {
+        use crate::lm::baseline::CooSystem;
+        let mut system = CooSystem::default();
+        let mut pointers = None;
+        for (mu, j) in [(0.1, 2.0), (0.5, 3.0)] {
+            let mut coo = CooMatrix::new(2, 2);
+            for (row, col, value) in [(0, 0, mu), (1, 0, j), (0, 1, j), (1, 1, -1.0)] {
+                coo.push(row, col, value);
+            }
+            system.update(&CscMatrix::from(&coo));
+            let current = (system.cols.as_ptr(), system.rows.as_ptr(), system.values.as_ptr());
+            if let Some(previous) = pointers {
+                assert_eq!(current, previous);
+                assert_eq!(system.solver.positive_inertia(), Some(1));
+            }
+            pointers = Some(current);
+            let mut rhs = [0.0, -1.0];
+            assert!(system.solve(&mut rhs));
+            assert!((mu * rhs[0] + j * rhs[1]).abs() < 1e-12);
+            assert!((j * rhs[0] - rhs[1] + 1.0).abs() < 1e-12);
+        }
+        let mut diagonal = CooMatrix::new(2, 2);
+        diagonal.push(0, 0, 0.5);
+        diagonal.push(1, 1, -1.0);
+        system.update(&CscMatrix::from(&diagonal));
+        assert_eq!(system.solver.positive_inertia(), None);
+        let mut rhs = [1.0, -1.0];
+        assert!(system.solve(&mut rhs));
+        assert_eq!(rhs, [2.0, 1.0]);
+    }
+
     struct Case {
         ybus: CscMatrix<Complex64>,
         npv: usize,

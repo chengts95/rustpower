@@ -36,7 +36,8 @@
 //! [`super::newton_pf_gn_default`]'s feature ladder.
 
 use crate::lm::step_control::{
-    LmOptions, TrialError, TrustRegion, polar_trial, predicted_reduction,
+    LmOptions, TrialError, TrustRegion, augmented_predicted_reduction as predicted_reduction,
+    polar_trial,
 };
 use nalgebra::DVector;
 use nalgebra_sparse::CscMatrix;
@@ -203,8 +204,7 @@ pub struct GnTriuDriver {
     scalc: Vec<Complex64>,
     r: Vec<f64>,
     rt: Vec<f64>,
-    g: Vec<f64>,
-    b: Vec<f64>,
+    b: Vec<f64>, // 求解前[0; −r]，求解后[δ; s]，s = r + Jδ。
     vt: Vec<Complex64>,
     n_act: usize,
     npq: usize,
@@ -278,7 +278,6 @@ impl GnTriuDriver {
             scalc: vec![Complex64::new(0.0, 0.0); nb],
             r: vec![0.0; n_state],
             rt: vec![0.0; n_state],
-            g: vec![0.0; n_state],
             b: vec![0.0; 2 * n_state],
             vt: vec![Complex64::new(0.0, 0.0); nb],
             n_act: n_pv + n_pq,
@@ -354,22 +353,6 @@ impl GnTriuDriver {
         self.prof_fill_ns += t.elapsed().as_nanos() as u64;
     }
 
-    /// `g = Jᵀ·r` from the stored Jᵀ block: `g = S·r` as a CSC SpMV over
-    /// the s-columns (column i of S = J row i; entry (row x, val)
-    /// contributes `val·r[i]` to `g[x]`).
-    fn jt_times_r(&mut self) {
-        let (n, gp, ri) = (self.n_state, &self.triu.col_offsets, &self.triu.row_indices);
-        for x in self.g.iter_mut() {
-            *x = 0.0;
-        }
-        for i in 0..n {
-            let ri_r = self.r[i];
-            for p in gp[n + i]..gp[n + i + 1] - 1 {
-                self.g[ri[p]] += self.values[p] * ri_r;
-            }
-        }
-    }
-
     /// Classical GN-LM with the same default step control as the full layout.
     /// See `solve_gn_with_options` for configurable settings.
     pub fn solve_gn<S: Solve>(
@@ -425,7 +408,6 @@ impl GnTriuDriver {
                 };
             }
             self.fill(ybus, v);
-            self.jt_times_r();
 
             let mut accepted = false;
             for _ in 0..options.max_trials {
@@ -453,7 +435,7 @@ impl GnTriuDriver {
                 self.prof_solve_ns += t_solve.elapsed().as_nanos() as u64;
                 self.n_solves += 1;
                 let delta = &self.b[..n];
-                let finite = solve_ok && delta.iter().all(|x| x.is_finite());
+                let finite = solve_ok && self.b.iter().all(|x| x.is_finite());
                 if !finite {
                     if !options.increase_mu(&mut mu, options.failed_step_increase) {
                         return GnTriuResult {
@@ -522,7 +504,7 @@ impl GnTriuDriver {
                         &mut self.rt,
                     )
                 };
-                let pred = predicted_reduction(&self.g, delta, mu, step_norm_squared);
+                let pred = predicted_reduction(&self.r, &self.b[n..], mu, step_norm_squared);
                 let rho = if pred.is_finite() && pred > 0.0 && f_new.is_finite() {
                     (f - f_new) / pred
                 } else {
@@ -612,6 +594,46 @@ mod tests {
     use crate::lm::gn_flat::GnDriver;
     use crate::lm::kernels::fill_jt;
     use crate::lm::residual::fixtures::load_ieee39_mat;
+
+    #[test]
+    fn prediction_from_augmented_solution_matches_quadratic_model() {
+        use nalgebra::{Matrix2, Matrix4, Vector2, Vector4};
+
+        let j = Matrix2::new(3.0, -2.0, 1.0, 4.0);
+        let r = Vector2::new(2.0, -3.0);
+        for weights in [Vector2::new(1.0, 1.0), Vector2::new(0.25, 4.0)] {
+            for mu in [1e-4, 1e-2, 10.0] {
+                let a = Matrix4::new(
+                    mu * weights[0],
+                    0.0,
+                    j[(0, 0)],
+                    j[(1, 0)],
+                    0.0,
+                    mu * weights[1],
+                    j[(0, 1)],
+                    j[(1, 1)],
+                    j[(0, 0)],
+                    j[(0, 1)],
+                    -1.0,
+                    0.0,
+                    j[(1, 0)],
+                    j[(1, 1)],
+                    0.0,
+                    -1.0,
+                );
+                let solution = a.lu().solve(&Vector4::new(0.0, 0.0, -r[0], -r[1])).unwrap();
+                let delta = Vector2::new(solution[0], solution[1]);
+                let norm = delta.component_mul(&weights).dot(&delta);
+                let got = predicted_reduction(r.as_slice(), &solution.as_slice()[2..], mu, norm);
+                // 直接计算未加阻尼的二次模型下降量，不使用待测公式。
+                let expected = 0.5 * (r.norm_squared() - (r + j * delta).norm_squared());
+                assert!(
+                    (got - expected).abs() < 1e-12,
+                    "mu={mu}: {got} != {expected}"
+                );
+            }
+        }
+    }
 
     /// 逐位对照:triu 行向直填的 Jᵀ 段必须等于 v4 列向 fill + fill_jt 的
     /// 转置输出——同一公式、无求和顺序差异,必须严格逐位相等。

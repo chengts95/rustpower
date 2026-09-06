@@ -1,5 +1,5 @@
 //! LM 对比入口：实现一致性、正规方程与增广方程、线性求解后端。
-//! 相同初值、阻尼和精度；每次潮流内部复用求解器。
+//! 各路径共用步长控制，在一次潮流内部复用求解器。
 use crate::basic::solver::{KLUSolver, QDLDLSolver};
 use nalgebra::DVector;
 use nalgebra_sparse::CscMatrix;
@@ -244,6 +244,7 @@ pub fn operator_lm_matches_original_drivers() {
         let case = load_case(name);
         for metric in [
             rustpower::lm::DampingMetric::Polar,
+            rustpower::lm::DampingMetric::CartesianVoltage,
             rustpower::lm::DampingMetric::YbusDiagonal,
         ] {
             let options = rustpower::lm::LmOptions {
@@ -264,21 +265,34 @@ pub fn operator_lm_matches_original_drivers() {
                 100,
                 &options,
             );
+            let (reference, voltage) = run_with_options(&case, Method::UpperOperator, 300, &options);
+            for full_slice in [false, true] {
+                for upper_only in [false, true] {
+                    let (coo, coo_voltage, _) = run_coo_baseline(&case, full_slice, upper_only, &options);
+                    assert!(coo.converged, "{name}: COO did not converge");
+                    assert_eq!(coo.iterations, reference.iterations);
+                    assert_eq!(coo.linear_solves, reference.linear_solves);
+                    let error = voltage.iter().zip(&coo_voltage)
+                        .map(|(a, b)| (*a - *b).norm()).fold(0.0_f64, f64::max);
+                    assert!(error < 1e-8, "{name}: COO voltage difference {error}");
+                }
+            }
         }
     }
 }
 
-/// 原样运行历史baseline；不伪称它们使用了当前信赖域和求解器复用规则。
-fn run_legacy_baseline(case: &Case, full_slice: bool) -> (Measurement, Vec<Complex64>, f64) {
+/// COO仍逐次组装和转换；与其他路径共用参数，并复用求解器。
+fn run_coo_baseline(case: &Case, full_slice: bool, upper_only: bool, options: &rustpower::lm::LmOptions) -> (Measurement, Vec<Complex64>, f64) {
     use rustpower::lm::baseline::{aug_coo::AugCooDriver, full_slice::AugFsDriver};
     let mut v = case.v.clone();
     let t = Instant::now();
-    let (build_ms, solve_ms, converged, iterations, fill_ns, coo_ns, linear_ns, solves) =
+    let (build_ms, solve_ms, converged, iterations, fill_ns, coo_ns, mu_ns, linear_ns, solves) =
         if full_slice {
             let mut d = AugFsDriver::build(&case.y, case.npv, case.npq, case.s.clone());
+            d.upper_only = upper_only;
             let build_ms = t.elapsed().as_secs_f64() * 1000.0;
             let t = Instant::now();
-            let r = d.solve_aug_fs(&case.y, &mut v, 1e-8, 300);
+            let r = d.solve_aug_fs_with_options(&case.y, &mut v, 1e-8, 300, options);
             (
                 build_ms,
                 t.elapsed().as_secs_f64() * 1000.0,
@@ -286,14 +300,16 @@ fn run_legacy_baseline(case: &Case, full_slice: bool) -> (Measurement, Vec<Compl
                 r.iterations,
                 d.prof_full_j_ns,
                 d.prof_slice_coo_ns,
+                d.prof_mu_ns,
                 d.prof_solve_ns,
                 d.n_solves,
             )
         } else {
             let mut d = AugCooDriver::build(&case.y, case.npv, case.npq, case.s.clone());
+            d.upper_only = upper_only;
             let build_ms = t.elapsed().as_secs_f64() * 1000.0;
             let t = Instant::now();
-            let r = d.solve_aug_coo(&case.y, &mut v, 1e-8, 300);
+            let r = d.solve_aug_coo_with_options(&case.y, &mut v, 1e-8, 300, options);
             (
                 build_ms,
                 t.elapsed().as_secs_f64() * 1000.0,
@@ -301,6 +317,7 @@ fn run_legacy_baseline(case: &Case, full_slice: bool) -> (Measurement, Vec<Compl
                 r.iterations,
                 d.prof_fill_ns,
                 d.prof_coo_ns,
+                d.prof_mu_ns,
                 d.prof_solve_ns,
                 d.n_solves,
             )
@@ -314,7 +331,7 @@ fn run_legacy_baseline(case: &Case, full_slice: bool) -> (Measurement, Vec<Compl
             build_ms,
             solve_ms,
             fill_ms: fill_ns as f64 / 1e6,
-            mu_ms: 0.0,
+            mu_ms: mu_ns as f64 / 1e6,
             linear_solve_ms: linear_ns as f64 / 1e6,
             iterations,
             linear_solves: solves,
@@ -326,20 +343,32 @@ fn run_legacy_baseline(case: &Case, full_slice: bool) -> (Measurement, Vec<Compl
     )
 }
 
-/// 比较同一个潮流问题的六条实现路径：
+/// 比较同一个潮流问题的八条实现路径：
 /// 1. 正规方程：首次建立 JᵀJ 结构，之后只计算数值。
 /// 2. 正规方程：每轮重新计算 JᵀJ 的结构和数值。
 /// 3. 增广方程：使用原上三角填充函数。
 /// 4. 增广方程：使用新的 Jacobian 算子填充上三角。
-/// 5. 历史baseline：V4填J，再用COO组装完整增广矩阵。
-/// 6. 历史baseline：全J裁剪，再用COO组装完整增广矩阵。
+/// 5. COO基线：V4填J，再用COO组装完整增广矩阵。
+/// 6. COO基线：全J裁剪，再用COO组装完整增广矩阵。
+/// 7–8. 两条COO基线开启upper_only，只写上三角。
 ///
-/// 均使用QDLDL和同一初值。前四条共用当前步长控制并复用求解器；
-/// 两条历史baseline保留原步长控制和每次试步重建求解器的行为。
+/// 均使用QDLDL、同一初值及步长控制，并在一次潮流内复用求解器。
 /// 分别记录初始化、矩阵准备、线性求解和完整潮流时间。
 /// 每种实现先预热一次，再测七次。固定CPU，单线程运行此测试。
 #[cfg(feature = "probe")]
 pub fn benchmark_cached_normal_equations() {
+    run_assembly_comparison(&[0, 1, 2, 3, 4, 5, 6, 7]);
+}
+
+/// 同一KKT结构与求解器：V4+上三角COO → 原triu直填 → 算子直填。
+/// 直接读取已有Jacobian、COO和求解计时器，不增加纯内核微基准。
+#[cfg(feature = "probe")]
+pub fn benchmark_coo_ablation() {
+    run_assembly_comparison(&[6, 2, 3]);
+}
+
+#[cfg(feature = "probe")]
+fn run_assembly_comparison(methods: &[usize]) {
     use crate::basic::solver::qdldl_probe;
     use rustpower::lm::normal_eq::NeDriver;
     use std::sync::atomic::Ordering;
@@ -360,16 +389,17 @@ pub fn benchmark_cached_normal_equations() {
         if case.name.contains("flat") {
             options.trust_region = Some(rustpower::lm::step_control::TrustRegionOptions::default());
         }
-        // 以该算例第一次缓存正规方程的结果为对照，检查后续各次运行。
+        // 以该算例第一条路径的结果为对照，检查后续各次运行。
         let mut reference = None::<(usize, u64, Vec<Complex64>)>;
         println!(
-            "\n算例：{}。各实现使用相同初值和残差容差；两条历史baseline保留旧步长控制。",
+            "\n算例：{}。各实现使用相同初值和残差容差；全部使用当前步长控制并复用求解器。",
             case.name
         );
         // 第0轮只预热，不计入中位数。每次均重新创建驱动器和线性求解器。
         for round in 0..8 {
-            for slot in 0..6 {
-                let method = if round % 2 == 0 { slot } else { 5 - slot };
+            for slot in 0..methods.len() {
+                let index = if round % 2 == 0 { slot } else { methods.len() - 1 - slot };
+                let method = methods[index];
                 qdldl_probe::reset();
                 let (measurement, v, product_symbolic_ms, product_numeric_ms, mu_ms, coo_ms) =
                     if method < 2 {
@@ -420,8 +450,9 @@ pub fn benchmark_cached_normal_equations() {
                         let mu_ms = m.mu_ms;
                         (m, v, 0.0, 0.0, mu_ms, 0.0)
                     } else {
-                        let (m, v, coo_ms) = run_legacy_baseline(case, method == 5);
-                        (m, v, 0.0, 0.0, 0.0, coo_ms)
+                        let (m, v, coo_ms) = run_coo_baseline(case, method % 2 == 1, method >= 6, &options);
+                        let m_mu_ms = m.mu_ms;
+                        (m, v, 0.0, 0.0, m_mu_ms, coo_ms)
                     };
                 // 英文标识用于已有JSON文件；终端输出使用完整中文名称。
                 let label = [
@@ -429,34 +460,32 @@ pub fn benchmark_cached_normal_equations() {
                     "NE-rebuild",
                     "AUG-upper",
                     "AUG-operator",
-                    "AUG-COO-legacy",
-                    "AUG-FS-legacy",
+                    "AUG-COO",
+                    "AUG-FS",
+                    "AUG-COO-upper",
+                    "AUG-FS-upper",
                 ][method];
                 let description = [
                     "正规方程：复用乘积结构",
                     "正规方程：每轮重建乘积",
                     "增广方程：原上三角填充",
                     "增广方程：新算子填充",
-                    "历史baseline：V4填J再用COO组装",
-                    "历史baseline：全J裁剪后用COO组装",
+                    "COO基线：V4填J再用COO组装",
+                    "COO基线：全J裁剪后用完整COO组装",
+                    "COO基线：V4填J后只组装上三角",
+                    "COO基线：全J裁剪后只组装上三角",
                 ][method];
-                if method < 4 {
-                    assert!(measurement.converged, "{} {label} failed", case.name);
-                }
+                assert!(measurement.converged, "{} {label} failed", case.name);
                 let max_dv = if measurement.converged {
                     if let Some((iterations, solves, voltage)) = &reference {
-                        if method < 4 {
-                            assert_eq!(*iterations, measurement.iterations);
-                            assert_eq!(*solves, measurement.linear_solves);
-                        }
+                        assert_eq!(*iterations, measurement.iterations, "{} {label}: iterations", case.name);
+                        assert_eq!(*solves, measurement.linear_solves, "{} {label}: solves", case.name);
                         let dv = voltage
                             .iter()
                             .zip(&v)
                             .map(|(a, b)| (a - b).norm())
                             .fold(0.0f64, f64::max);
-                        if method < 4 {
-                            assert!(dv < 1e-6);
-                        }
+                        assert!(dv < 1e-6, "{} {label}: voltage difference {dv}", case.name);
                         Some(dv)
                     } else {
                         reference = Some((measurement.iterations, measurement.linear_solves, v));
@@ -465,23 +494,23 @@ pub fn benchmark_cached_normal_equations() {
                 } else {
                     None
                 };
-                let mut actual_options = options.clone();
-                if method >= 4 {
-                    actual_options.trust_region = None;
-                    actual_options.reject_nonpositive_voltage = false;
-                }
                 let read_ms = |counter: &std::sync::atomic::AtomicU64| {
                     counter.load(Ordering::Relaxed) as f64 / 1e6
                 };
                 let row = serde_json::json!({
                     "case": case.name, "method": label, "round": round,
-                    "options": actual_options, "build_ms": measurement.build_ms,
+                    "buses": case.y.ncols(), "states": case.npv + 2 * case.npq,
+                    "options": options, "build_ms": measurement.build_ms,
                     "converged": measurement.converged,
-                    "policy": if method < 4 { "current" } else { "legacy" },
-                    "solver_reuse": method < 4,
+                    "policy": "current",
+                    "solver_reuse": true,
+                    "jacobian_evaluations": measurement.iterations,
+                    "coo_assemblies": if method >= 4 { measurement.linear_solves } else { 0 },
+                    "coo_upper_only": if method >= 4 { Some(method >= 6) } else { None },
                     "tolerance_inf":1e-8,"max_iterations":300,
                     "coo_ms":coo_ms,
                     "matrix_preparation_ms":measurement.fill_ms+product_symbolic_ms+product_numeric_ms+mu_ms+coo_ms,
+                    "total_execution_ms": measurement.build_ms + measurement.solve_ms,
                     "solve_ms": measurement.solve_ms, "iterations": measurement.iterations,
                     "linear_solves": measurement.linear_solves, "residual_inf": measurement.residual_inf,
                     "max_voltage_difference": max_dv, "j_or_aug_fill_ms": measurement.fill_ms,
@@ -492,12 +521,13 @@ pub fn benchmark_cached_normal_equations() {
                     "solver_backsolve_ms": read_ms(&qdldl_probe::SOLVE_NS),
                 });
                 println!(
-                    "  {description}，第{round}轮（0为预热）：{}，接受{}步，求解线性方程{}次，潮流求解共{:.3} ms，其中数值重分解及数值搬运{:.3} ms，残差最大值{:.2e}",
+                    "  {description}，第{round}轮（0为预热）：{}，接受{}步，线性求解{}次，组装及右端准备{:.3} ms，总执行{:.3} ms（初始化{:.3} ms），残差∞={:.2e}",
                     if measurement.converged { "收敛" } else { "未收敛" },
                     measurement.iterations,
                     measurement.linear_solves,
-                    measurement.solve_ms,
-                    read_ms(&qdldl_probe::NUMERIC_NS),
+                    measurement.fill_ms + product_symbolic_ms + product_numeric_ms + mu_ms + coo_ms,
+                    measurement.build_ms + measurement.solve_ms,
+                    measurement.build_ms,
                     measurement.residual_inf
                 );
                 records.push(row);
