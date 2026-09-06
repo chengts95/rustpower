@@ -1,23 +1,11 @@
-use super::symbolic::SymbolicCache;
-use crate::opf::pips::PipsResult;
-use crate::opf::problem::OPFData;
+use crate::new_opf::model::NewOPFData;
+use crate::new_opf::solution::PipsResult;
 use bevy_ecs::prelude::{Entity, World};
 
-/// New OPF Data structure that integrates the Symbolic Cache for high performance.
-pub struct NewOPFData {
-    pub base: OPFData,
-    pub cache: SymbolicCache,
-}
-
 impl NewOPFData {
-    pub fn new(base: OPFData) -> Self {
-        let cache = SymbolicCache::analyze(&base);
-        Self { base, cache }
-    }
-
     pub fn write_results(&self, world: &mut World, result: &PipsResult) {
-        use super::components::*;
         use crate::basic::ecs::elements::*;
+        use crate::new_opf::adapters::ecs::components::*;
 
         let nb = self.nb;
         let ng = self.ng;
@@ -72,18 +60,5 @@ impl NewOPFData {
                 .entity_mut(entity)
                 .insert((OpfResultPg(pg), OpfResultQg(qg)));
         }
-    }
-}
-
-impl std::ops::Deref for NewOPFData {
-    type Target = OPFData;
-    fn deref(&self) -> &Self::Target {
-        &self.base
-    }
-}
-
-impl std::ops::DerefMut for NewOPFData {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.base
     }
 }

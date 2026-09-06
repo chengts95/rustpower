@@ -1,4 +1,4 @@
-use super::symbolic::SymbolicCache;
+use crate::new_opf::assembly::mapped::symbolic::SymbolicCache;
 use crate::opf::problem::OPFData;
 use nalgebra::DVector;
 use nalgebra_sparse::CscMatrix;

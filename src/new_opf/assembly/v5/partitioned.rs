@@ -7,7 +7,7 @@
 //! Branch limit Hessians are pre-projected into a contiguous array shaped exactly like Ybus.
 //! The main assembly loop then performs a purely sequential, single-pass streaming read/write.
 
-use crate::new_opf::v5_kkt::KKTSymbolicV5;
+use crate::new_opf::assembly::v5::symbolic::KKTSymbolicV5;
 use crate::opf::problem::OPFData;
 use num_complex::Complex64;
 
@@ -155,7 +155,7 @@ pub fn assemble_kkt_v5_3(
     // fill_constraint_columns writes only the constraint-column region [cp[nx]..] with
     // direct assignment, so it can target kkt_vals directly — no temp, no double write.
     // Reuse the prestored gens_at_bus from the symbolic cache (no per-iter rebuild).
-    super::v5_2_kernel::fill_constraint_columns(
+    crate::new_opf::assembly::v5::scatter::fill_constraint_columns(
         &v53.base,
         data,
         y_trans,
@@ -176,7 +176,7 @@ fn pre_project_branch_hessians(
     br_to_ybus_idx: &[[usize; 4]],
     ybus_br_hess: &mut [[f64; 4]],
 ) {
-    use super::v4_numeric_rect::branch_end_hess_v4;
+    use crate::new_opf::assembly::v4::curvature::branch_end_hess_v4;
     let yf_vals = data.yf.values();
     let yt_vals = data.yt.values();
 
@@ -252,7 +252,7 @@ fn fill_theta_columns(
     is_fixed: &[bool],
     kkt_vals: &mut [f64],
 ) {
-    use super::v5_2_kernel::*;
+    use crate::new_opf::assembly::v5::scatter::*;
     let y_v = ybus.values();
     let y_ri = ybus.row_indices();
     let y_cp = ybus.col_offsets();
@@ -311,7 +311,7 @@ fn fill_vm_columns(
     is_fixed: &[bool],
     kkt_vals: &mut [f64],
 ) {
-    use super::v5_2_kernel::*;
+    use crate::new_opf::assembly::v5::scatter::*;
     let y_v = ybus.values();
     let y_ri = ybus.row_indices();
     let y_cp = ybus.col_offsets();

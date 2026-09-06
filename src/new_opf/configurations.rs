@@ -1,8 +1,10 @@
-use super::problem::NewOPFData;
-use crate::new_opf::v3_symbolic::V3SymbolicCache;
-use crate::opf::constraints;
+//! Named combinations of assembly and evaluation, preserving historical experiments.
+//! V4 remains the legacy `pips()` entry point; new explicit selection defaults to V5.6.
+use crate::new_opf::assembly::v3::symbolic::V3SymbolicCache;
+use crate::new_opf::evaluation::v1 as constraints;
+use crate::new_opf::model::NewOPFData;
+pub use crate::new_opf::solution::{PipsOpt, PipsResult};
 use crate::opf::cost;
-pub use crate::opf::pips::{PipsOpt, PipsResult};
 
 /// Optimized PIPS solver using V3/V4 Revolutionary Scalar Assembly and Persistent KLU.
 pub fn pips(
@@ -15,7 +17,7 @@ pub fn pips(
     let v3_cache = V3SymbolicCache::analyze(data);
     let mut persistent_solver = crate::basic::solver::DefaultSolver::default();
 
-    crate::opf::pips::pips_with_solver(
+    crate::new_opf::interior_point::pips_with_solver(
         |x| cost::opf_costfcn(data, x),
         |x| {
             let (g, h, dg, dh) = constraints::opf_consfcn(data, x);
@@ -23,7 +25,7 @@ pub fn pips(
         },
         |x, lam_eq, mu_ineq, z_ineq, cost_mult| {
             // V4 (Rectangular Rotate + Merged Slacks Penalty)
-            crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
+            crate::new_opf::assembly::v4::curvature::v4_rect_numeric_fill(
                 data,
                 &v3_cache,
                 x,
@@ -56,17 +58,17 @@ pub fn pips_v5(
     opt: PipsOpt,
 ) -> PipsResult {
     let v3_cache = V3SymbolicCache::analyze(data);
-    let v5_cache = crate::new_opf::v5_kkt::KKTSymbolicV5::build(data);
+    let v5_cache = crate::new_opf::assembly::v5::symbolic::KKTSymbolicV5::build(data);
     let mut persistent_solver = crate::basic::solver::DefaultSolver::default();
 
-    crate::opf::pips::pips_with_solver(
+    crate::new_opf::interior_point::pips_with_solver(
         |x| cost::opf_costfcn(data, x),
         |x| {
             let (g, h, dg, dh) = constraints::opf_consfcn(data, x);
             (h, g, dh, dg)
         },
         |x, lam_eq, mu_ineq, z_ineq, cost_mult| {
-            crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
+            crate::new_opf::assembly::v4::curvature::v4_rect_numeric_fill(
                 data,
                 &v3_cache,
                 x,
@@ -99,17 +101,17 @@ pub fn pips_v5_2(
     opt: PipsOpt,
 ) -> PipsResult {
     let v3_cache = V3SymbolicCache::analyze(data);
-    let v5_cache = crate::new_opf::v5_kkt::KKTSymbolicV5::build(data);
+    let v5_cache = crate::new_opf::assembly::v5::symbolic::KKTSymbolicV5::build(data);
     let mut persistent_solver = crate::basic::solver::DefaultSolver::default();
 
-    crate::opf::pips::pips_with_fused_assembly(
+    crate::new_opf::interior_point::pips_with_fused_assembly(
         |x| cost::opf_costfcn(data, x),
         |x| {
             let (g, h, dg, dh) = constraints::opf_consfcn(data, x);
             (h, g, dh, dg)
         },
         |x, lam_eq, mu_ineq, z_ineq, cost_mult, kkt_vals| {
-            use super::v5_2_kernel::*;
+            use crate::new_opf::assembly::v5::scatter::*;
             kkt_vals.fill(0.0);
             fill_variable_columns(
                 &v5_cache,
@@ -153,17 +155,17 @@ pub fn pips_v5_3(
     opt: PipsOpt,
 ) -> PipsResult {
     let v3_cache = V3SymbolicCache::analyze(data);
-    let v53_cache = crate::new_opf::v5_3_kernel::KKTSymbolicV5_3::build(data);
+    let v53_cache = crate::new_opf::assembly::v5::partitioned::KKTSymbolicV5_3::build(data);
     let mut persistent_solver = crate::basic::solver::DefaultSolver::default();
 
-    crate::opf::pips::pips_with_fused_assembly(
+    crate::new_opf::interior_point::pips_with_fused_assembly(
         |x| cost::opf_costfcn(data, x),
         |x| {
             let (g, h, dg, dh) = constraints::opf_consfcn(data, x);
             (h, g, dh, dg)
         },
         |x, lam_eq, mu_ineq, z_ineq, cost_mult, kkt_vals| {
-            use super::v5_3_kernel::*;
+            use crate::new_opf::assembly::v5::partitioned::*;
             assemble_kkt_v5_3(
                 &v53_cache,
                 data,
@@ -198,15 +200,15 @@ pub fn pips_v5_6(
     opt: PipsOpt,
 ) -> PipsResult {
     let v3_cache = V3SymbolicCache::analyze(data);
-    let v53_cache = crate::new_opf::v5_3_kernel::KKTSymbolicV5_3::build(data);
-    let ev = crate::new_opf::v5_6_evaluator::V56Evaluator::new(data);
+    let v53_cache = crate::new_opf::assembly::v5::partitioned::KKTSymbolicV5_3::build(data);
+    let ev = crate::new_opf::evaluation::v5::merged::V56Evaluator::new(data);
     let mut persistent_solver = crate::basic::solver::DefaultSolver::default();
 
-    crate::opf::pips::pips_with_fused_assembly_v56(
+    crate::new_opf::interior_point::pips_with_fused_assembly_v56(
         |x| cost::opf_costfcn(data, x),
         |x, g, h, dg_v, dh_v| ev.update(data, x, g, h, dg_v, dh_v),
         |x, lam_eq, mu_ineq, z_ineq, cost_mult, kkt_vals| {
-            use super::v5_3_kernel::*;
+            use crate::new_opf::assembly::v5::partitioned::*;
             assemble_kkt_v5_3(
                 &v53_cache,
                 data,
@@ -251,11 +253,11 @@ pub fn pips_v5_5(
     opt: PipsOpt,
 ) -> PipsResult {
     let v3_cache = V3SymbolicCache::analyze(data);
-    let v53_cache = crate::new_opf::v5_3_kernel::KKTSymbolicV5_3::build(data);
-    let v55_evaluator = crate::new_opf::v5_5_evaluator::V55Evaluator::new(data);
+    let v53_cache = crate::new_opf::assembly::v5::partitioned::KKTSymbolicV5_3::build(data);
+    let v55_evaluator = crate::new_opf::evaluation::v5::nonlinear::V55Evaluator::new(data);
     let mut persistent_solver = crate::basic::solver::DefaultSolver::default();
 
-    crate::opf::pips::pips_with_fused_assembly_v55(
+    crate::new_opf::interior_point::pips_with_fused_assembly_v55(
         |x| cost::opf_costfcn(data, x),
         |x, g, h, dgn_v, dhn_v| v55_evaluator.update(data, x, g, h, dgn_v, dhn_v),
         |x| {
@@ -263,7 +265,7 @@ pub fn pips_v5_5(
             (h, g, dh, dg)
         },
         |x, lam_eq, mu_ineq, z_ineq, cost_mult, kkt_vals| {
-            use super::v5_3_kernel::*;
+            use crate::new_opf::assembly::v5::partitioned::*;
             assemble_kkt_v5_3(
                 &v53_cache,
                 data,
@@ -286,4 +288,66 @@ pub fn pips_v5_5(
         &mut persistent_solver,
         &v53_cache.base,
     )
+}
+
+/// Reproducible solver configurations. All variants share the same input/output types.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Configuration {
+    V1,
+    V4,
+    V5_0,
+    V5_2,
+    V5_3,
+    V5_5,
+    #[default]
+    V5_6,
+}
+
+impl Configuration {
+    /// Assembly and evaluator names, kept explicit for experiment reporting.
+    pub fn strategies(self) -> (&'static str, &'static str) {
+        match self {
+            Self::V1 => ("v1", "v1"),
+            Self::V4 => ("v4", "v1"),
+            Self::V5_0 => ("v5.0", "v1"),
+            Self::V5_2 => ("v5.2", "v1"),
+            Self::V5_3 => ("v5.3", "v1"),
+            Self::V5_5 => ("v5.3", "v5.nonlinear"),
+            Self::V5_6 => ("v5.3", "v5.merged"),
+        }
+    }
+
+    /// Solve with model-derived bounds and an initial point in the model's packed order.
+    /// Each call creates the selected strategy's caches and a fresh linear solver.
+    pub fn solve(self, data: &NewOPFData, initial: Vec<f64>, options: PipsOpt) -> PipsResult {
+        assert_eq!(
+            initial.len(),
+            data.nx(),
+            "OPF initial point must match the model dimension"
+        );
+        let (lower, upper) = data.bounds();
+        match self {
+            Self::V1 => crate::opf::pips::pips(
+                |x| cost::opf_costfcn(data, x),
+                |x| {
+                    let (g, h, dg, dh) = constraints::opf_consfcn(data, x);
+                    (h, g, dh, dg)
+                },
+                |x, l, m, _z, c| crate::new_opf::assembly::v1::opf_hessfcn(data, x, l, m, c),
+                initial,
+                lower,
+                upper,
+                PipsOpt {
+                    merged_slacks: false,
+                    ..options
+                },
+            ),
+            Self::V4 => pips(data, initial, lower, upper, options),
+            Self::V5_0 => pips_v5(data, initial, lower, upper, options),
+            Self::V5_2 => pips_v5_2(data, initial, lower, upper, options),
+            Self::V5_3 => pips_v5_3(data, initial, lower, upper, options),
+            Self::V5_5 => pips_v5_5(data, initial, lower, upper, options),
+            Self::V5_6 => pips_v5_6(data, initial, lower, upper, options),
+        }
+    }
 }

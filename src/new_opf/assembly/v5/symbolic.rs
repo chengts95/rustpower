@@ -109,10 +109,10 @@ impl KKTSymbolicV5 {
         let neq = 2 * nb + neqlin;
         let dim = nx + neq;
 
-        // var → linear-eq column offset r (usize::MAX = not fixed)
-        let mut var_to_lineq = vec![usize::MAX; nx];
+        // Map each fixed variable to its linear-equality row in the KKT matrix.
+        let mut var_to_lineq = vec![None; nx];
         for (r, &v) in ieq.iter().enumerate() {
-            var_to_lineq[v] = r;
+            var_to_lineq[v] = Some(nx + 2 * nb + r);
         }
 
         // gens attached at each bus, ascending g
@@ -124,100 +124,49 @@ impl KKTSymbolicV5 {
         let mut col_ptrs = vec![0usize; dim + 1];
         let mut row_idx: Vec<usize> = Vec::new();
 
-        // ── variable columns ──────────────────────────────────────────────────
-        // θ_j  (c = j, j < nb)
-        for j in 0..nb {
-            let nbr = &y_ri[y_cp[j]..y_cp[j + 1]];
-            for &i in nbr {
-                row_idx.push(i);
-            } // Haa
-            for &i in nbr {
-                row_idx.push(nb + i);
-            } // Hva
-            for &i in nbr {
-                row_idx.push(nx + i);
-            } // dgPᵀ
-            for &i in nbr {
-                row_idx.push(nx + nb + i);
-            } // dgQᵀ
-            if var_to_lineq[j] != usize::MAX {
-                row_idx.push(nx + 2 * nb + var_to_lineq[j]);
+        // Both voltage blocks have the same row pattern:
+        // [theta neighbors, Vm neighbors, P-balance neighbors, Q-balance neighbors].
+        let voltage_rows = [0, nb, nx, nx + nb];
+        for column_offset in [0, nb] {
+            // theta, then Vm
+            for bus in 0..nb {
+                let column = column_offset + bus;
+                let neighbors = &y_ri[y_cp[bus]..y_cp[bus + 1]];
+                for row_offset in voltage_rows {
+                    row_idx.extend(neighbors.iter().map(|&i| row_offset + i));
+                }
+                row_idx.extend(var_to_lineq[column]);
+                col_ptrs[column + 1] = row_idx.len();
             }
-            col_ptrs[j + 1] = row_idx.len();
-        }
-        // Vm_j (c = nb + j, j < nb)
-        for j in 0..nb {
-            let nbr = &y_ri[y_cp[j]..y_cp[j + 1]];
-            for &i in nbr {
-                row_idx.push(i);
-            } // Hav
-            for &i in nbr {
-                row_idx.push(nb + i);
-            } // Hvv
-            for &i in nbr {
-                row_idx.push(nx + i);
-            } // dgPᵀ
-            for &i in nbr {
-                row_idx.push(nx + nb + i);
-            } // dgQᵀ
-            if var_to_lineq[nb + j] != usize::MAX {
-                row_idx.push(nx + 2 * nb + var_to_lineq[nb + j]);
-            }
-            col_ptrs[nb + j + 1] = row_idx.len();
-        }
-        // Pg_g (c = 2*nb + g)
-        for g in 0..ng {
-            let bus = gen_bus[g];
-            row_idx.push(2 * nb + g); // cost diag
-            row_idx.push(nx + bus); // coupling to P_eq_bus
-            if var_to_lineq[2 * nb + g] != usize::MAX {
-                row_idx.push(nx + 2 * nb + var_to_lineq[2 * nb + g]);
-            }
-            col_ptrs[2 * nb + g + 1] = row_idx.len();
-        }
-        // Qg_g (c = 2*nb + ng + g)
-        for g in 0..ng {
-            let bus = gen_bus[g];
-            row_idx.push(2 * nb + ng + g); // structural diag
-            row_idx.push(nx + nb + bus); // coupling to Q_eq_bus
-            if var_to_lineq[2 * nb + ng + g] != usize::MAX {
-                row_idx.push(nx + 2 * nb + var_to_lineq[2 * nb + ng + g]);
-            }
-            col_ptrs[2 * nb + ng + g + 1] = row_idx.len();
         }
 
-        // ── constraint columns ────────────────────────────────────────────────
-        // P_eq_i (c = nx + i, i < nb)
-        for i in 0..nb {
-            let nbr = &y_ri[y_cp[i]..y_cp[i + 1]];
-            for &k in nbr {
-                row_idx.push(k);
-            } // dP/dθ_k
-            for &k in nbr {
-                row_idx.push(nb + k);
-            } // dP/dVm_k
-            for &g in &gens_at_bus[i] {
-                row_idx.push(2 * nb + g); // dP/dPg
+        // Each generation column has a diagonal and its matching balance row.
+        // The Pg diagonal carries cost curvature; Qg retains a structural diagonal.
+        for (generation_offset, balance_offset) in [(2 * nb, nx), (2 * nb + ng, nx + nb)] {
+            for (generator, &bus) in gen_bus.iter().enumerate() {
+                let column = generation_offset + generator;
+                row_idx.extend([column, balance_offset + bus]);
+                row_idx.extend(var_to_lineq[column]);
+                col_ptrs[column + 1] = row_idx.len();
             }
-            col_ptrs[nx + i + 1] = row_idx.len();
         }
-        // Q_eq_i (c = nx + nb + i)
-        for i in 0..nb {
-            let nbr = &y_ri[y_cp[i]..y_cp[i + 1]];
-            for &k in nbr {
-                row_idx.push(k);
-            } // dQ/dθ_k
-            for &k in nbr {
-                row_idx.push(nb + k);
-            } // dQ/dVm_k
-            for &g in &gens_at_bus[i] {
-                row_idx.push(2 * nb + ng + g); // dQ/dQg
+
+        // P and Q balance columns couple to both voltage blocks and to their
+        // corresponding generation block. Ascending offsets preserve CSC row order.
+        for (balance_offset, generation_offset) in [(nx, 2 * nb), (nx + nb, 2 * nb + ng)] {
+            for bus in 0..nb {
+                let neighbors = &y_ri[y_cp[bus]..y_cp[bus + 1]];
+                for row_offset in [0, nb] {
+                    row_idx.extend(neighbors.iter().map(|&i| row_offset + i));
+                }
+                row_idx.extend(gens_at_bus[bus].iter().map(|&g| generation_offset + g));
+                col_ptrs[balance_offset + bus + 1] = row_idx.len();
             }
-            col_ptrs[nx + nb + i + 1] = row_idx.len();
         }
-        // lin-eq r (c = nx + 2*nb + r)
-        for r in 0..neqlin {
-            row_idx.push(ieq[r]);
+
+        // Each fixed-variable equality couples only to its variable.
+        for (r, &variable) in ieq.iter().enumerate() {
+            row_idx.push(variable);
             col_ptrs[nx + 2 * nb + r + 1] = row_idx.len();
         }
 
@@ -567,8 +516,8 @@ mod tests {
         let x = data.warm_x0();
         let lam = vec![0.1; 2 * nb];
         let mu = vec![0.05; 2 * data.nl];
-        let v3c = crate::new_opf::v3_symbolic::V3SymbolicCache::analyze(&data);
-        let m = crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
+        let v3c = crate::new_opf::assembly::v3::symbolic::V3SymbolicCache::analyze(&data);
+        let m = crate::new_opf::assembly::v4::curvature::v4_rect_numeric_fill(
             &data,
             &v3c,
             x.as_slice(),
@@ -631,10 +580,10 @@ mod tests {
         let z = vec![0.7; 2 * data.nl];
         let cm = 1e-4;
 
-        let v3c = crate::new_opf::v3_symbolic::V3SymbolicCache::analyze(&data);
+        let v3c = crate::new_opf::assembly::v3::symbolic::V3SymbolicCache::analyze(&data);
         // M includes the nonlinear branch slack penalty (z provided), exactly as the
         // merged-slack solve path feeds build_saddle_point.
-        let lxx = crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
+        let lxx = crate::new_opf::assembly::v4::curvature::v4_rect_numeric_fill(
             &data,
             &v3c,
             x.as_slice(),

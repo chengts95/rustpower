@@ -537,26 +537,43 @@ fn subtract_diags(
     negate_e: bool,
 ) -> CscMatrix<Complex64> {
     let nb = mat.ncols();
-    let c_cp = mat.col_offsets().to_vec();
-    let c_ri = mat.row_indices().to_vec();
-    let mut c_v = mat.values().to_vec();
+    let mut c_cp = Vec::with_capacity(nb + 1);
+    let mut c_ri = Vec::with_capacity(mat.nnz() + nb);
+    let mut c_v = Vec::with_capacity(mat.nnz() + nb);
+    c_cp.push(0);
 
-    // For each diagonal position j, add -(d[j] + e[j]) to mat[j,j] (if present)
-    // or insert a new entry.
+    // Branch-derived matrices need not contain every bus diagonal. Merge the
+    // diagonal correction into each sorted column, inserting absent entries.
     for j in 0..nb {
         let delta = if negate_e { -d[j] + e[j] } else { -d[j] - e[j] };
-        if delta == Complex64::new(0.0, 0.0) {
-            continue;
+        let mut inserted = false;
+        for idx in mat.col_offsets()[j]..mat.col_offsets()[j + 1] {
+            let row = mat.row_indices()[idx];
+            if !inserted && row > j {
+                if delta != Complex64::new(0.0, 0.0) {
+                    c_ri.push(j);
+                    c_v.push(delta);
+                }
+                inserted = true;
+            }
+            c_ri.push(row);
+            c_v.push(
+                mat.values()[idx]
+                    + if row == j {
+                        delta
+                    } else {
+                        Complex64::new(0.0, 0.0)
+                    },
+            );
+            if row == j {
+                inserted = true;
+            }
         }
-        // Find diagonal entry in column j
-        let start = c_cp[j];
-        let end = c_cp[j + 1];
-        let pos = c_ri[start..end].binary_search(&j);
-        if let Ok(rel) = pos {
-            c_v[start + rel] += delta;
+        if !inserted && delta != Complex64::new(0.0, 0.0) {
+            c_ri.push(j);
+            c_v.push(delta);
         }
-        // If diagonal not present, we skip (it should be present due to Ybus structure).
-        // For robustness in practice this is fine — Ybus always has diagonal entries.
+        c_cp.push(c_ri.len());
     }
 
     CscMatrix::try_from_csc_data(nb, nb, c_cp, c_ri, c_v).unwrap()
@@ -588,4 +605,54 @@ fn row_scale_cx(a: &CscMatrix<Complex64>, lam: &[f64], conjugate: bool) -> CscMa
 #[inline]
 fn cp_to_col(col_offsets: &[usize], idx: usize) -> usize {
     col_offsets.partition_point(|&o| o <= idx) - 1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn branch_hessian_keeps_diagonal_at_unselected_endpoint() {
+        // S_from = |V0|² - V0 conj(V1). The connection selects bus 0,
+        // but differentiation also creates diagonal curvature at bus 1.
+        let one = Complex64::new(1.0, 0.0);
+        let c = CscMatrix::try_from_csc_data(2, 1, vec![0, 1], vec![0], vec![one]).unwrap();
+        let y =
+            CscMatrix::try_from_csc_data(1, 2, vec![0, 1, 2], vec![0, 0], vec![one, -one]).unwrap();
+        let v = DVector::from_vec(vec![
+            Complex64::from_polar(1.1, 0.1),
+            Complex64::from_polar(0.9, -0.2),
+        ]);
+        let (aa, av, va, vv) = d2Sbr_dV2(&c, &y, &v, &DVector::from_vec(vec![one]));
+        let t = -v[0] * v[1].conj();
+        let j = Complex64::i();
+        let expected_aa = [[-t, t], [t, -t]];
+        let expected_av = [[j * t / 1.1, j * t / 0.9], [-j * t / 1.1, -j * t / 0.9]];
+        let expected_va = [
+            [expected_av[0][0], expected_av[1][0]],
+            [expected_av[0][1], expected_av[1][1]],
+        ];
+        let expected_vv = [
+            [2.0 * one, t / (1.1 * 0.9)],
+            [t / (1.1 * 0.9), Complex64::new(0.0, 0.0)],
+        ];
+        for (label, actual, expected) in [
+            ("aa", aa, expected_aa),
+            ("av", av, expected_av),
+            ("va", va, expected_va),
+            ("vv", vv, expected_vv),
+        ] {
+            let dense = nalgebra::DMatrix::from(&actual);
+            for r in 0..2 {
+                for c in 0..2 {
+                    assert!(
+                        (dense[(r, c)] - expected[r][c]).norm() < 1e-12,
+                        "{label}[{r},{c}]: actual={} expected={}",
+                        dense[(r, c)],
+                        expected[r][c]
+                    );
+                }
+            }
+        }
+    }
 }

@@ -13,7 +13,7 @@
 //! node power-balance only (branch limits / merged slacks added later). Constraint
 //! columns (CSR) + permutation + PIPS wiring come next.
 
-use super::v5_kkt::KKTSymbolicV5;
+use crate::new_opf::assembly::v5::symbolic::KKTSymbolicV5;
 use crate::opf::problem::OPFData;
 use num_complex::Complex64;
 
@@ -386,7 +386,7 @@ pub fn fill_branch_hessian(
     let yf_vals = data.yf.values();
     let yt_vals = data.yt.values();
 
-    use crate::new_opf::v4_numeric_rect::branch_end_hess_v4;
+    use crate::new_opf::assembly::v4::curvature::branch_end_hess_v4;
 
     for l in 0..nl {
         let f = data.f_buses[l];
@@ -462,7 +462,7 @@ mod tests {
         let nx = data.nx();
 
         let v5 = KKTSymbolicV5::build(&data);
-        let v3c = crate::new_opf::v3_symbolic::V3SymbolicCache::analyze(&data);
+        let v3c = crate::new_opf::assembly::v3::symbolic::V3SymbolicCache::analyze(&data);
 
         let x = data.warm_x0();
         let lam = vec![0.1; 2 * nb];
@@ -470,7 +470,7 @@ mod tests {
         let cm = 1e-4;
 
         // Reference: V5.0 fill (lxx with mu=0, no z) → variable-column portion
-        let lxx = crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
+        let lxx = crate::new_opf::assembly::v4::curvature::v4_rect_numeric_fill(
             &data,
             &v3c,
             x.as_slice(),
@@ -567,7 +567,7 @@ mod tests {
             let nb = data.nb;
             let nx = data.nx();
             let v5 = KKTSymbolicV5::build(&data);
-            let v3c = crate::new_opf::v3_symbolic::V3SymbolicCache::analyze(&data);
+            let v3c = crate::new_opf::assembly::v3::symbolic::V3SymbolicCache::analyze(&data);
             let x = data.warm_x0();
             let lam = vec![0.1; 2 * nb];
             let mu = vec![0.0; 2 * data.nl];
@@ -586,7 +586,7 @@ mod tests {
             let t = std::time::Instant::now();
             let mut sink = 0.0;
             for _ in 0..iters {
-                let lxx = crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
+                let lxx = crate::new_opf::assembly::v4::curvature::v4_rect_numeric_fill(
                     &data,
                     &v3c,
                     x.as_slice(),
@@ -614,7 +614,7 @@ mod tests {
             // V5.0: v4 node fill + opf_consfcn dg + transpose + fill
             let t = std::time::Instant::now();
             for _ in 0..iters {
-                let lxx = crate::new_opf::v4_numeric_rect::v4_rect_numeric_fill(
+                let lxx = crate::new_opf::assembly::v4::curvature::v4_rect_numeric_fill(
                     &data,
                     &v3c,
                     x.as_slice(),

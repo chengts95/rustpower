@@ -1,4 +1,4 @@
-use super::v3_symbolic::V3SymbolicCache;
+use crate::new_opf::assembly::v3::symbolic::V3SymbolicCache;
 use crate::opf::problem::OPFData;
 use nalgebra_sparse::CscMatrix;
 use num_complex::Complex64;

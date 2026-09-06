@@ -13,7 +13,7 @@
 //! contiguous prefix). Per iteration only the cheap linear scalars `ae·x−be`, `ai·x−bi`
 //! are recomputed. No transpose, no hstack, no matrix allocation in the loop.
 
-use super::v5_5_evaluator::V55Evaluator;
+use crate::new_opf::evaluation::v5::nonlinear::V55Evaluator;
 use crate::opf::problem::OPFData;
 use nalgebra_sparse::CscMatrix;
 
