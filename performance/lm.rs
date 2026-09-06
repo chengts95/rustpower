@@ -1,12 +1,12 @@
 //! LM 对比入口：实现一致性、正规方程与增广方程、线性求解后端。
 //! 各路径共用步长控制，在一次潮流内部复用求解器。
 use crate::basic::solver::{KLUSolver, QDLDLSolver};
+use crate::bench::{self, Report, timeit};
 use nalgebra::DVector;
 use nalgebra_sparse::CscMatrix;
 use num_complex::Complex64;
 use rustpower::lm::{gn_flat::GnDriver, gn_triu::GnTriuDriver};
 use serde::Serialize;
-use std::time::Instant;
 
 pub(super) struct Case {
     name: String,
@@ -119,6 +119,23 @@ fn independent_residual(case: &Case, v: &[Complex64]) -> f64 {
     result
 }
 
+// 只转换已有计数器；不在宏中实现任何数值算法。
+macro_rules! measurement {
+    ($d:ident, $r:ident, $build:expr, $solve:expr, $fill:ident) => {
+        Measurement {
+            build_ms: $build,
+            solve_ms: $solve,
+            fill_ms: $d.$fill as f64 / 1e6,
+            mu_ms: $d.prof_mu_ns as f64 / 1e6,
+            linear_solve_ms: $d.prof_solve_ns as f64 / 1e6,
+            iterations: $r.iterations,
+            linear_solves: $d.n_solves,
+            converged: $r.converged,
+            residual_inf: $r.res_inf,
+        }
+    };
+}
+
 pub(super) fn run_with_options(
     case: &Case,
     method: Method,
@@ -126,87 +143,67 @@ pub(super) fn run_with_options(
     options: &rustpower::lm::LmOptions,
 ) -> (Measurement, Vec<Complex64>) {
     let mut v = case.v.clone();
-    let start = Instant::now();
-    let (build_ms, solve_ms, fill_ns, mu_ns, linear_ns, iterations, linear_solves, converged) =
-        match method {
-            Method::FullBaseline | Method::FullOperator => {
-                let mut driver = if matches!(method, Method::FullOperator) {
-                    GnDriver::build_operator(&case.y, case.npv, case.npq, case.s.clone())
+    let operator = matches!(method, Method::FullOperator | Method::UpperOperator);
+    // 两种驱动器有相同的接口和计时器，构造类型由下面的match明确选择。
+    macro_rules! run {
+        ($driver:ty, $solver:expr) => {{
+            let ((mut d, mut solver), build_ms) = timeit!({
+                let d = if operator {
+                    <$driver>::build_operator(&case.y, case.npv, case.npq, case.s.clone())
                 } else {
-                    GnDriver::build(&case.y, case.npv, case.npq, case.s.clone())
+                    <$driver>::build(&case.y, case.npv, case.npq, case.s.clone())
                 };
-                let mut solver = KLUSolver::default();
-                let build_ms = start.elapsed().as_secs_f64() * 1000.0;
-                let solve_start = Instant::now();
-                let result = driver.solve_gn_with_options(
-                    &case.y,
-                    &mut solver,
-                    &mut v,
-                    1e-8,
-                    max_iter,
-                    options,
-                );
-                (
-                    build_ms,
-                    solve_start.elapsed().as_secs_f64() * 1000.0,
-                    driver.prof_fill_ns,
-                    driver.prof_mu_ns,
-                    driver.prof_solve_ns,
-                    result.iterations,
-                    driver.n_solves,
-                    result.converged,
-                )
-            }
-            Method::UpperBaseline | Method::UpperOperator => {
-                let mut driver = if matches!(method, Method::UpperOperator) {
-                    GnTriuDriver::build_operator(&case.y, case.npv, case.npq, case.s.clone())
-                } else {
-                    GnTriuDriver::build(&case.y, case.npv, case.npq, case.s.clone())
-                };
-                let mut solver = QDLDLSolver::default();
-                let build_ms = start.elapsed().as_secs_f64() * 1000.0;
-                let solve_start = Instant::now();
-                let result = driver.solve_gn_with_options(
-                    &case.y,
-                    &mut solver,
-                    &mut v,
-                    1e-8,
-                    max_iter,
-                    options,
-                );
-                (
-                    build_ms,
-                    solve_start.elapsed().as_secs_f64() * 1000.0,
-                    driver.prof_fill_ns,
-                    driver.prof_mu_ns,
-                    driver.prof_solve_ns,
-                    result.iterations,
-                    driver.n_solves,
-                    result.converged,
-                )
-            }
-        };
-    let residual_inf = independent_residual(case, &v);
-    if converged {
-        assert!(
-            residual_inf < 1e-8,
-            "{} {method:?}: {residual_inf:e}",
-            case.name
-        );
+                (d, $solver)
+            });
+            let (r, solve_ms) = timeit!(d.solve_gn_with_options(
+                &case.y,
+                &mut solver,
+                &mut v,
+                1e-8,
+                max_iter,
+                options
+            ));
+            measurement!(d, r, build_ms, solve_ms, prof_fill_ns)
+        }};
     }
+    let mut m = match method {
+        Method::FullBaseline | Method::FullOperator => run!(GnDriver, KLUSolver::default()),
+        Method::UpperBaseline | Method::UpperOperator => run!(GnTriuDriver, QDLDLSolver::default()),
+    };
+    m.residual_inf = independent_residual(case, &v);
+    assert!(
+        !m.converged || m.residual_inf < 1e-8,
+        "{} {method:?}: {}",
+        case.name,
+        m.residual_inf
+    );
+    (m, v)
+}
+
+/// 正规方程的两种乘积模式及所有线性后端共用此调用。
+pub(super) fn run_normal<S: crate::basic::solver::Solve>(
+    case: &Case,
+    solver: &mut S,
+    rebuild: bool,
+    options: &rustpower::lm::LmOptions,
+) -> (Measurement, Vec<Complex64>, f64, f64) {
+    use rustpower::lm::normal_eq::NeDriver;
+    let mut v = case.v.clone();
+    let (mut d, build_ms) = timeit!({
+        let mut d = NeDriver::build(&case.y, case.npv, case.npq, case.s.clone());
+        d.dumb_mode = rebuild;
+        d
+    });
+    let (r, solve_ms) =
+        timeit!(d.solve_ne_with_options(&case.y, solver, &mut v, 1e-8, 300, options));
+    let mut m = measurement!(d, r, build_ms, solve_ms, prof_fill_ns);
+    m.residual_inf = independent_residual(case, &v);
+    assert!(!m.converged || m.residual_inf < 1e-8);
     (
-        Measurement {
-            build_ms,
-            solve_ms,
-            fill_ms: fill_ns as f64 / 1e6,
-            mu_ms: mu_ns as f64 / 1e6,
-            linear_solve_ms: linear_ns as f64 / 1e6,
-            iterations,
-            linear_solves,
-            converged,
-            residual_inf,
-        },
+        m,
         v,
+        d.prof_spgemm_ns as f64 / 1e6,
+        d.prof_numeric_ns as f64 / 1e6,
     )
 }
 
@@ -265,15 +262,20 @@ pub fn operator_lm_matches_original_drivers() {
                 100,
                 &options,
             );
-            let (reference, voltage) = run_with_options(&case, Method::UpperOperator, 300, &options);
+            let (reference, voltage) =
+                run_with_options(&case, Method::UpperOperator, 300, &options);
             for full_slice in [false, true] {
                 for upper_only in [false, true] {
-                    let (coo, coo_voltage, _) = run_coo_baseline(&case, full_slice, upper_only, &options);
+                    let (coo, coo_voltage, _) =
+                        run_coo_baseline(&case, full_slice, upper_only, &options);
                     assert!(coo.converged, "{name}: COO did not converge");
                     assert_eq!(coo.iterations, reference.iterations);
                     assert_eq!(coo.linear_solves, reference.linear_solves);
-                    let error = voltage.iter().zip(&coo_voltage)
-                        .map(|(a, b)| (*a - *b).norm()).fold(0.0_f64, f64::max);
+                    let error = voltage
+                        .iter()
+                        .zip(&coo_voltage)
+                        .map(|(a, b)| (*a - *b).norm())
+                        .fold(0.0_f64, f64::max);
                     assert!(error < 1e-8, "{name}: COO voltage difference {error}");
                 }
             }
@@ -282,65 +284,46 @@ pub fn operator_lm_matches_original_drivers() {
 }
 
 /// COO仍逐次组装和转换；与其他路径共用参数，并复用求解器。
-fn run_coo_baseline(case: &Case, full_slice: bool, upper_only: bool, options: &rustpower::lm::LmOptions) -> (Measurement, Vec<Complex64>, f64) {
+fn run_coo_baseline(
+    case: &Case,
+    full_slice: bool,
+    upper_only: bool,
+    options: &rustpower::lm::LmOptions,
+) -> (Measurement, Vec<Complex64>, f64) {
     use rustpower::lm::baseline::{aug_coo::AugCooDriver, full_slice::AugFsDriver};
     let mut v = case.v.clone();
-    let t = Instant::now();
-    let (build_ms, solve_ms, converged, iterations, fill_ns, coo_ns, mu_ns, linear_ns, solves) =
-        if full_slice {
-            let mut d = AugFsDriver::build(&case.y, case.npv, case.npq, case.s.clone());
-            d.upper_only = upper_only;
-            let build_ms = t.elapsed().as_secs_f64() * 1000.0;
-            let t = Instant::now();
-            let r = d.solve_aug_fs_with_options(&case.y, &mut v, 1e-8, 300, options);
+    macro_rules! run {
+        ($driver:ty, $solve:ident, $fill:ident, $coo:ident) => {{
+            let (mut d, build_ms) = timeit!({
+                let mut d = <$driver>::build(&case.y, case.npv, case.npq, case.s.clone());
+                d.upper_only = upper_only;
+                d
+            });
+            let (r, solve_ms) = timeit!(d.$solve(&case.y, &mut v, 1e-8, 300, options));
             (
-                build_ms,
-                t.elapsed().as_secs_f64() * 1000.0,
-                r.converged,
-                r.iterations,
-                d.prof_full_j_ns,
-                d.prof_slice_coo_ns,
-                d.prof_mu_ns,
-                d.prof_solve_ns,
-                d.n_solves,
+                measurement!(d, r, build_ms, solve_ms, $fill),
+                d.$coo as f64 / 1e6,
             )
-        } else {
-            let mut d = AugCooDriver::build(&case.y, case.npv, case.npq, case.s.clone());
-            d.upper_only = upper_only;
-            let build_ms = t.elapsed().as_secs_f64() * 1000.0;
-            let t = Instant::now();
-            let r = d.solve_aug_coo_with_options(&case.y, &mut v, 1e-8, 300, options);
-            (
-                build_ms,
-                t.elapsed().as_secs_f64() * 1000.0,
-                r.converged,
-                r.iterations,
-                d.prof_fill_ns,
-                d.prof_coo_ns,
-                d.prof_mu_ns,
-                d.prof_solve_ns,
-                d.n_solves,
-            )
-        };
-    let residual_inf = independent_residual(case, &v);
-    if converged {
-        assert!(residual_inf < 1e-8);
+        }};
     }
-    (
-        Measurement {
-            build_ms,
-            solve_ms,
-            fill_ms: fill_ns as f64 / 1e6,
-            mu_ms: mu_ns as f64 / 1e6,
-            linear_solve_ms: linear_ns as f64 / 1e6,
-            iterations,
-            linear_solves: solves,
-            converged,
-            residual_inf,
-        },
-        v,
-        coo_ns as f64 / 1e6,
-    )
+    let (mut m, coo_ms) = if full_slice {
+        run!(
+            AugFsDriver,
+            solve_aug_fs_with_options,
+            prof_full_j_ns,
+            prof_slice_coo_ns
+        )
+    } else {
+        run!(
+            AugCooDriver,
+            solve_aug_coo_with_options,
+            prof_fill_ns,
+            prof_coo_ns
+        )
+    };
+    m.residual_inf = independent_residual(case, &v);
+    assert!(!m.converged || m.residual_inf < 1e-8);
+    (m, v, coo_ms)
 }
 
 /// 比较同一个潮流问题的八条实现路径：
@@ -357,91 +340,189 @@ fn run_coo_baseline(case: &Case, full_slice: bool, upper_only: bool, options: &r
 /// 每种实现先预热一次，再测七次。固定CPU，单线程运行此测试。
 #[cfg(feature = "probe")]
 pub fn benchmark_cached_normal_equations() {
-    run_assembly_comparison(&[0, 1, 2, 3, 4, 5, 6, 7]);
+    use AssemblyMethod::*;
+    run_assembly_comparison(&[
+        NormalCached,
+        NormalGeneric,
+        Rows,
+        Operator,
+        Coo {
+            full_j: false,
+            upper: false,
+        },
+        Coo {
+            full_j: true,
+            upper: false,
+        },
+        Coo {
+            full_j: false,
+            upper: true,
+        },
+        Coo {
+            full_j: true,
+            upper: true,
+        },
+    ]);
 }
 
-/// 同一KKT结构与求解器：V4+上三角COO → 原triu直填 → 算子直填。
+/// 同一增广上三角与求解器：全J裁剪COO → V4+COO → 原triu → 算子triu。
 /// 直接读取已有Jacobian、COO和求解计时器，不增加纯内核微基准。
 #[cfg(feature = "probe")]
 pub fn benchmark_coo_ablation() {
-    run_assembly_comparison(&[6, 2, 3]);
+    use AssemblyMethod::*;
+    run_assembly_comparison(&[
+        Coo {
+            full_j: true,
+            upper: true,
+        },
+        Coo {
+            full_j: false,
+            upper: true,
+        },
+        Rows,
+        Operator,
+    ]);
 }
 
+#[derive(Clone, Copy)]
+enum AssemblyMethod {
+    NormalCached,
+    NormalGeneric,
+    Rows,
+    Operator,
+    Coo { full_j: bool, upper: bool },
+}
+impl AssemblyMethod {
+    fn labels(self) -> (&'static str, &'static str) {
+        use AssemblyMethod::*;
+        match self {
+            NormalCached => ("NE-cached", "V4 + 固定结构JᵀJ"),
+            NormalGeneric => ("NE-rebuild", "V4 + 通用JᵀJ"),
+            Rows => ("AUG-upper", "原triu直接填充"),
+            Operator => ("AUG-operator", "算子triu直接填充"),
+            Coo {
+                full_j: false,
+                upper: false,
+            } => ("AUG-COO", "V4 + 完整COO"),
+            Coo {
+                full_j: true,
+                upper: false,
+            } => ("AUG-FS", "全J裁剪 + 完整COO（不用V4）"),
+            Coo {
+                full_j: false,
+                upper: true,
+            } => ("AUG-COO-upper", "V4 + 上三角COO"),
+            Coo {
+                full_j: true,
+                upper: true,
+            } => ("AUG-FS-upper", "全J裁剪 + 上三角COO（不用V4）"),
+        }
+    }
+}
+
+pub(super) fn benchmark_cases() -> Vec<Case> {
+    let cases: Vec<_> = [
+        "IEEE39",
+        "IEEE118",
+        "pegase9241",
+        "6515rte_dc",
+        "6515rte_flat",
+    ]
+    .into_iter()
+    .filter(|name| bench::selected(name))
+    .map(|name| match name {
+        "6515rte_dc" => load_6515("dc"),
+        "6515rte_flat" => load_6515("flat"),
+        _ => load_case(name),
+    })
+    .collect();
+    assert!(!cases.is_empty(), "--case没有匹配的LM算例");
+    cases
+}
+pub(super) fn benchmark_options(case: &Case) -> rustpower::lm::LmOptions {
+    let mut options = rustpower::lm::LmOptions::default();
+    if case.name.ends_with("flat") {
+        options.trust_region = Some(Default::default());
+    }
+    options
+}
+const COLUMNS: &[bench::Columns] = &[
+    &[
+        ("converged", "收敛"),
+        ("iterations", "接受步"),
+        ("linear_solves", "线性求解次数"),
+        ("residual_inf", "残差∞"),
+        ("max_voltage_difference", "最大电压差"),
+    ],
+    &[
+        ("j_or_aug_fill_ms", "J/Jᵀ ms"),
+        ("product_symbolic_ms", "乘积构建ms"),
+        ("product_numeric_ms", "固定乘积数值ms"),
+        ("coo_ms", "COO ms"),
+        ("mu_ms", "μ/右端ms"),
+    ],
+    &[
+        ("matrix_preparation_ms", "组装准备ms"),
+        ("build_ms", "初始化ms"),
+        ("solve_ms", "LM求解ms"),
+        ("total_execution_ms", "总执行ms"),
+    ],
+    &[
+        ("linear_total_ms", "线性求解ms"),
+        ("solver_setup_ms", "符号ms"),
+        ("solver_numeric_ms", "分解ms"),
+        ("solver_backsolve_ms", "回代ms"),
+        ("jacobian_evaluations", "J评估次数"),
+        ("coo_assemblies", "COO组装次数"),
+    ],
+];
+
 #[cfg(feature = "probe")]
-fn run_assembly_comparison(methods: &[usize]) {
+fn run_assembly_comparison(methods: &[AssemblyMethod]) {
     use crate::basic::solver::qdldl_probe;
-    use rustpower::lm::normal_eq::NeDriver;
+    use AssemblyMethod::*;
     use std::sync::atomic::Ordering;
 
     let out =
         std::env::var("RUSTPOWER_NE_AUDIT_DIR").expect("请用 RUSTPOWER_NE_AUDIT_DIR 指定结果目录");
-    std::fs::create_dir_all(&out).unwrap();
-    let cases = [
-        load_case("IEEE39"),
-        load_case("IEEE118"),
-        load_case("pegase9241"),
-        load_6515("dc"),
-        load_6515("flat"),
-    ];
-    let mut records = Vec::new();
-    for case in &cases {
-        let mut options = rustpower::lm::LmOptions::default();
-        if case.name.contains("flat") {
-            options.trust_region = Some(rustpower::lm::step_control::TrustRegionOptions::default());
-        }
+    let repeats = bench::repeats();
+    let mut report = Report::new(out, COLUMNS);
+    for case in &benchmark_cases() {
+        let options = benchmark_options(case);
         // 以该算例第一条路径的结果为对照，检查后续各次运行。
         let mut reference = None::<(usize, u64, Vec<Complex64>)>;
         println!(
             "\n算例：{}。各实现使用相同初值和残差容差；全部使用当前步长控制并复用求解器。",
             case.name
         );
-        // 第0轮只预热，不计入中位数。每次均重新创建驱动器和线性求解器。
-        for round in 0..8 {
-            for slot in 0..methods.len() {
-                let index = if round % 2 == 0 { slot } else { methods.len() - 1 - slot };
-                let method = methods[index];
-                qdldl_probe::reset();
-                let (measurement, v, product_symbolic_ms, product_numeric_ms, mu_ms, coo_ms) =
-                    if method < 2 {
-                        let mut v = case.v.clone();
-                        let start = Instant::now();
-                        let mut driver =
-                            NeDriver::build(&case.y, case.npv, case.npq, case.s.clone());
-                        driver.dumb_mode = method == 1;
-                        let mut solver = QDLDLSolver::with_dsigns(vec![1; case.npv + 2 * case.npq]);
-                        let build_ms = start.elapsed().as_secs_f64() * 1000.0;
-                        let start = Instant::now();
-                        let result = driver.solve_ne_with_options(
-                            &case.y,
+        println!(
+            "节点={}，状态变量={}，容差∞=1e-8，最大迭代=300，QDLDL，预热1次、测量{repeats}次。",
+            case.y.ncols(),
+            case.npv + 2 * case.npq
+        );
+        println!(
+            "LM参数：{}",
+            serde_json::to_string_pretty(&options).unwrap()
+        );
+        for (round, method) in bench::runs(methods, repeats) {
+            qdldl_probe::reset();
+            let (measurement, v, product_symbolic_ms, product_numeric_ms, mu_ms, coo_ms) =
+                match method {
+                    NormalCached | NormalGeneric => {
+                        let (mut solver, solver_build_ms) =
+                            timeit!(QDLDLSolver::with_dsigns(vec![1; case.npv + 2 * case.npq]));
+                        let (mut m, v, symbolic, numeric) = run_normal(
+                            case,
                             &mut solver,
-                            &mut v,
-                            1e-8,
-                            300,
+                            matches!(method, NormalGeneric),
                             &options,
                         );
-                        let solve_ms = start.elapsed().as_secs_f64() * 1000.0;
-                        let residual_inf = independent_residual(case, &v);
-                        assert_eq!(result.converged, residual_inf < 1e-8);
-                        (
-                            Measurement {
-                                build_ms,
-                                solve_ms,
-                                fill_ms: driver.prof_fill_ns as f64 / 1e6,
-                                mu_ms: driver.prof_mu_ns as f64 / 1e6,
-                                linear_solve_ms: driver.prof_solve_ns as f64 / 1e6,
-                                iterations: result.iterations,
-                                linear_solves: driver.n_solves,
-                                converged: result.converged,
-                                residual_inf,
-                            },
-                            v,
-                            driver.prof_spgemm_ns as f64 / 1e6,
-                            driver.prof_numeric_ns as f64 / 1e6,
-                            driver.prof_mu_ns as f64 / 1e6,
-                            0.0,
-                        )
-                    } else if method < 4 {
-                        let mode = if method == 2 {
+                        m.build_ms += solver_build_ms;
+                        let mu_ms = m.mu_ms;
+                        (m, v, symbolic, numeric, mu_ms, 0.0)
+                    }
+                    Rows | Operator => {
+                        let mode = if matches!(method, Rows) {
                             Method::UpperBaseline
                         } else {
                             Method::UpperOperator
@@ -449,95 +530,70 @@ fn run_assembly_comparison(methods: &[usize]) {
                         let (m, v) = run_with_options(case, mode, 300, &options);
                         let mu_ms = m.mu_ms;
                         (m, v, 0.0, 0.0, mu_ms, 0.0)
-                    } else {
-                        let (m, v, coo_ms) = run_coo_baseline(case, method % 2 == 1, method >= 6, &options);
-                        let m_mu_ms = m.mu_ms;
-                        (m, v, 0.0, 0.0, m_mu_ms, coo_ms)
-                    };
-                // 英文标识用于已有JSON文件；终端输出使用完整中文名称。
-                let label = [
-                    "NE-cached",
-                    "NE-rebuild",
-                    "AUG-upper",
-                    "AUG-operator",
-                    "AUG-COO",
-                    "AUG-FS",
-                    "AUG-COO-upper",
-                    "AUG-FS-upper",
-                ][method];
-                let description = [
-                    "正规方程：复用乘积结构",
-                    "正规方程：每轮重建乘积",
-                    "增广方程：原上三角填充",
-                    "增广方程：新算子填充",
-                    "COO基线：V4填J再用COO组装",
-                    "COO基线：全J裁剪后用完整COO组装",
-                    "COO基线：V4填J后只组装上三角",
-                    "COO基线：全J裁剪后只组装上三角",
-                ][method];
-                assert!(measurement.converged, "{} {label} failed", case.name);
-                let max_dv = if measurement.converged {
-                    if let Some((iterations, solves, voltage)) = &reference {
-                        assert_eq!(*iterations, measurement.iterations, "{} {label}: iterations", case.name);
-                        assert_eq!(*solves, measurement.linear_solves, "{} {label}: solves", case.name);
-                        let dv = voltage
-                            .iter()
-                            .zip(&v)
-                            .map(|(a, b)| (a - b).norm())
-                            .fold(0.0f64, f64::max);
-                        assert!(dv < 1e-6, "{} {label}: voltage difference {dv}", case.name);
-                        Some(dv)
-                    } else {
-                        reference = Some((measurement.iterations, measurement.linear_solves, v));
-                        Some(0.0)
                     }
+                    Coo { full_j, upper } => {
+                        let (m, v, coo_ms) = run_coo_baseline(case, full_j, upper, &options);
+                        let mu_ms = m.mu_ms;
+                        (m, v, 0.0, 0.0, mu_ms, coo_ms)
+                    }
+                };
+            let (label, description) = method.labels();
+            assert!(measurement.converged, "{} {label} failed", case.name);
+            let max_dv = if measurement.converged {
+                if let Some((iterations, solves, voltage)) = &reference {
+                    assert_eq!(
+                        *iterations, measurement.iterations,
+                        "{} {label}: iterations",
+                        case.name
+                    );
+                    assert_eq!(
+                        *solves, measurement.linear_solves,
+                        "{} {label}: solves",
+                        case.name
+                    );
+                    let dv = voltage
+                        .iter()
+                        .zip(&v)
+                        .map(|(a, b)| (a - b).norm())
+                        .fold(0.0f64, f64::max);
+                    assert!(dv < 1e-6, "{} {label}: voltage difference {dv}", case.name);
+                    Some(dv)
                 } else {
-                    None
-                };
-                let read_ms = |counter: &std::sync::atomic::AtomicU64| {
-                    counter.load(Ordering::Relaxed) as f64 / 1e6
-                };
-                let row = serde_json::json!({
-                    "case": case.name, "method": label, "round": round,
-                    "buses": case.y.ncols(), "states": case.npv + 2 * case.npq,
-                    "options": options, "build_ms": measurement.build_ms,
-                    "converged": measurement.converged,
-                    "policy": "current",
-                    "solver_reuse": true,
-                    "jacobian_evaluations": measurement.iterations,
-                    "coo_assemblies": if method >= 4 { measurement.linear_solves } else { 0 },
-                    "coo_upper_only": if method >= 4 { Some(method >= 6) } else { None },
-                    "tolerance_inf":1e-8,"max_iterations":300,
-                    "coo_ms":coo_ms,
-                    "matrix_preparation_ms":measurement.fill_ms+product_symbolic_ms+product_numeric_ms+mu_ms+coo_ms,
-                    "total_execution_ms": measurement.build_ms + measurement.solve_ms,
-                    "solve_ms": measurement.solve_ms, "iterations": measurement.iterations,
-                    "linear_solves": measurement.linear_solves, "residual_inf": measurement.residual_inf,
-                    "max_voltage_difference": max_dv, "j_or_aug_fill_ms": measurement.fill_ms,
-                    "product_symbolic_ms": product_symbolic_ms, "product_numeric_ms": product_numeric_ms,
-                    "mu_ms": mu_ms, "linear_total_ms": measurement.linear_solve_ms,
-                    "solver_setup_ms": read_ms(&qdldl_probe::SYM_NS),
-                    "solver_numeric_ms": read_ms(&qdldl_probe::NUMERIC_NS),
-                    "solver_backsolve_ms": read_ms(&qdldl_probe::SOLVE_NS),
-                });
-                println!(
-                    "  {description}，第{round}轮（0为预热）：{}，接受{}步，线性求解{}次，组装及右端准备{:.3} ms，总执行{:.3} ms（初始化{:.3} ms），残差∞={:.2e}",
-                    if measurement.converged { "收敛" } else { "未收敛" },
-                    measurement.iterations,
-                    measurement.linear_solves,
-                    measurement.fill_ms + product_symbolic_ms + product_numeric_ms + mu_ms + coo_ms,
-                    measurement.build_ms + measurement.solve_ms,
-                    measurement.build_ms,
-                    measurement.residual_inf
-                );
-                records.push(row);
-                std::fs::write(
-                    format!("{out}/measurements.json"),
-                    serde_json::to_vec_pretty(&records).unwrap(),
-                )
-                .unwrap();
-            }
+                    reference = Some((measurement.iterations, measurement.linear_solves, v));
+                    Some(0.0)
+                }
+            } else {
+                None
+            };
+            let read_ms = |counter: &std::sync::atomic::AtomicU64| {
+                counter.load(Ordering::Relaxed) as f64 / 1e6
+            };
+            let row = serde_json::json!({
+                "case": case.name, "method": label, "round": round,
+                "buses": case.y.ncols(), "states": case.npv + 2 * case.npq,
+                "options": options, "build_ms": measurement.build_ms,
+                "converged": measurement.converged,
+                "policy": "current",
+                "solver_reuse": true,
+                "jacobian_evaluations": measurement.iterations,
+                "coo_assemblies": if matches!(method, Coo { .. }) { measurement.linear_solves } else { 0 },
+                "coo_upper_only": match method { Coo { upper, .. } => Some(upper), _ => None },
+                "tolerance_inf":1e-8,"max_iterations":300,
+                "coo_ms":coo_ms,
+                "matrix_preparation_ms":measurement.fill_ms+product_symbolic_ms+product_numeric_ms+mu_ms+coo_ms,
+                "total_execution_ms": measurement.build_ms + measurement.solve_ms,
+                "solve_ms": measurement.solve_ms, "iterations": measurement.iterations,
+                "linear_solves": measurement.linear_solves, "residual_inf": measurement.residual_inf,
+                "max_voltage_difference": max_dv, "j_or_aug_fill_ms": measurement.fill_ms,
+                "product_symbolic_ms": product_symbolic_ms, "product_numeric_ms": product_numeric_ms,
+                "mu_ms": mu_ms, "linear_total_ms": measurement.linear_solve_ms,
+                "solver_setup_ms": read_ms(&qdldl_probe::SYM_NS),
+                "solver_numeric_ms": read_ms(&qdldl_probe::NUMERIC_NS),
+                "solver_backsolve_ms": read_ms(&qdldl_probe::SOLVE_NS),
+            });
+            report.push(row, description);
         }
+        report.summary(&case.name);
     }
 }
 

@@ -1,14 +1,15 @@
 //! 用通用稀疏乘法生成同一个正规方程，比较KLU、QDLDL和CHOLMOD LLᵀ。
 //! 只用于测试；CHOLMOD的结构分析、分解存储和回代工作区均复用。
-use super::{Case, Method, independent_residual, load_6515, load_case, run_with_options};
-use crate::basic::solver::{KLUSolver, QDLDLSolver, Solve, klu_probe, qdldl_probe};
-use crate::lm::{
-    LmOptions, gn_flat::GnDriver, normal_eq::NeDriver, step_control::TrustRegionOptions,
+use super::{
+    Case, Measurement, Method, benchmark_cases, benchmark_options, independent_residual,
+    run_normal, run_with_options,
 };
+use crate::basic::solver::{KLUSolver, QDLDLSolver, Solve, klu_probe, qdldl_probe};
+use crate::bench::{self, Report, timeit};
+use crate::lm::{LmOptions, gn_flat::GnDriver};
 use std::{
     ffi::{CString, c_char, c_int, c_void},
     sync::atomic::Ordering,
-    time::Instant,
 };
 
 #[link(name = "dl")]
@@ -89,27 +90,27 @@ impl Solve for Cholesky {
         if let Some((old_cp, old_ri)) = &self.pattern {
             assert!(old_cp == cp && old_ri == ri, "求解期间矩阵结构改变");
         } else {
-            let start = Instant::now();
-            self.pattern = Some((cp.to_vec(), ri.to_vec()));
-            self.handle = unsafe {
-                (self.analyze)(
-                    n,
-                    cp.as_mut_ptr(),
-                    ri.as_mut_ptr(),
-                    values.as_mut_ptr(),
-                    self.supernodal as i32,
-                    self.threads,
-                )
-            };
-            self.analysis_ms += start.elapsed().as_secs_f64() * 1000.0;
+            let (_, elapsed_ms) = timeit!({
+                self.pattern = Some((cp.to_vec(), ri.to_vec()));
+                self.handle = unsafe {
+                    (self.analyze)(
+                        n,
+                        cp.as_mut_ptr(),
+                        ri.as_mut_ptr(),
+                        values.as_mut_ptr(),
+                        self.supernodal as i32,
+                        self.threads,
+                    )
+                };
+            });
+            self.analysis_ms += elapsed_ms;
             if self.handle.is_null() {
                 self.pattern = None;
                 return Err("CHOLMOD分析失败");
             }
             self.analysis_count += 1;
         }
-        let start = Instant::now();
-        let ok = unsafe {
+        let (ok, elapsed_ms) = timeit!(unsafe {
             (self.factorize)(
                 self.handle,
                 n,
@@ -117,14 +118,14 @@ impl Solve for Cholesky {
                 ri.as_mut_ptr(),
                 values.as_mut_ptr(),
             )
-        };
-        self.factor_ms += start.elapsed().as_secs_f64() * 1000.0;
+        });
+        self.factor_ms += elapsed_ms;
         if ok == 0 {
             return Err("CHOLMOD LLᵀ分解失败");
         }
-        let start = Instant::now();
-        let ok = unsafe { (self.backsolve)(self.handle, n, rhs.as_mut_ptr()) };
-        self.backsolve_ms += start.elapsed().as_secs_f64() * 1000.0;
+        let (ok, elapsed_ms) =
+            timeit!(unsafe { (self.backsolve)(self.handle, n, rhs.as_mut_ptr()) });
+        self.backsolve_ms += elapsed_ms;
         if ok == 0 {
             return Err("CHOLMOD回代失败");
         }
@@ -154,190 +155,260 @@ fn run_system<S: Solve>(
     solver: &mut S,
     augmented: bool,
 ) -> (serde_json::Value, Vec<num_complex::Complex64>) {
-    let mut v = case.v.clone();
-    let start = Instant::now();
-    let (converged, iterations, build_ms, solve_ms, solves, product_ns, fill_ns, linear_ns) =
-        if augmented {
-            let mut driver = GnDriver::build_operator(&case.y, case.npv, case.npq, case.s.clone());
-            let build_ms = start.elapsed().as_secs_f64() * 1000.0;
-            let start = Instant::now();
-            let result = driver.solve_gn_with_options(&case.y, solver, &mut v, 1e-8, 300, options);
-            (
-                result.converged,
-                result.iterations,
-                build_ms,
-                start.elapsed().as_secs_f64() * 1000.0,
-                driver.n_solves,
-                0,
-                driver.prof_fill_ns,
-                driver.prof_solve_ns,
-            )
-        } else {
-            let mut driver = NeDriver::build(&case.y, case.npv, case.npq, case.s.clone());
-            driver.dumb_mode = true;
-            let build_ms = start.elapsed().as_secs_f64() * 1000.0;
-            let start = Instant::now();
-            let result = driver.solve_ne_with_options(&case.y, solver, &mut v, 1e-8, 300, options);
-            (
-                result.converged,
-                result.iterations,
-                build_ms,
-                start.elapsed().as_secs_f64() * 1000.0,
-                driver.n_solves,
-                driver.prof_spgemm_ns,
-                driver.prof_fill_ns,
-                driver.prof_solve_ns,
-            )
-        };
-    let residual = independent_residual(case, &v);
-    if converged {
-        assert!(residual < 1e-8, "{}收敛标记与残差不符", case.name);
+    let (m, v, product_ms) = if augmented {
+        let mut v = case.v.clone();
+        let (mut d, build_ms) = timeit!(GnDriver::build_operator(
+            &case.y,
+            case.npv,
+            case.npq,
+            case.s.clone()
+        ));
+        let (r, solve_ms) =
+            timeit!(d.solve_gn_with_options(&case.y, solver, &mut v, 1e-8, 300, options));
+        let mut m = measurement!(d, r, build_ms, solve_ms, prof_fill_ns);
+        m.residual_inf = independent_residual(case, &v);
+        assert!(!m.converged || m.residual_inf < 1e-8);
+        (m, v, 0.0)
+    } else {
+        let (m, v, product, _) = run_normal(case, solver, true, options);
+        (m, v, product)
+    };
+    (backend_record(&m, product_ms), v)
+}
+
+fn backend_record(m: &Measurement, product_ms: f64) -> serde_json::Value {
+    serde_json::json!({"converged":m.converged,"build_ms":m.build_ms,"solve_ms":m.solve_ms,
+        "iterations":m.iterations,"linear_solves":m.linear_solves,"residual_inf":m.residual_inf,
+        "product_ms":product_ms,"fill_ms":m.fill_ms,"mu_ms":m.mu_ms,"linear_ms":m.linear_solve_ms})
+}
+
+/// 将后端构造也计入初始化；一次潮流内仍使用同一个求解器。
+fn run_with_backend<S: Solve>(
+    case: &Case,
+    options: &LmOptions,
+    make_solver: impl FnOnce() -> S,
+    augmented: bool,
+) -> (serde_json::Value, Vec<num_complex::Complex64>) {
+    let (mut solver, backend_build_ms) = timeit!(make_solver());
+    let (mut row, v) = run_system(case, options, &mut solver, augmented);
+    row["build_ms"] = (row["build_ms"].as_f64().unwrap() + backend_build_ms).into();
+    (row, v)
+}
+
+const COLUMNS: &[bench::Columns] = &[
+    &[
+        ("converged", "收敛"),
+        ("iterations", "接受步"),
+        ("linear_solves", "线性求解次数"),
+        ("residual_inf", "残差∞"),
+        ("max_voltage_difference", "最大电压差"),
+    ],
+    &[
+        ("build_ms", "初始化ms"),
+        ("fill_ms", "J/Jᵀ ms"),
+        ("product_ms", "JᵀJ ms"),
+        ("mu_ms", "μ/右端ms"),
+        ("matrix_preparation_ms", "组装准备ms"),
+    ],
+    &[
+        ("analysis_ms", "符号ms"),
+        ("factor_ms", "分解含refactor ms"),
+        ("backsolve_ms", "回代ms"),
+        ("linear_ms", "线性求解ms"),
+    ],
+    &[
+        ("solve_ms", "LM求解ms"),
+        ("total_execution_ms", "总执行ms"),
+        ("first_factor_count", "首次factor次数"),
+        ("refactor_count", "refactor次数"),
+        ("factor_fallback_count", "fallback次数"),
+    ],
+];
+
+#[derive(Clone, Copy)]
+enum BackendMethod {
+    NormalQdldl,
+    NormalCholesky,
+    NormalSupernodal,
+    UpperQdldl,
+    NormalKlu,
+    FullQdldl,
+    FullKlu,
+}
+impl BackendMethod {
+    fn label(self) -> &'static str {
+        use BackendMethod::*;
+        match self {
+            NormalQdldl => "正规方程-QDLDL",
+            NormalCholesky => "正规方程-普通Cholesky",
+            NormalSupernodal => "正规方程-超节点Cholesky",
+            UpperQdldl => "增广方程-上三角-QDLDL",
+            NormalKlu => "正规方程-KLU",
+            FullQdldl => "增广方程-完整-QDLDL",
+            FullKlu => "增广方程-完整-KLU",
+        }
     }
-    (
-        serde_json::json!({"converged":converged, "build_ms":build_ms, "solve_ms":solve_ms,
-        "iterations":iterations, "linear_solves":solves,
-        "residual_inf":residual, "product_ms":product_ns as f64/1e6,
-        "fill_ms":fill_ns as f64/1e6, "linear_ms":linear_ns as f64/1e6}),
-        v,
-    )
+    fn backend(self) -> &'static str {
+        use BackendMethod::*;
+        match self {
+            NormalKlu | FullKlu => "KLU",
+            NormalCholesky | NormalSupernodal => "CHOLMOD",
+            _ => "QDLDL",
+        }
+    }
 }
 
 pub fn benchmark_linear_solvers() {
+    use BackendMethod::*;
     let threads: i32 = std::env::var("RUSTPOWER_CHOLMOD_THREADS")
         .unwrap_or("1".into())
         .parse()
         .unwrap();
     assert!(threads > 0);
     let out = std::env::var("RUSTPOWER_CHOLESKY_OUTPUT").expect("请指定输出目录");
-    std::fs::create_dir_all(&out).unwrap();
-    let cases = [
-        load_case("IEEE39"),
-        load_case("IEEE118"),
-        load_case("pegase9241"),
-        load_6515("dc"),
-        load_6515("flat"),
-    ];
-    let mut records = Vec::new();
-    for case in &cases {
-        let mut options = LmOptions::default();
-        if case.name.contains("flat") {
-            options.trust_region = Some(TrustRegionOptions::default());
-        }
+    // --klu复用已有五条KLU/QDLDL路径，不要求安装CHOLMOD。
+    let methods: &[BackendMethod] = if std::env::args().any(|arg| arg == "--klu") {
+        &[NormalQdldl, UpperQdldl, NormalKlu, FullQdldl, FullKlu]
+    } else {
+        &[
+            NormalQdldl,
+            NormalCholesky,
+            NormalSupernodal,
+            UpperQdldl,
+            NormalKlu,
+            FullQdldl,
+            FullKlu,
+        ]
+    };
+    let mut report = Report::new(out, COLUMNS);
+    let repeats = bench::repeats();
+    for case in &benchmark_cases() {
+        let options = benchmark_options(case);
         let mut reference = None::<(u64, u64, Vec<num_complex::Complex64>)>;
-        for round in 0..8 {
-            for slot in 0..7 {
-                let method = if round % 2 == 0 { slot } else { 6 - slot };
-                let label = [
-                    "正规方程-QDLDL",
-                    "正规方程-普通Cholesky",
-                    "正规方程-超节点Cholesky",
-                    "增广方程-上三角-QDLDL",
-                    "正规方程-KLU",
-                    "增广方程-完整-QDLDL",
-                    "增广方程-完整-KLU",
-                ][method];
-                qdldl_probe::reset();
-                klu_probe::reset();
-                let (mut row, v) = match method {
-                    0 => run_system(
+        println!(
+            "\n{}：QDLDL/KLU后端比较，容差∞=1e-8，最大迭代300，预热1次、测量{repeats}次。\n参数：{}",
+            case.name,
+            serde_json::to_string_pretty(&options).unwrap()
+        );
+        for (round, method) in bench::runs(methods, repeats) {
+            let label = method.label();
+            qdldl_probe::reset();
+            klu_probe::reset();
+            let (mut row, v) = match method {
+                NormalQdldl => run_with_backend(
+                    case,
+                    &options,
+                    || QDLDLSolver::with_dsigns(vec![1; case.npv + 2 * case.npq]),
+                    false,
+                ),
+                NormalCholesky | NormalSupernodal => {
+                    let (mut solver, backend_build_ms) =
+                        timeit!(Cholesky::new(matches!(method, NormalSupernodal), threads));
+                    let (mut r, v) = run_system(case, &options, &mut solver, false);
+                    r["build_ms"] = (r["build_ms"].as_f64().unwrap() + backend_build_ms).into();
+                    assert_eq!(solver.analysis_count, 1, "CHOLMOD不应重复分析结构");
+                    r["analysis_count"] = solver.analysis_count.into();
+                    r["analysis_ms"] = solver.analysis_ms.into();
+                    r["factor_ms"] = solver.factor_ms.into();
+                    r["backsolve_ms"] = solver.backsolve_ms.into();
+                    (r, v)
+                }
+                NormalKlu => run_with_backend(case, &options, KLUSolver::default, false),
+                FullQdldl => {
+                    let n = case.npv + 2 * case.npq;
+                    run_with_backend(
                         case,
                         &options,
-                        &mut QDLDLSolver::with_dsigns(vec![1; case.npv + 2 * case.npq]),
-                        false,
-                    ),
-                    1 | 2 => {
-                        let mut solver = Cholesky::new(method == 2, threads);
-                        let (mut r, v) = run_system(case, &options, &mut solver, false);
-                        assert_eq!(solver.analysis_count, 1, "CHOLMOD不应重复分析结构");
-                        r["analysis_count"] = solver.analysis_count.into();
-                        r["analysis_ms"] = solver.analysis_ms.into();
-                        r["factor_ms"] = solver.factor_ms.into();
-                        r["backsolve_ms"] = solver.backsolve_ms.into();
-                        (r, v)
-                    }
-                    4 => run_system(case, &options, &mut KLUSolver::default(), false),
-                    5 => {
-                        let n = case.npv + 2 * case.npq;
-                        let signs = [vec![1; n], vec![-1; n]].concat();
-                        run_system(case, &options, &mut QDLDLSolver::with_dsigns(signs), true)
-                    }
-                    6 => run_system(case, &options, &mut KLUSolver::default(), true),
-                    3 => {
-                        let (m, v) = run_with_options(case, Method::UpperOperator, 300, &options);
-                        assert!(m.converged);
-                        (
-                            serde_json::json!({"converged":m.converged,"build_ms":m.build_ms,"solve_ms":m.solve_ms,
-                            "iterations":m.iterations,"linear_solves":m.linear_solves,
-                            "residual_inf":m.residual_inf,"product_ms":0.0,
-                            "fill_ms":m.fill_ms,"linear_ms":m.linear_solve_ms}),
-                            v,
-                        )
-                    }
-                    _ => unreachable!(),
-                };
-                if method == 0 || method == 3 || method == 5 {
-                    let ms =
-                        |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed) as f64 / 1e6;
-                    row["analysis_ms"] = ms(&qdldl_probe::SYM_NS).into();
-                    row["factor_ms"] = ms(&qdldl_probe::NUMERIC_NS).into();
-                    row["backsolve_ms"] = ms(&qdldl_probe::SOLVE_NS).into();
+                        || QDLDLSolver::with_dsigns([vec![1; n], vec![-1; n]].concat()),
+                        true,
+                    )
                 }
-                if method == 4 || method == 6 {
-                    let ms =
-                        |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed) as f64 / 1e6;
-                    row["analysis_ms"] = ms(&klu_probe::SYM_NS).into();
-                    row["factor_ms"] =
-                        (ms(&klu_probe::FACTOR_NS) + ms(&klu_probe::REFACTOR_NS)).into();
-                    row["backsolve_ms"] = ms(&klu_probe::SOLVE_NS).into();
-                    row["first_factor_count"] =
-                        klu_probe::N_FIRST_FACTOR.load(Ordering::Relaxed).into();
-                    row["refactor_count"] = klu_probe::N_REFACTOR.load(Ordering::Relaxed).into();
-                    row["factor_fallback_count"] =
-                        klu_probe::N_FACTOR_FALLBACK.load(Ordering::Relaxed).into();
-                    assert_eq!(
-                        klu_probe::N_FIRST_FACTOR.load(Ordering::Relaxed),
-                        1,
-                        "KLU应复用求解器"
-                    );
+                FullKlu => run_with_backend(case, &options, KLUSolver::default, true),
+                UpperQdldl => {
+                    let (m, v) = run_with_options(case, Method::UpperOperator, 300, &options);
+                    assert!(m.converged);
+                    (backend_record(&m, 0.0), v)
                 }
-                let iterations = row["iterations"].as_u64().unwrap();
-                let solves = row["linear_solves"].as_u64().unwrap();
-                let converged = row["converged"].as_bool().unwrap();
-                // 不同分解的舍入及失败重试可能改变轨迹；记录计数差异，不强行视为同一步。
-                // 只有收敛且电压一致的运行才可用于完整潮流耗时比较。
-                if converged {
-                    if let Some((old_it, old_solves, old_v)) = &reference {
-                        row["same_iterations_as_reference"] = (*old_it == iterations).into();
-                        row["same_linear_solves_as_reference"] = (*old_solves == solves).into();
-                        let dv = old_v
-                            .iter()
-                            .zip(&v)
-                            .map(|(a, b)| (a - b).norm())
-                            .fold(0.0f64, f64::max);
-                        assert!(dv < 1e-6, "{} {label}电压差{dv}", case.name);
-                        row["max_voltage_difference"] = dv.into();
-                    } else {
-                        reference = Some((iterations, solves, v));
-                    }
-                }
-                row["case"] = case.name.clone().into();
-                row["method"] = label.into();
-                row["round"] = round.into();
-                row["cholmod_threads"] = threads.into();
-                row["options"] = serde_json::to_value(&options).unwrap();
-                println!(
-                    "{}，{label}，第{round}轮（0为预热）：收敛={converged}，接受{iterations}步，线性求解{solves}次，总时间{:.3} ms，分解{:.3} ms",
-                    case.name,
-                    row["solve_ms"].as_f64().unwrap(),
-                    row["factor_ms"].as_f64().unwrap()
-                );
-                records.push(row);
-                std::fs::write(
-                    format!("{out}/measurements.json"),
-                    serde_json::to_vec_pretty(&records).unwrap(),
-                )
-                .unwrap();
+            };
+            if method.backend() == "QDLDL" {
+                let ms = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed) as f64 / 1e6;
+                row["analysis_ms"] = ms(&qdldl_probe::SYM_NS).into();
+                row["factor_ms"] = ms(&qdldl_probe::NUMERIC_NS).into();
+                row["backsolve_ms"] = ms(&qdldl_probe::SOLVE_NS).into();
             }
+            if method.backend() == "KLU" {
+                let ms = |a: &std::sync::atomic::AtomicU64| a.load(Ordering::Relaxed) as f64 / 1e6;
+                row["analysis_ms"] = ms(&klu_probe::SYM_NS).into();
+                row["factor_ms"] = (ms(&klu_probe::FACTOR_NS) + ms(&klu_probe::REFACTOR_NS)).into();
+                row["backsolve_ms"] = ms(&klu_probe::SOLVE_NS).into();
+                row["first_factor_count"] =
+                    klu_probe::N_FIRST_FACTOR.load(Ordering::Relaxed).into();
+                row["refactor_count"] = klu_probe::N_REFACTOR.load(Ordering::Relaxed).into();
+                row["factor_fallback_count"] =
+                    klu_probe::N_FACTOR_FALLBACK.load(Ordering::Relaxed).into();
+                assert_eq!(
+                    klu_probe::N_FIRST_FACTOR.load(Ordering::Relaxed),
+                    1,
+                    "KLU应复用求解器"
+                );
+            }
+            let iterations = row["iterations"].as_u64().unwrap();
+            let solves = row["linear_solves"].as_u64().unwrap();
+            let converged = row["converged"].as_bool().unwrap();
+            // 不同分解的舍入及失败重试可能改变轨迹；记录计数差异，不强行视为同一步。
+            // 只有收敛且电压一致的运行才可用于完整潮流耗时比较。
+            if converged {
+                if let Some((old_it, old_solves, old_v)) = &reference {
+                    row["same_iterations_as_reference"] = (*old_it == iterations).into();
+                    row["same_linear_solves_as_reference"] = (*old_solves == solves).into();
+                    let dv = old_v
+                        .iter()
+                        .zip(&v)
+                        .map(|(a, b)| (a - b).norm())
+                        .fold(0.0f64, f64::max);
+                    assert!(dv < 1e-6, "{} {label}电压差{dv}", case.name);
+                    row["max_voltage_difference"] = dv.into();
+                } else {
+                    row["max_voltage_difference"] = 0.0.into();
+                    row["same_iterations_as_reference"] = true.into();
+                    row["same_linear_solves_as_reference"] = true.into();
+                    reference = Some((iterations, solves, v));
+                }
+            }
+            row["case"] = case.name.clone().into();
+            row["method"] = label.into();
+            row["round"] = round.into();
+            row["cholmod_threads"] = threads.into();
+            row["options"] = serde_json::to_value(&options).unwrap();
+            row["backend"] = method.backend().into();
+            row["matrix_storage"] = if matches!(method, UpperQdldl) {
+                "upper"
+            } else {
+                "full"
+            }
+            .into();
+            row["jacobian_method"] = if matches!(
+                method,
+                NormalQdldl | NormalCholesky | NormalSupernodal | NormalKlu
+            ) {
+                "V4"
+            } else {
+                "operator"
+            }
+            .into();
+            row["solver_reuse"] = true.into();
+            row["buses"] = case.y.ncols().into();
+            row["states"] = (case.npv + 2 * case.npq).into();
+            row["tolerance_inf"] = 1e-8.into();
+            row["max_iterations"] = 300.into();
+            row["total_execution_ms"] =
+                (row["build_ms"].as_f64().unwrap() + row["solve_ms"].as_f64().unwrap()).into();
+            row["matrix_preparation_ms"] = (row["fill_ms"].as_f64().unwrap()
+                + row["product_ms"].as_f64().unwrap()
+                + row["mu_ms"].as_f64().unwrap())
+            .into();
+            report.push(row, label);
         }
+        report.summary(&case.name);
     }
 }

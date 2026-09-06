@@ -6,7 +6,12 @@ use num_complex::Complex64;
 use rustpower::{new_opf, opf};
 use serde::Deserialize;
 use serde_json::json;
-use std::time::Instant;
+#[allow(dead_code)]
+mod bench;
+#[allow(dead_code)]
+#[path = "opf.rs"]
+mod opf_benchmark;
+use bench::timeit;
 
 #[derive(Deserialize)]
 struct Sparse {
@@ -198,51 +203,25 @@ fn main() {
         assert!((lo[i] == xmin[i]) || (lo[i].is_infinite() && xmin[i] <= -1e20));
         assert!((hi[i] == xmax[i]) || (hi[i].is_infinite() && xmax[i] >= 1e20));
     }
-    for version in ["V1", "V4", "V5.0", "V5.2", "V5.3", "V5.5", "V5.6"] {
+    for &version in opf_benchmark::VERSIONS {
         for trial in 0..=repeats {
-            let opt = opf::PipsOpt {
-                max_it: 150,
-                cost_mult: 1e-4,
-                ..Default::default()
-            };
+            let opt = opf_benchmark::options(150);
             // Bounds and initial-vector copies precede timing on both paths.
             let (seed, lower, upper) = (x0.clone(), lo.clone(), hi.clone());
-            let t = Instant::now();
-            let result = if version == "V1" {
-                opf::pips::pips(
-                    |x| opf::cost::opf_costfcn(&base, x),
-                    |x| {
-                        let (g, h, dg, dh) = opf::constraints::opf_consfcn(&base, x);
-                        (h, g, dh, dg)
-                    },
-                    |x, l, m, _z, c| opf::hessian::opf_hessfcn(&base, x, l, m, c),
-                    seed,
-                    lower,
-                    upper,
-                    opt,
-                )
-            } else {
-                // Include NewOPFData's legacy cache build and wrapper-specific symbolic setup.
-                let data = new_opf::model::NewOPFData::new(base.clone());
-                let solve = match version {
-                    "V4" => new_opf::configurations::pips,
-                    "V5.0" => new_opf::configurations::pips_v5,
-                    "V5.2" => new_opf::configurations::pips_v5_2,
-                    "V5.3" => new_opf::configurations::pips_v5_3,
-                    "V5.5" => new_opf::configurations::pips_v5_5,
-                    _ => new_opf::configurations::pips_v5_6,
-                };
-                solve(&data, seed, lower, upper, opt)
-            };
-            let total_ms = t.elapsed().as_secs_f64() * 1e3;
+            let (result, total_ms) = timeit!(opf_benchmark::solve_version(
+                version, &base, seed, lower, upper, opt
+            ));
             if trial == 0 {
                 continue;
             }
-            let tm = &result.timing;
-            println!(
-                "{}",
-                json!({"case":case,"version":version,"trial":trial,"converged":result.converged,"iterations":result.iterations,"f":result.f,"x":result.x,"total_ms":total_ms,"hess_ms":tm.hess.as_secs_f64()*1e3,"gh_ms":tm.gh.as_secs_f64()*1e3,"kkt_ms":tm.kkt.as_secs_f64()*1e3,"first_solve_ms":tm.solve_sym.as_secs_f64()*1e3,"later_solves_ms":tm.solve_num.as_secs_f64()*1e3})
+            let mut row = opf_benchmark::measurement(&result, total_ms);
+            row.as_object_mut().unwrap().extend(
+                json!({"case":case,"version":version,"trial":trial,"x":result.x})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
             );
+            println!("{row}");
         }
     }
 }
