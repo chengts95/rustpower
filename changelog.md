@@ -4,6 +4,7 @@
 - Add dcpf to solve some types of networks.
 - Use standard 2-port network patch for branches.
 - Refactor the postprocessing and remove obselete codes and structures.
+- Add native newtonpf solver without ECS networks to further save memories.
 
 ## [0.5.1] - Fix and Improvement 
 - Fix transformer model error caused by oversight in complex number division, still not same to pandapower's transformer handling but explainable.
