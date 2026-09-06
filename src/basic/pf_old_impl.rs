@@ -101,7 +101,7 @@ impl<T: Copy + Clone + Zero + Scalar + ClosedAddAssign> SliceTo for CscMatrix<T>
 /// block starts at index 0, so J12/J21/J22 are extracted from rows/cols
 /// `0..npq` (not `npv..n_bus` as in the old PV-first convention).
 #[allow(non_snake_case, dead_code)]
-pub(crate) fn build_jacobian(
+pub fn build_jacobian(
     ds_dvm: &CscMatrix<Complex64>,
     ds_dva: &CscMatrix<Complex64>,
     npq: usize,
@@ -124,7 +124,7 @@ pub(crate) fn build_jacobian(
 ///
 /// Same PQ-first convention as `build_jacobian`.
 #[allow(non_snake_case)]
-pub(crate) fn build_jacobian_cached(
+pub fn build_jacobian_cached(
     ds_dvm: &CscMatrix<Complex64>,
     ds_dva: &CscMatrix<Complex64>,
     cache: &mut Option<JacobianCache>,
@@ -178,7 +178,7 @@ pub(crate) fn build_jacobian_cached(
 }
 
 /// Cached Jacobian block buffers (reused across NR iterations in V1).
-pub(crate) struct JacobianCache {
+pub struct JacobianCache {
     pub ds_dva: CscMatrix<Complex64>,
     pub ds_dvm: CscMatrix<Complex64>,
     pub j11: CscMatrix<f64>,

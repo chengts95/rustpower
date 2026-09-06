@@ -21,11 +21,12 @@
 //! convergence-window experiment).
 
 use nalgebra::DVector;
+use crate::lm::step_control::{LmOptions, TrialError, TrustRegion, polar_trial, predicted_reduction};
 use nalgebra_sparse::CscMatrix;
 use num_complex::Complex64;
 
 use crate::lm::flat::{FlatLayout, fill_kkt_flat};
-use crate::lm::kernels::{apply_mu_delta, fill_jt};
+use crate::lm::kernels::{apply_mu_delta_weighted, fill_jt};
 use crate::lm::pattern::KktPattern;
 use crate::lm::residual::residual;
 use crate::basic::new_dsdvbus4::fill_jacobian_v4;
@@ -150,12 +151,11 @@ impl LmDriver {
         }
     }
 
-    /// Exact-LM (or GN-LM when `exact = false`) with gain-ratio μ adaptation
-    /// (ext_ref `run_lm` rules: accept ρ > 1e-4; ρ > 0.75 → μ/3; reject →
-    /// μ×2; non-finite step → μ×10; μ > 1e12 → stall).
+    /// Exact-LM (or GN-LM when `exact = false`) with default step control.
+    /// See `solve_lm_with_options` for configurable settings.
     ///
     /// `v` is the flat-start voltage (slack fixed, PV magnitudes at spec) and
-    /// is updated in place on success.
+    /// is updated only after accepted steps, including when a later step fails.
     pub fn solve_lm<S: Solve>(
         &mut self,
         ybus: &CscMatrix<Complex64>,
@@ -165,9 +165,29 @@ impl LmDriver {
         tol: f64,
         maxit: usize,
     ) -> LmResult {
+        self.solve_lm_with_options(ybus, solver, v, exact, tol, maxit, &LmOptions::default())
+    }
+
+    /// Configurable damping and trial acceptance. Invalid options panic;
+    /// callers accepting external settings can use `LmOptions::validate` first.
+    #[allow(clippy::too_many_arguments)]
+    pub fn solve_lm_with_options<S: Solve>(
+        &mut self,
+        ybus: &CscMatrix<Complex64>,
+        solver: &mut S,
+        v: &mut [Complex64],
+        exact: bool,
+        tol: f64,
+        maxit: usize,
+        options: &LmOptions,
+    ) -> LmResult {
+        options.validate().expect("invalid LM options");
+        let damping = options.damping_metric.prepare(ybus, self.n_act);
         let n = self.n_state;
         let debug = std::env::var("RUSTPOWER_LM_DEBUG").is_ok();
-        let mut mu = 1e-2f64;
+        let trace_voltage = std::env::var_os("RUSTPOWER_LM_TRACE_VOLTAGE").is_some();
+        let mut mu = options.initial_mu;
+        let mut region = TrustRegion::new(options.trust_region.as_ref());
         let mut res_inf;
         for it in 0..maxit {
             let f;
@@ -184,8 +204,9 @@ impl LmDriver {
             // μ inner loop: only the diagonal slots move between tries.
             let mut mu_applied = 0.0;
             let mut accepted = false;
-            for _ in 0..30 {
-                apply_mu_delta::<true>(&self.pat, &mut self.values, mu - mu_applied);
+            for _ in 0..options.max_trials {
+                apply_mu_delta_weighted::<true>(&self.pat, &mut self.values, mu - mu_applied,
+                    |k| damping.weight(v, k, self.n_act));
                 mu_applied = mu;
 
                 self.b[..n].fill(0.0);
@@ -204,28 +225,35 @@ impl LmDriver {
                 let delta = &self.b[..n];
                 let finite = solve_ok && delta.iter().all(|x| x.is_finite());
                 if !finite {
-                    mu *= 10.0;
-                    if mu > 1e12 {
+                    if !options.increase_mu(&mut mu, options.failed_step_increase) {
                         return LmResult { iterations: it, converged: false, res_inf };
                     }
                     continue;
                 }
 
-                // Polar trial update: θ_k += δθ_k; |V|_k += δ|V|_k (PQ only,
-                // |V| state sits at δ[n_act + k]).
-                self.vt.copy_from_slice(v);
-                for k in 0..self.n_act {
-                    let mut mag = self.vt[k].norm();
-                    let ang = self.vt[k].arg() + delta[k];
-                    if k < self.npq {
-                        mag += delta[self.n_act + k];
+                let step_norm_squared = damping.step_norm_squared(v, delta, self.n_act);
+                if !region.allows(step_norm_squared) {
+                    if debug {
+                        eprintln!("it={it} tryμ={mu:.3e} rejected=TrustRadius step={:.3e} radius={:.3e}", step_norm_squared.sqrt(), region.radius);
                     }
-                    self.vt[k] = Complex64::from_polar(mag, ang);
+                    if !options.increase_mu(&mut mu, options.mu_increase) {
+                        return LmResult { iterations: it, converged: false, res_inf };
+                    }
+                    continue;
                 }
-                let vt_finite = self.vt.iter().all(|x| x.re.is_finite() && x.im.is_finite());
-                if !vt_finite {
-                    mu *= 10.0;
-                    if mu > 1e12 {
+
+                if let Err(reason) = polar_trial(
+                    v, delta, self.n_act, self.npq, options.reject_nonpositive_voltage, &mut self.vt,
+                ) {
+                    if debug {
+                        eprintln!("it={it} tryμ={mu:.3e} rejected={reason:?}");
+                    }
+                    region.reject();
+                    let factor = match reason {
+                        TrialError::NonFinite => options.failed_step_increase,
+                        TrialError::NonPositiveMagnitude { .. } => options.mu_increase,
+                    };
+                    if !options.increase_mu(&mut mu, factor) {
                         return LmResult { iterations: it, converged: false, res_inf };
                     }
                     continue;
@@ -237,22 +265,34 @@ impl LmDriver {
                     let (n_act, npq) = (self.n_act, self.npq);
                     residual(ybus, &self.sbus, &mut self.ibus, n_act, npq, &self.vt, &mut self.rt)
                 };
-                let pred: f64 = -0.5
-                    * self.g.iter().zip(delta.iter()).map(|(g, d)| g * d).sum::<f64>();
-                let rho = if pred > 0.0 { (f - f_new) / pred } else { -1.0 };
+                let pred = predicted_reduction(&self.g, delta, mu, step_norm_squared);
+                let rho = if pred.is_finite() && pred > 0.0 && f_new.is_finite() {
+                    (f - f_new) / pred
+                } else { -1.0 };
                 if debug {
                     eprintln!("it={it} tryμ={mu:.3e} res={res_inf:.3e} f={f:.4e} f_new={f_new:.4e} pred={pred:.4e} ρ={rho:.4}");
+                    eprintln!("trial_metrics it={it} mu={mu:.17e} step={:.17e} radius={:.17e} rho={rho:.17e} accepted={}",
+                        step_norm_squared.sqrt(), region.radius,
+                        rho.is_finite() && rho > options.acceptance_threshold);
                 }
-                if rho > 1e-4 {
-                    v.copy_from_slice(&self.vt);
-                    if rho > 0.75 {
-                        mu = (mu / 3.0).max(1e-12);
+                if rho.is_finite() && rho > options.acceptance_threshold {
+                    // Opt-in audit only; the reference solution never enters the solver.
+                    if trace_voltage {
+                        eprintln!("accepted_voltage {}", serde_json::json!({
+                            "iteration": it + 1, "mu": mu, "radius": region.radius,
+                            "rho": rho, "delta": delta,
+                            "v_re": self.vt.iter().map(|v| v.re).collect::<Vec<_>>(),
+                            "v_im": self.vt.iter().map(|v| v.im).collect::<Vec<_>>(),
+                        }));
                     }
+                    region.accept(rho, step_norm_squared, options.good_step_threshold);
+                    v.copy_from_slice(&self.vt);
+                    mu = options.accepted_mu(mu, rho);
                     accepted = true;
                     break;
                 }
-                mu *= 2.0;
-                if mu > 1e12 {
+                region.reject();
+                if !options.increase_mu(&mut mu, options.mu_increase) {
                     return LmResult { iterations: it, converged: false, res_inf };
                 }
             }
@@ -306,777 +346,11 @@ pub fn newton_pf_lm<Solver: Solve>(
 /// [`super::gn_flat::newton_pf_gn`]. The fat layout's GN mode
 /// (`solve_lm(exact = false)`) stays as the exact-LM control group.
 
-// ─── Phase 3 gate (doc §6): the convergence window, reproduced with KLU ─────
-//
-// Ill-conditioned 14-bus case from ext_ref/second_order_pf (high R/X =
-// 0.2+j0.6 ring + chords, flat start, load factor α scaling all
-// injections). Expected window (ext_ref, rect-coordinates prototype):
-//   α ≤ 1.1        everything converges
-//   α ∈ [1.15,1.2] only exact-LM converges
-//   α ≥ 1.22       everything fails (infeasible, stall beyond the nose)
-//
-// Our driver is the polar, reduced, augmented-system version of the same
-// method; the test prints the full α × {GN-LM, exact-LM} table and asserts
-// the window.
-
 #[cfg(all(test, any(feature = "klu", feature = "klu_dyn")))]
-pub(crate) mod tests {
+mod tests {
     use super::*;
-    use crate::lm::residual::fixtures::*;
+    use crate::lm::residual::fixtures::ill_conditioned_case;
     use crate::basic::solver::KLUSolver;
-    use nalgebra_sparse::CscMatrix;
-
-    fn run_alpha(alpha: f64, exact: bool) -> LmResult {
-        let (ybus, n_pv, n_pq, v_star, s_spec) = ill_conditioned_case();
-        let sbus: Vec<Complex64> = s_spec.iter().map(|s| s * alpha).collect();
-        let mut driver = LmDriver::build(&ybus, n_pv, n_pq, sbus);
-        let mut solver = KLUSolver::default();
-        let mut v = flat_start(&v_star, n_pv + n_pq, n_pq);
-        driver.solve_lm(&ybus, &mut solver, &mut v, exact, 1e-10, 200)
-    }
-
-    /// 可解性边界探针：从 α=1.0 的解出发热启动连续延拓（Δα=0.005），
-    /// 找到解真正消失的 α*。区分"病态（解存在但难收敛）"与"无解（过了
-    /// 鞍结分岔）"——四家撞同一堵墙只有在后者情况下才是正确行为。
-    #[test]
-    fn phase3_synthetic14_solvability_probe() {
-        let (ybus, n_pv, n_pq, v_star, s_spec) = ill_conditioned_case();
-        let n_act = n_pv + n_pq;
-        // 起点：α=1.0 平启动可解。
-        let mut v = flat_start(&v_star, n_act, n_pq);
-        let mut alpha = 1.0f64;
-        let step = 0.005f64;
-        println!("连续延拓（热启动 NR，Δα={step}）:");
-        loop {
-            let sbus = nalgebra::DVector::from_vec(
-                s_spec.iter().map(|s| s * (alpha + step)).collect::<Vec<_>>(),
-            );
-            let v_init = nalgebra::DVector::from_vec(v.clone());
-            let mut s = KLUSolver::default();
-            let r = crate::basic::newtonpf::newton_pf(
-                &ybus,
-                &sbus,
-                &v_init,
-                n_pv,
-                n_pq,
-                Some(1e-10),
-                Some(50),
-                &mut s,
-                None,
-            );
-            match r {
-                Ok((v_new, it)) => {
-                    alpha += step;
-                    v = v_new.iter().copied().collect();
-                    println!("  α={alpha:6.3} 可解 (it={it})");
-                }
-                Err(_) => {
-                    println!("  α={:.3} 热启动 NR 也失败 → 可解性边界 α* ∈ ({alpha:.3}, {:.3})",
-                        alpha + step, alpha + step);
-                    break;
-                }
-            }
-            if alpha > 1.5 {
-                println!("  延拓到 1.5 仍未断——边界不在此区间");
-                break;
-            }
-        }
-        // 边界内侧最后一个可解 α 上，四家平启动对照：这才是"病态"窗口。
-        let sbus = nalgebra::DVector::from_vec(s_spec.iter().map(|s| s * alpha).collect::<Vec<_>>());
-        let v_flat = nalgebra::DVector::from_vec(flat_start(&v_star, n_act, n_pq));
-        let mut s1 = KLUSolver::default();
-        let nr = crate::basic::newtonpf::newton_pf(&ybus, &sbus, &v_flat, n_pv, n_pq, Some(1e-10), Some(100), &mut s1, None);
-        let mut s2 = KLUSolver::default();
-        let iw = crate::basic::iwamoto::newton_pf_iwamoto(&ybus, &sbus, &v_flat, n_pv, n_pq, Some(1e-10), Some(100), &mut s2);
-        let gn = run_alpha(alpha, false);
-        let ex = run_alpha(alpha, true);
-        println!("边界内侧 α={alpha:.3} 平启动: NR={} Iwamoto={} GN-LM={} exact-LM={}",
-            if nr.is_ok() { "✓".into() } else { format!("✗({})", nr.unwrap_err().2) },
-            if iw.is_ok() { "✓".into() } else { format!("✗({})", iw.unwrap_err().2) },
-            if gn.converged { "✓".into() } else { format!("✗({})", gn.iterations) },
-            if ex.converged { "✓".into() } else { format!("✗({})", ex.iterations) });
-    }
-
-    /// 同一病态 14 节点上跑生产 newton_pf（用户点名要的对照）。
-    #[test]
-    fn phase3_synthetic14_production_nr() {
-        println!("病态14节点: α | 生产NR (it) [x = 不收敛]");
-        for &alpha in &[1.0f64, 1.1, 1.15, 1.2] {
-            let (ybus, n_pv, n_pq, v_star, s_spec) = ill_conditioned_case();
-            let sbus = nalgebra::DVector::from_vec(s_spec.iter().map(|s| s * alpha).collect::<Vec<_>>());
-            let v_init = nalgebra::DVector::from_vec(flat_start(&v_star, n_pv + n_pq, n_pq));
-            let mut s1 = KLUSolver::default();
-            let nr = crate::basic::newtonpf::newton_pf(
-                &ybus,
-                &sbus,
-                &v_init,
-                n_pv,
-                n_pq,
-                Some(1e-10),
-                Some(100),
-                &mut s1,
-                None,
-            );
-            match &nr {
-                Ok((_, it)) => println!("α={alpha:4.2} | {it:3}"),
-                Err((_, _, it)) => println!("α={alpha:4.2} |   x (it={it})"),
-            }
-        }
-    }
-
-    /// 病态14 四家对照：NR / Iwamoto 最优乘子 / GN-LM / exact-LM，
-    /// α 扫描到各自撞墙（同一平起点、同一 KLU、同一 1e-10 容差）。
-    #[test]
-    fn phase3_synthetic14_four_way_sweep() {
-        println!("病态14 α 扫描: [it 或 x=不收敛]");
-        println!("α      |  NR  | Iwamoto | GN-LM | exact-LM");
-        for &alpha in &[1.0f64, 1.05, 1.1, 1.12, 1.14, 1.15, 1.16, 1.2] {
-            let (ybus, n_pv, n_pq, v_star, s_spec) = ill_conditioned_case();
-            let n_act = n_pv + n_pq;
-            let sbus = nalgebra::DVector::from_vec(
-                s_spec.iter().map(|s| s * alpha).collect::<Vec<_>>(),
-            );
-            let v_init = nalgebra::DVector::from_vec(flat_start(&v_star, n_act, n_pq));
-
-            let mut s1 = KLUSolver::default();
-            let nr = crate::basic::newtonpf::newton_pf(
-                &ybus,
-                &sbus,
-                &v_init,
-                n_pv,
-                n_pq,
-                Some(1e-10),
-                Some(100),
-                &mut s1,
-                None,
-            );
-            let mut s2 = KLUSolver::default();
-            let iw = crate::basic::iwamoto::newton_pf_iwamoto(
-                &ybus, &sbus, &v_init, n_pv, n_pq, Some(1e-10), Some(100), &mut s2,
-            );
-            let gn = run_alpha(alpha, false);
-            let ex = run_alpha(alpha, true);
-
-            let fr = |r: &Result<(nalgebra::DVector<Complex64>, usize), (String, nalgebra::DVector<Complex64>, usize)>| {
-                match r {
-                    Ok((_, it)) => format!("{it:4}"),
-                    Err((_, _, it)) => format!("x({it:2})"),
-                }
-            };
-            let fl = |r: &LmResult| {
-                if r.converged { format!("{:<4}", r.iterations) } else { format!("x({:2})", r.iterations) }
-            };
-            println!(
-                "α={alpha:5.2} | {} | {:7} | {:5} | {}",
-                fr(&nr),
-                fr(&iw),
-                fl(&gn),
-                fl(&ex)
-            );
-        }
-    }
-
-    /// 无解区（α > α*≈1.137）的最小二乘对照：LM 给出的是 f=½‖r‖² 的极小
-    /// 点——"离可行域最近的运行点"，有物理意义、可参考对比。非零残差区
-    /// 正是 H 理论上有收益的岗位（H 的收益 ⇔ 最优处残差非零），此处实测。
-    /// 对照 NR/Iwamoto 烧满 100 步后的残差水平（它们不停认，残差无意义）。
-    #[test]
-    fn phase3_synthetic14_least_squares_beyond_wall() {
-        println!("无解区最小二乘对照（病态14，α*≈1.137）:");
-        println!("α     | GN-LM: it,  res∞,     f      | exact-LM: it, res∞,     f      | 两点 max|ΔV| | NR 100步后 res∞");
-        for &alpha in &[1.14f64, 1.15, 1.16, 1.2, 1.3] {
-            let (ybus, n_pv, n_pq, v_star, s_spec) = ill_conditioned_case();
-            let n_act = n_pv + n_pq;
-            let n = n_act + n_pq;
-            let sbus: Vec<Complex64> = s_spec.iter().map(|s| s * alpha).collect();
-            let nb = ybus.ncols();
-
-            let mut ls = Vec::new();
-            for exact in [false, true] {
-                let mut driver = LmDriver::build(&ybus, n_pv, n_pq, sbus.clone());
-                let mut solver = KLUSolver::default();
-                let mut v = flat_start(&v_star, n_act, n_pq);
-                let r = driver.solve_lm(&ybus, &mut solver, &mut v, exact, 1e-10, 200);
-                assert!(!r.converged, "α={alpha} 应无解");
-                let mut ibus = vec![Complex64::new(0.0, 0.0); nb];
-                let mut rr = vec![0.0; n];
-                let (_, f) = residual(&ybus, &sbus, &mut ibus, n_act, n_pq, &v, &mut rr);
-                ls.push((r, v, f));
-            }
-            // NR 烧满 100 步后的残差水平（对照"不认停"的代价）。
-            let sbus_d = nalgebra::DVector::from_vec(sbus.clone());
-            let v_flat = nalgebra::DVector::from_vec(flat_start(&v_star, n_act, n_pq));
-            let mut s1 = KLUSolver::default();
-            let nr = crate::basic::newtonpf::newton_pf(
-                &ybus,
-                &sbus_d,
-                &v_flat,
-                n_pv,
-                n_pq,
-                Some(1e-10),
-                Some(100),
-                &mut s1,
-                None,
-            );
-            let nr_res = match &nr {
-                Ok(_) => f64::NAN,
-                Err((_, v_bad, _)) => {
-                    let mut ibus = vec![Complex64::new(0.0, 0.0); nb];
-                    let mut rr = vec![0.0; n];
-                    let vv: Vec<Complex64> = v_bad.iter().copied().collect();
-                    residual(&ybus, &sbus, &mut ibus, n_act, n_pq, &vv, &mut rr).0
-                }
-            };
-
-            let (g, e) = (&ls[0], &ls[1]);
-            let dv = g.1.iter().zip(e.1.iter())
-                .fold(0.0f64, |m, (a, b)| m.max((a - b).norm()));
-            println!(
-                "α={alpha:4.2} | {:3}, {:.2e}, {:.4e} | {:3},  {:.2e}, {:.4e} | {dv:.3e} | {nr_res:.2e}",
-                g.0.iterations, g.0.res_inf, g.2,
-                e.0.iterations, e.0.res_inf, e.2,
-            );
-        }
-    }
-
-    /// 无解区最小二乘 + 性能实测：IEEE39（墙 α*∈(2.10,2.15)）与
-    /// PEGASE 9241（真实大系统，墙未知，先探）。GN-LM vs exact-LM：
-    /// 迭代数、墙钟时间、最小二乘点一致性（f、ΔV）。release 下跑：
-    /// `cargo test --release --features klu infeasible_ls_perf -- --nocapture`
-    #[test]
-    fn phase4_infeasible_ls_perf_real_systems() {
-        use crate::basic::ecs::elements::PPNetwork;
-        use crate::basic::ecs::network::{DataOps, PowerFlow, PowerGrid};
-        use crate::basic::ecs::powerflow::systems::PowerFlowMat;
-        use crate::io::pandapower::{Network, load_csv_zip};
-        use std::time::Instant;
-
-        let load_zip = |name: &str| -> PowerFlowMat {
-            let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-            let net: Network = load_csv_zip(&format!("{dir}/cases/{name}/data.zip")).unwrap();
-            let mut pf = PowerGrid::default();
-            pf.world_mut().insert_resource(PPNetwork(net));
-            pf.init_pf_net();
-            pf.world().get_resource::<PowerFlowMat>().unwrap().clone()
-        };
-
-        // (系统, 起始电压用生产平启动 v_bus_init)
-        for (name, mat) in [("IEEE39", load_ieee39_mat()), ("PEGASE9241", load_zip("pegase9241"))] {
-            let ybus = &mat.y_bus;
-            let (npv, npq) = (mat.npv, mat.npq);
-            let n_act = npv + npq;
-            let n = n_act + npq;
-            let nb = ybus.ncols();
-            println!("=== {name}: nb={nb} npv={npv} npq={npq} 状态数 n={n} ===");
-
-            // 1) NR 探墙：α 逐步上调直到失败。
-            let s_base: Vec<Complex64> = mat.s_bus.iter().copied().collect();
-            let v0: Vec<Complex64> = mat.v_bus_init.iter().copied().collect();
-            let mut alpha = 1.0f64;
-            loop {
-                let sbus = nalgebra::DVector::from_vec(s_base.iter().map(|s| s * alpha).collect::<Vec<_>>());
-                let v_init = nalgebra::DVector::from_vec(v0.clone());
-                let mut s = KLUSolver::default();
-                let t = Instant::now();
-                let r = crate::basic::newtonpf::newton_pf(
-                    ybus,
-                    &sbus,
-                    &v_init,
-                    npv,
-                    npq,
-                    Some(1e-8),
-                    Some(100),
-                    &mut s,
-                    None,
-                );
-                match r {
-                    Ok((_, it)) => println!("  NR α={alpha:5.2} ✓ it={it:2} t={:?}", t.elapsed()),
-                    Err(_) => {
-                        println!("  NR α={alpha:5.2} ✗ → 墙在 ({:.2}, {alpha:.2})", alpha - 0.05);
-                        break;
-                    }
-                }
-                alpha += 0.05;
-                if alpha > 3.0 {
-                    println!("  α>3.0 仍可解，此系统此协议下无墙");
-                    break;
-                }
-            }
-
-            // 2) 无解区最小二乘 + 性能对照（墙外三个点）。
-            println!("  α     | GN-LM: it,   t,     f | exact-LM: it,   t,     f | 两点 max|ΔV|");
-            for k in 0..3 {
-                let a = alpha + 0.05 * k as f64;
-                let sbus: Vec<Complex64> = s_base.iter().map(|s| s * a).collect();
-                let mut pts = Vec::new();
-                for exact in [false, true] {
-                    let mut driver = LmDriver::build(ybus, npv, npq, sbus.clone());
-                    let mut solver = KLUSolver::default();
-                    let mut v = v0.clone();
-                    let t = Instant::now();
-                    let r = driver.solve_lm(ybus, &mut solver, &mut v, exact, 1e-8, 200);
-                    let dt = t.elapsed();
-                    let mut ibus = vec![Complex64::new(0.0, 0.0); nb];
-                    let mut rr = vec![0.0; n];
-                    let (_, f) = residual(ybus, &sbus, &mut ibus, n_act, npq, &v, &mut rr);
-                    pts.push((r, v, f, dt));
-                }
-                let (g, e) = (&pts[0], &pts[1]);
-                let dv = g.1.iter().zip(e.1.iter())
-                    .fold(0.0f64, |m, (x, y)| m.max((x - y).norm()));
-                println!(
-                    "  α={a:5.2} | {:3} {:7.?} {:.3e} | {:3}  {:7.?} {:.3e} | {dv:.2e}{}",
-                    g.0.iterations, g.3, g.2,
-                    e.0.iterations, e.3, e.2,
-                    if g.0.converged || e.0.converged { "  (收敛!)" } else { "" },
-                );
-            }
-        }
-    }
-
-    /// 稳态（可解区）可算性验证：PEGASE 9241 在 α=1.0/1.1（NR 确认可解）
-    /// 上跑 GN-LM 与 exact-LM——能不能算、几步、多快、解与 NR 对不对得上。
-    #[test]
-    fn phase4_steady_state_pegase9241() {
-        use crate::basic::ecs::elements::PPNetwork;
-        use crate::basic::ecs::network::{DataOps, PowerFlow, PowerGrid};
-        use crate::basic::ecs::powerflow::systems::PowerFlowMat;
-        use crate::io::pandapower::{Network, load_csv_zip};
-        use std::time::Instant;
-
-        let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        let net: Network = load_csv_zip(&format!("{dir}/cases/pegase9241/data.zip")).unwrap();
-        let mut pf = PowerGrid::default();
-        pf.world_mut().insert_resource(PPNetwork(net));
-        pf.init_pf_net();
-        let mat = pf.world().get_resource::<PowerFlowMat>().unwrap().clone();
-
-        let ybus = &mat.y_bus;
-        let (npv, npq) = (mat.npv, mat.npq);
-        let n_act = npv + npq;
-        let nb = ybus.ncols();
-        println!("PEGASE9241 稳态: nb={nb} npv={npv} npq={npq} n={}", n_act + npq);
-        println!("α    | NR: it, t | GN-LM: it, t, ΔV | exact-LM: it, t, ΔV");
-
-        for &alpha in &[1.0f64, 1.1] {
-            let sbus: Vec<Complex64> = mat.s_bus.iter().map(|s| s * alpha).collect();
-            let v0: Vec<Complex64> = mat.v_bus_init.iter().copied().collect();
-            let sbus_d = nalgebra::DVector::from_vec(sbus.clone());
-            let v_init = nalgebra::DVector::from_vec(v0.clone());
-
-            let mut s0 = KLUSolver::default();
-            let t = Instant::now();
-            let nr = crate::basic::newtonpf::newton_pf(
-                ybus,
-                &sbus_d,
-                &v_init,
-                npv,
-                npq,
-                Some(1e-8),
-                Some(100),
-                &mut s0,
-                None,
-            );
-            let t_nr = t.elapsed();
-            let (v_nr, it_nr) = nr.expect("NR 在可解区必须收敛");
-
-            let mut line = format!("α={alpha:4.2} | {it_nr:2} {:7.?}", t_nr);
-            for exact in [false, true] {
-                let mut driver = LmDriver::build(ybus, npv, npq, sbus.clone());
-                let mut solver = KLUSolver::default();
-                let mut v = v0.clone();
-                let t = Instant::now();
-                let r = driver.solve_lm(ybus, &mut solver, &mut v, exact, 1e-8, 100);
-                let dt = t.elapsed();
-                let dv = v.iter().zip(v_nr.iter())
-                    .fold(0.0f64, |m, (x, y)| m.max((x - y).norm()));
-                line += &format!(
-                    " | {} {:3} {:7.?} {dv:.1e}",
-                    if r.converged { "✓" } else { "✗" },
-                    r.iterations, dt,
-                );
-            }
-            println!("{line}");
-        }
-    }
-
-    // ─── 诊断助手（驻点认证用）：稠密抠 J/H、Jacobi 特征值 ────────────────
-    /// 从 flat 里抠出稠密极坐标 J（s-列前段 = J 行 c），并算 g = Jᵀr。
-    fn dense_j_and_g(driver: &LmDriver, r: &[f64]) -> (Vec<f64>, Vec<f64>) {
-        let n = driver.flat.n_state;
-        let (gp, ri, vals) = (&driver.flat.col_offsets, &driver.flat.row_indices, driver.values());
-        let mut j = vec![0.0f64; n * n];
-        for c in 0..n {
-            for p in gp[n + c]..gp[n + c + 1] - 1 {
-                j[c * n + ri[p]] = vals[p];
-            }
-        }
-        let mut g = vec![0.0f64; n];
-        for c in 0..n {
-            for i in 0..n {
-                g[i] += j[c * n + i] * r[c];
-            }
-        }
-        (j, g)
-    }
-
-    #[test]
-    fn phase3_stall_escape_probe() {
-        // 驻点逃逸探针：exact-LM 卡死（g≈0, r≠0）后小幅扰动 v 再跑，看能否
-        // 回到真解的吸引域。xorshift 伪随机，种子固定，结果可复现。
-        let mut seed = 0x9e3779b97f4a7c15u64;
-        let mut rand = move || {
-            seed ^= seed << 13;
-            seed ^= seed >> 7;
-            seed ^= seed << 17;
-            (seed as f64 / u64::MAX as f64) - 0.5
-        };
-        for &alpha in &[1.15f64, 1.18, 1.2] {
-            let (ybus, n_pv, n_pq, v_star, s_spec) = ill_conditioned_case();
-            let sbus: Vec<Complex64> = s_spec.iter().map(|s| s * alpha).collect();
-            let n_act = n_pv + n_pq;
-            let mut driver = LmDriver::build(&ybus, n_pv, n_pq, sbus);
-            let mut solver = KLUSolver::default();
-            let mut v = flat_start(&v_star, n_act, n_pq);
-            let (mut total_it, mut kicks, mut ok) = (0, 0, false);
-            for _ in 0..8 {
-                let res = driver.solve_lm(&ybus, &mut solver, &mut v, true, 1e-10, 100);
-                total_it += res.iterations;
-                if res.converged {
-                    ok = true;
-                    break;
-                }
-                kicks += 1;
-                for k in 0..n_act {
-                    let mag = v[k].norm() * (1.0 + 0.02 * rand());
-                    let ang = v[k].arg() + 0.05 * rand();
-                    v[k] = Complex64::from_polar(mag, ang);
-                }
-            }
-            println!("α={alpha:4.2} escape: ok={ok} kicks={kicks} 总迭代={total_it}");
-        }
-    }
-
-    /// 对称稠密矩阵特征值（Jacobi 旋转，22×22 诊断够用）。
-    fn jacobi_eigs(a: &[f64], n: usize) -> Vec<f64> {
-        let mut a = a.to_vec();
-        for _ in 0..100 {
-            let mut off = 0.0f64;
-            for p in 0..n {
-                for q in p + 1..n {
-                    off += a[p * n + q] * a[p * n + q];
-                }
-            }
-            if off < 1e-24 {
-                break;
-            }
-            for p in 0..n {
-                for q in p + 1..n {
-                    let apq = a[p * n + q];
-                    if apq == 0.0 {
-                        continue;
-                    }
-                    let theta = (a[q * n + q] - a[p * n + p]) / (2.0 * apq);
-                    let t = theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt());
-                    let c = 1.0 / (t * t + 1.0).sqrt();
-                    let s = t * c;
-                    for k in 0..n {
-                        let (akp, akq) = (a[k * n + p], a[k * n + q]);
-                        a[k * n + p] = c * akp - s * akq;
-                        a[k * n + q] = s * akp + c * akq;
-                    }
-                    for k in 0..n {
-                        let (apk, aqk) = (a[p * n + k], a[q * n + k]);
-                        a[p * n + k] = c * apk - s * aqk;
-                        a[q * n + k] = s * apk + c * aqk;
-                    }
-                }
-            }
-        }
-        let mut d: Vec<f64> = (0..n).map(|i| a[i * n + i]).collect();
-        d.sort_by(|x, y| x.total_cmp(y));
-        d
-    }
-
-    /// 从 driver 当前 fill 状态抠稠密 J 与 H（fill 之后调用）。
-    fn dense_jh(driver: &LmDriver) -> (Vec<f64>, Vec<f64>) {
-        let n = driver.flat.n_state;
-        let (gp, ri, vals) = (&driver.flat.col_offsets, &driver.flat.row_indices, driver.values());
-        let mut j = vec![0.0f64; n * n];
-        let mut h = vec![0.0f64; n * n];
-        for c in 0..n {
-            for p in gp[n + c]..gp[n + c + 1] - 1 {
-                j[c * n + ri[p]] = vals[p]; // s-列前段 = J 行 c
-            }
-            let l_c = (gp[c + 1] - gp[c]) / 2;
-            for p in gp[c]..gp[c] + l_c {
-                h[ri[p] * n + c] = vals[p]; // δ-列前段 = H 列 c
-            }
-        }
-        (j, h)
-    }
-
-    fn gram(j: &[f64], n: usize) -> Vec<f64> {
-        let mut a = vec![0.0f64; n * n];
-        for i in 0..n {
-            for jj in 0..n {
-                let mut s = 0.0;
-                for k in 0..n {
-                    s += j[k * n + i] * j[k * n + jj];
-                }
-                a[i * n + jj] = s;
-            }
-        }
-        a
-    }
-
-    #[test]
-    fn phase3_flat_start_inertia() {
-        // 平起点上 JᵀJ+H 的特征值：解释 μ 为什么必须顶到 ~41（μ > |λmin| 才能
-        // 让模型有下界），并给 JᵀJ（GN 模型）作对照。
-        let mat = load_ieee39_mat();
-        let cases: Vec<(String, CscMatrix<Complex64>, usize, usize, Vec<Complex64>, Vec<Complex64>)> = vec![
-            (
-                "IEEE39 α=1.0 平起点".into(),
-                mat.y_bus.clone(),
-                mat.npv,
-                mat.npq,
-                mat.s_bus.iter().copied().collect(),
-                mat.v_bus_init.iter().copied().collect(),
-            ),
-            {
-                let (ybus, n_pv, n_pq, v_star, s_spec) = ill_conditioned_case();
-                (
-                    "病态14 α=1.0 平起点".into(),
-                    ybus,
-                    n_pv,
-                    n_pq,
-                    s_spec,
-                    flat_start(&v_star, n_pv + n_pq, n_pq),
-                )
-            },
-        ];
-        for (name, ybus, n_pv, n_pq, sbus, v) in cases {
-            let n = n_pv + 2 * n_pq;
-            let mut driver = LmDriver::build(&ybus, n_pv, n_pq, sbus.clone());
-            let mut ibus = vec![Complex64::new(0.0, 0.0); ybus.ncols()];
-            let mut r = vec![0.0; n];
-            let _ = residual(&ybus, &sbus, &mut ibus, n_pv + n_pq, n_pq, &v, &mut r);
-            driver.r.copy_from_slice(&r); // H 用 driver.r 折叠，必须灌进去
-            driver.fill(&ybus, &v, true);
-            let (j, h) = dense_jh(&driver);
-            let jtj = gram(&j, n);
-            let a: Vec<f64> = jtj.iter().zip(h.iter()).map(|(x, y)| x + y).collect();
-            let e_a = jacobi_eigs(&a, n);
-            let e_j = jacobi_eigs(&jtj, n);
-            let e_h = jacobi_eigs(&h, n);
-            let h_inf = h.iter().fold(0.0f64, |m, &x| m.max(x.abs()));
-            let n_neg = e_a.iter().filter(|&&x| x < -1e-8).count();
-            println!(
-                "{name}: JᵀJ+H λmin={:.3e} λmax={:.3e} 负特征值={n_neg} | JᵀJ λmin={:.3e} λmax={:.3e}",
-                e_a[0], e_a[n - 1], e_j[0], e_j[n - 1]
-            );
-            println!(
-                "    H: λmin={:.3e} λmax={:.3e} ‖H‖∞={h_inf:.3e}",
-                e_h[0], e_h[n - 1]
-            );
-            println!("    最负 5 个: {:?}", &e_a[..5]);
-        }
-    }
-
-    #[test]
-    fn phase3_stall_inertia() {
-        // 卡死点的二阶信息：∇²(½‖r‖²) = JᵀJ + H(r) 的惯性（负特征值个数）。
-        // 负特征值 → 鞍点 → 存在逃逸方向；正定 → 局部极小 → 真困死。
-        for &alpha in &[1.15f64, 1.2] {
-            let (ybus, n_pv, n_pq, v_star, s_spec) = ill_conditioned_case();
-            let sbus: Vec<Complex64> = s_spec.iter().map(|s| s * alpha).collect();
-            let n_act = n_pv + n_pq;
-            let n = n_act + n_pq;
-            let mut driver = LmDriver::build(&ybus, n_pv, n_pq, sbus.clone());
-            let mut solver = KLUSolver::default();
-            let mut v = flat_start(&v_star, n_act, n_pq);
-            let lm = driver.solve_lm(&ybus, &mut solver, &mut v, true, 1e-10, 200);
-            assert!(!lm.converged);
-
-            let mut ibus = vec![Complex64::new(0.0, 0.0); NB];
-            let mut r = vec![0.0; n];
-            let (res_inf, f) = residual(&ybus, &sbus, &mut ibus, n_act, n_pq, &v, &mut r);
-            driver.fill(&ybus, &v, true);
-            let (j, g) = dense_j_and_g(&driver, &r);
-            let g_inf = g.iter().fold(0.0f64, |m, &x| m.max(x.abs()));
-
-            // 稠密 H：δ-列前段（leading segment = L_c 长度）
-            let (gp, ri, vals) = (&driver.flat.col_offsets, &driver.flat.row_indices, driver.values());
-            let mut h = vec![0.0f64; n * n];
-            for c in 0..n {
-                let l_c = (gp[c + 1] - gp[c]) / 2;
-                for p in gp[c]..gp[c] + l_c {
-                    h[ri[p] * n + c] = vals[p];
-                }
-            }
-            // A = JᵀJ + H
-            let mut a = h;
-            for i in 0..n {
-                for jj in 0..n {
-                    let mut s = 0.0;
-                    for k in 0..n {
-                        s += j[k * n + i] * j[k * n + jj];
-                    }
-                    a[i * n + jj] += s;
-                }
-            }
-            let eigs = jacobi_eigs(&a, n);
-            let n_neg = eigs.iter().filter(|&&x| x < -1e-8).count();
-            let n_zero = eigs.iter().filter(|&&x| x.abs() <= 1e-8).count();
-            println!(
-                "α={alpha:4.2} 驻点 res={res_inf:.3e} f={f:.3e} ‖g‖∞={g_inf:.2e} | ∇²f 惯性: 负={n_neg} 零={n_zero} 正={} λmin={:.3e} λmax={:.3e}",
-                n - n_neg - n_zero, eigs[0], eigs[n - 1]
-            );
-            println!("       特征值: {:?}", eigs);
-        }
-    }
-
-    #[test]
-    fn phase3_continuation_probe() {
-        // 同伦/连续流探针：从 α=1.0 的解出发，逐级热启动 α 爬坡。
-        // OPF 实践中从不冷启动——这才是工程上真实的可达范围。
-        let (ybus, n_pv, n_pq, v_star, s_spec) = ill_conditioned_case();
-        let n_act = n_pv + n_pq;
-        let mut v = flat_start(&v_star, n_act, n_pq);
-        println!("continuation (exact-LM, 热启动链, Δα=0.01):");
-        for k in 0..=22 {
-            let alpha = 1.0 + 0.01 * k as f64;
-            let sbus: Vec<Complex64> = s_spec.iter().map(|s| s * alpha).collect();
-            let mut driver = LmDriver::build(&ybus, n_pv, n_pq, sbus);
-            let mut solver = KLUSolver::default();
-            let res = driver.solve_lm(&ybus, &mut solver, &mut v, true, 1e-10, 100);
-            println!(
-                "  α={alpha:4.2} ok={} it={:2} res={:.2e}",
-                res.converged, res.iterations, res.res_inf
-            );
-            if !res.converged {
-                println!("  链断于 α={alpha:4.2}，分析断点性质：");
-                let mut ibus = vec![Complex64::new(0.0, 0.0); NB];
-                let mut r = vec![0.0; n_act + n_pq];
-                let sbus_c = driver.sbus.clone();
-                let _ = residual(&ybus, &sbus_c, &mut ibus, n_act, n_pq, &v, &mut r);
-                driver.fill(&ybus, &v, true);
-                let (j, g) = dense_j_and_g(&driver, &r);
-                let g_inf = g.iter().fold(0.0f64, |m, &x| m.max(x.abs()));
-                // J 的条件（σ_min² = JᵀJ 的最小特征值）
-                let n = n_act + n_pq;
-                let mut jtj = vec![0.0f64; n * n];
-                for i in 0..n {
-                    for jj in 0..n {
-                        let mut s = 0.0;
-                        for k in 0..n {
-                            s += j[k * n + i] * j[k * n + jj];
-                        }
-                        jtj[i * n + jj] = s;
-                    }
-                }
-                let je = jacobi_eigs(&jtj, n);
-                println!("    断点 ‖g‖∞={g_inf:.2e} σ_min(J)={:.3e} σ_max(J)={:.3e}", je[0].sqrt(), je[n - 1].sqrt());
-                break;
-            }
-        }
-    }
-
-    // ─── IEEE39 实战：生产 newton_pf vs GN-LM vs exact-LM，负荷因子扫描 ─────
-    // 三家同一起点（生产平启动 v_bus_init）、同一线性求解器（KLU）、
-    // 同一注入缩放协议（s_bus × α，负荷和发电一起缩）。
-
-    #[test]
-    fn phase3_ieee39_loading_sweep() {
-        let mat = load_ieee39_mat();
-        let ybus = &mat.y_bus;
-        let (npv, npq) = (mat.npv, mat.npq);
-        println!("IEEE39: npv={npv} npq={npq}");
-        println!("α     | 生产NR (it) | GN-LM (it) | exact-LM (it)   [x = 不收敛]");
-        for &alpha in &[2.0f64, 2.05, 2.1, 2.15, 2.2, 2.25] {
-            let sbus_v: Vec<Complex64> = mat.s_bus.iter().map(|s| s * alpha).collect();
-            let sbus = nalgebra::DVector::from_vec(sbus_v.clone());
-            let v_init = nalgebra::DVector::from_vec(mat.v_bus_init.iter().copied().collect::<Vec<_>>());
-
-            // 1) 生产 newton_pf（原封不动的原路径）
-            let mut s1 = KLUSolver::default();
-            let nr = crate::basic::newtonpf::newton_pf(
-                ybus,
-                &sbus,
-                &v_init,
-                npv,
-                npq,
-                Some(1e-8),
-                Some(100),
-                &mut s1,
-                None,
-            );
-            let (nr_ok, nr_it) = match &nr {
-                Ok((_, it)) => (true, *it),
-                Err((_, _, it)) => (false, *it),
-            };
-
-            // 2) GN-LM
-            let mut d2 = LmDriver::build(ybus, npv, npq, sbus_v.clone());
-            let mut s2 = KLUSolver::default();
-            let mut v2: Vec<Complex64> = v_init.iter().copied().collect();
-            let gn = d2.solve_lm(ybus, &mut s2, &mut v2, false, 1e-8, 200);
-
-            // 3) exact-LM
-            let mut d3 = LmDriver::build(ybus, npv, npq, sbus_v);
-            let mut s3 = KLUSolver::default();
-            let mut v3: Vec<Complex64> = v_init.iter().copied().collect();
-            let ex = d3.solve_lm(ybus, &mut s3, &mut v3, true, 1e-8, 200);
-
-            let f = |ok: bool, it: usize| if ok { format!("{it:3}") } else { "  x".into() };
-            println!(
-                "α={:4.2} | {} | {} | {}",
-                alpha,
-                f(nr_ok, nr_it),
-                f(gn.converged, gn.iterations),
-                f(ex.converged, ex.iterations)
-            );
-        }
-    }
-
-    /// 原 gate（rect 窗口预期）。极坐标实测：α≤1.1 三家（含生产 NR）皆收敛；
-    /// α≥1.15 exact-LM 停在认证过的伪局部极小（g≈0、∇²f 正定，见
-    /// phase3_stall_inertia）；IEEE39 上三家同至 α≈2.1 同一堵墙。
-    /// gate 重定基线待用户拍板，暂挂起。
-    #[test]
-    #[ignore = "rect-window expectation; polar re-baseline pending owner decision"]
-    fn phase3_convergence_window_klu() {
-        println!("alpha  | GN-LM (it) | exact-LM (it)");
-        let mut table = Vec::new();
-        for &alpha in &[1.0f64, 1.1, 1.15, 1.18, 1.2, 1.22] {
-            let gn = run_alpha(alpha, false);
-            let ex = run_alpha(alpha, true);
-            println!(
-                "α={:4.2} | {} | {}",
-                alpha,
-                if gn.converged { format!("{:3}", gn.iterations) } else { "  x".into() },
-                if ex.converged { format!("{:3}", ex.iterations) } else { "  x".into() },
-            );
-            table.push((alpha, gn.converged, ex.converged));
-        }
-
-        // The window: exact-LM converges up to α = 1.2 and stalls in the
-        // infeasible region (α = 1.22).
-        for &(alpha, _, ex_ok) in &table {
-            if alpha <= 1.2 {
-                assert!(ex_ok, "exact-LM should converge at α = {alpha}");
-            } else {
-                assert!(!ex_ok, "exact-LM should stall at α = {alpha} (infeasible)");
-            }
-        }
-        // The control group: GN-LM fails inside the window.
-        for &(alpha, gn_ok, _) in &table {
-            if (1.15..=1.2).contains(&alpha) {
-                assert!(!gn_ok, "GN-LM should fail inside the window at α = {alpha}");
-            }
-        }
-    }
 
     /// Slim 与 fat（GN 模式）逐元素对照：同一 J/Jᵀ 内容、−I 槽不被触碰、
     /// μ 槽在列头。（从 gn_flat 挪来：它是 exact 侧的对照测试。）

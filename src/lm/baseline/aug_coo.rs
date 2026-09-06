@@ -1,17 +1,8 @@
-//! **AUG-COO** — the ablation floor for the augmented GN-LM system.
+//! 历史增广GN-LM基准：V4填J，每次试步以COO组装完整增广矩阵，
+//! 转为CSC后交给新建的QDLDLSolver，重新执行符号分析和数值分解。
 //!
-//! Same mathematics as [`super::gn_flat::GnDriver`] (identical μ policy,
-//! identical residual, identical J values from the shared offset kernel),
-//! but every linear solve is done the stranger's way:
-//!
-//! 1. push the whole `[μI Jᵀ; J −I]` into a COO triplet buffer,
-//! 2. `CscMatrix::from(&coo)` — the sort/dedup tax, every single μ try,
-//! 3. hand a **fresh** `QDLDLSolver` the matrix — symbolic analysis +
-//!    numeric factorization from scratch, zero reuse.
-//!
-//! The gap between this driver and `GnDriver` is exactly what the paper
-//! claims: direct CSC fill + symbolic-once/numeric-many. Kept in its own
-//! module so the whole baseline can be dropped by deleting the folder.
+//! 此处保留旧步长控制：没有显式信赖域及非正幅值拒绝，预测下降量
+//! 为−gᵀδ/2。它与当前GnDriver的接受准则不同，总耗时差不能仅归因于组装。
 
 use nalgebra_sparse::{CooMatrix, CscMatrix};
 use num_complex::Complex64;
@@ -42,7 +33,7 @@ pub struct AugCooDriver {
     npq: usize,
     n_state: usize,
     // Profiling (ns), same convention as `normal_eq::NeDriver`.
-    /// J fill (shared kernel — identical cost in every path).
+    /// V4填J，包含scalc和vnorm准备。
     pub prof_fill_ns: u64,
     /// COO push + sort/convert + triple extraction (the naive-assembly tax).
     pub prof_coo_ns: u64,
@@ -108,9 +99,7 @@ impl AugCooDriver {
         self.prof_fill_ns += t.elapsed().as_nanos() as u64;
     }
 
-    /// The stranger's assembly: push `[μI Jᵀ; J −I]` as COO triplets, then
-    /// pay the sort/convert. Jᵀ entries are re-pushed from the same J values
-    /// (a naive implementation owns no transpose kernel).
+    /// 将[μI Jᵀ; J −I]写入COO并转为CSC；Jᵀ复用J的数值。
     fn coo_assemble(&mut self, mu: f64) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
         let t = std::time::Instant::now();
         let n = self.n_state;

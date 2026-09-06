@@ -6,6 +6,7 @@ pub(crate) mod d2sbus_dv2;
 pub(crate) mod d2sbr_dv2;
 pub mod iwamoto;
 pub mod jacobian_cache;
+pub(crate) mod jacobian_operator;
 #[cfg(test)]
 pub(crate) mod new_dsdvbus; // kept only for test_jacobian_pattern
 pub(crate) mod new_dsdvbus2;
@@ -24,5 +25,8 @@ pub use newtonpf::newton_pf;
 #[cfg(test)]
 mod test_jacobian_pattern;
 
-#[cfg(all(test, any(feature = "klu", feature = "klu_dyn")))]
-mod bench_jacobian_fill;
+
+
+#[cfg(feature = "benchmark")]
+#[path = "../../performance/access.rs"]
+pub mod benchmark_internals;

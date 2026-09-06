@@ -22,16 +22,16 @@
 
 use std::time::{Duration, Instant};
 
-use crate::basic::dsbus_dv::{dSbus_dV, dSbus_dV_old};
+use crate::basic::benchmark_internals::fill_jacobian_v3;
+use crate::basic::benchmark_internals::{
+    JacobianCache, build_jacobian, build_jacobian_cached, csc_matvec_and_scalc, newton_pf_old,
+    newton_pf_v0,
+};
+use crate::basic::benchmark_internals::{JacobianPattern2, fill_jacobian_v2};
+use crate::basic::benchmark_internals::{dSbus_dV, dSbus_dV_old};
 use crate::basic::ecs::elements::PPNetwork;
 use crate::basic::ecs::network::{DataOps, PowerFlow, PowerGrid};
 use crate::basic::ecs::powerflow::systems::PowerFlowMat;
-use crate::basic::new_dsdvbus2::{JacobianPattern2, fill_jacobian_v2};
-use crate::basic::new_dsdvbus3::fill_jacobian_v3;
-use crate::basic::newtonpf::{
-    JacobianCache, build_jacobian, build_jacobian_cached, csc_matvec_and_scalc, newton_pf,
-    newton_pf_old, newton_pf_v0,
-};
 use crate::basic::solver::KLUSolver;
 use crate::io::pandapower::Network;
 use nalgebra::*;
@@ -679,8 +679,7 @@ fn export_solve_breakdown_csv(path: &str, name: &str, mat: &PowerFlowMat, repeat
     println!("    [solve_breakdown.csv: {} rows written for {}]", 3, name);
 }
 
-#[test]
-fn bench_jacobian_fill() {
+pub fn bench_jacobian_fill() {
     println!(
         "\nJacobian assembly benchmark -- V0 (raw MATPOWER port) vs \
          V1 (build_jacobian_cached) vs V2 (symbolic-cached fill), KLU solver\n"
@@ -714,10 +713,10 @@ fn bench_jacobian_fill() {
         }
 
         // ── CSV export for per-solve breakdown figure ──────────────────────
-        let csv = format!("{}/paper/solve_breakdown.csv", dir);
+        let csv = format!("{}/target/research/performance/jacobian/solve_breakdown.csv", dir);
         {
             use std::io::Write as _;
-            let _ = std::fs::create_dir_all(format!("{}/paper", dir));
+            let _ = std::fs::create_dir_all(format!("{}/target/research/performance/jacobian", dir));
             let mut f = std::fs::File::create(&csv).expect("cannot create solve_breakdown.csv");
             writeln!(
                 f,
@@ -742,3 +741,5 @@ fn bench_jacobian_fill() {
         println!("\n    CSV saved to {}", csv);
     }
 }
+
+use rustpower::basic::newtonpf::newton_pf;

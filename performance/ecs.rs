@@ -3,7 +3,6 @@
 //! 每个 app 跑两次 `update()`：cold = 首次（含建网、符号分析、首分解），
 //! warm = 第二次（热路径）。release 下跑（加 probe 得各相位 breakdown）：
 //! `cargo test --release --features "klu probe" perf_pf -- --nocapture`
-#![cfg(all(test, any(feature = "klu", feature = "klu_dyn")))]
 
 use bevy_app::App;
 use std::time::Instant;
@@ -39,7 +38,13 @@ fn timed_app(net: Network, method: &'static str, add: impl FnOnce(&mut App)) -> 
         .get_resource::<PowerFlowResult>()
         .expect("no PowerFlowResult")
         .clone();
-    Run { method, converged: r.converged, iterations: r.iterations, cold, warm }
+    Run {
+        method,
+        converged: r.converged,
+        iterations: r.iterations,
+        cold,
+        warm,
+    }
 }
 
 fn four_way(name: &str, net: impl Fn() -> Network) {
@@ -72,8 +77,7 @@ fn four_way(name: &str, net: impl Fn() -> Network) {
     }
 }
 
-#[test]
-fn perf_pf_app_api() {
+pub fn perf_pf_app_api() {
     four_way("IEEE39", || {
         serde_json::from_str(crate::testcases::case_ieee39::IEEE_39).unwrap()
     });
@@ -87,8 +91,7 @@ fn perf_pf_app_api() {
 /// 我们的装配侧。预期：装配 ≈ 0，时间全在 KLU（2n 维增广系统的 n^k 代价）。
 /// 对照 NR（n 维系统）。release:
 /// `cargo test --release --features klu klu_breakdown -- --nocapture`
-#[test]
-fn perf_pf_klu_breakdown() {
+pub fn perf_pf_klu_breakdown() {
     use crate::basic::solver::KLUSolver;
     #[cfg(feature = "probe")]
     use crate::basic::solver::klu_probe;
@@ -103,7 +106,8 @@ fn perf_pf_klu_breakdown() {
     let mat = world
         .get_resource::<crate::basic::ecs::powerflow::systems::PowerFlowMat>()
         .unwrap();
-    let (ybus, sbus, v_init, npv, npq) = (&mat.y_bus, &mat.s_bus, &mat.v_bus_init, mat.npv, mat.npq);
+    let (ybus, sbus, v_init, npv, npq) =
+        (&mat.y_bus, &mat.s_bus, &mat.v_bus_init, mat.npv, mat.npq);
     let n = npv + 2 * npq;
     println!("PEGASE9241: n={n}（增广 2n={}）", 2 * n);
 
@@ -112,7 +116,17 @@ fn perf_pf_klu_breakdown() {
     #[cfg(feature = "probe")]
     klu_probe::reset();
     let t = Instant::now();
-    let r = crate::basic::newtonpf::newton_pf(ybus, sbus, v_init, npv, npq, Some(1e-8), Some(100), &mut s, None);
+    let r = crate::basic::newtonpf::newton_pf(
+        ybus,
+        sbus,
+        v_init,
+        npv,
+        npq,
+        Some(1e-8),
+        Some(100),
+        &mut s,
+        None,
+    );
     let total = t.elapsed();
     let it = r.map(|(_, it)| it).unwrap_or(usize::MAX);
     println!("NR      : total={total:9.?} it={it:2}");
@@ -134,8 +148,7 @@ fn perf_pf_klu_breakdown() {
 
 /// 增广系统为什么贵：nnz 对比 + KLU ordering 实验（AMD vs COLAMD）+
 /// JᵀJ 法方程的符号 nnz 预估（决定"死磕 JᵀJ"值不值）。
-#[test]
-fn perf_pf_augmented_vs_normal() {
+pub fn perf_pf_augmented_vs_normal() {
     use crate::basic::solver::KLUSolver;
     use crate::lm::gn_flat::newton_pf_gn;
     use crate::lm::pattern::KktPattern;
@@ -149,7 +162,8 @@ fn perf_pf_augmented_vs_normal() {
     let mat = world
         .get_resource::<crate::basic::ecs::powerflow::systems::PowerFlowMat>()
         .unwrap();
-    let (ybus, sbus, v_init, npv, npq) = (&mat.y_bus, &mat.s_bus, &mat.v_bus_init, mat.npv, mat.npq);
+    let (ybus, sbus, v_init, npv, npq) =
+        (&mat.y_bus, &mat.s_bus, &mat.v_bus_init, mat.npv, mat.npq);
     let n = npv + 2 * npq;
 
     // ── nnz 事实 ──
@@ -157,8 +171,13 @@ fn perf_pf_augmented_vs_normal() {
     let (cs, ri) = (&pat.graph.col_starts, &pat.graph.row_indices);
     let nnz_j = pat.graph.nnz;
     let max_ri = ri.iter().max().copied().unwrap_or(0);
-    println!("诊断: nb={} n_act={} n={} graph列数={} max_ri={max_ri}",
-        ybus.ncols(), npv + npq, n, cs.len() - 1);
+    println!(
+        "诊断: nb={} n_act={} n={} graph列数={} max_ri={max_ri}",
+        ybus.ncols(),
+        npv + npq,
+        n,
+        cs.len() - 1
+    );
     let nnz_aug = 2 * nnz_j + 2 * n; // slim 布局
     // JᵀJ 符号 nnz：方程→状态集合（J 列转置散射），再逐列并集。
     let g_n = cs.len() - 1;
@@ -183,8 +202,14 @@ fn perf_pf_augmented_vs_normal() {
         }
         nnz_jtj += cnt;
     }
-    println!("nnz: Ybus={} J={} 增广[μI Jᵀ;J -I]={} JᵀJ+μI={} (比={:.2})",
-        ybus.nnz(), nnz_j, nnz_aug, nnz_jtj, nnz_jtj as f64 / nnz_aug as f64);
+    println!(
+        "nnz: Ybus={} J={} 增广[μI Jᵀ;J -I]={} JᵀJ+μI={} (比={:.2})",
+        ybus.nnz(),
+        nnz_j,
+        nnz_aug,
+        nnz_jtj,
+        nnz_jtj as f64 / nnz_aug as f64
+    );
 
     // ── 决定性实验：JᵀJ+μI 真符号 + 假数值，量 KLU 分解耗时。
     // klu refactor 复用主元顺序，耗时与数值无关 → 假数值即可量 fill-in。
@@ -221,7 +246,8 @@ fn perf_pf_augmented_vs_normal() {
         let mut cp_ = cp.clone();
         let mut ri_ = col_rows.clone();
         let mut ax_ = ax.clone();
-        let _ = crate::basic::solver::Solve::solve(&mut s, &mut cp_, &mut ri_, &mut ax_, &mut b, g_n);
+        let _ =
+            crate::basic::solver::Solve::solve(&mut s, &mut cp_, &mut ri_, &mut ax_, &mut b, g_n);
     }
     println!("JᵀJ+μI 假数值 11 次 solve 总 {:?}", t.elapsed());
     #[cfg(feature = "probe")]
@@ -233,7 +259,10 @@ fn perf_pf_augmented_vs_normal() {
         unsafe { (*s.0.common).ordering = ord };
         let t = Instant::now();
         let r = newton_pf_gn(ybus, sbus, v_init, npv, npq, Some(1e-8), Some(100), &mut s);
-        println!("GN-LM ordering={ord}: total={:9.?} it={}",
-            t.elapsed(), r.map(|(_, it)| it).unwrap_or(usize::MAX));
+        println!(
+            "GN-LM ordering={ord}: total={:9.?} it={}",
+            t.elapsed(),
+            r.map(|(_, it)| it).unwrap_or(usize::MAX)
+        );
     }
 }

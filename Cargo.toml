@@ -31,6 +31,7 @@ klu = ["dep:rustpower-sol-klu", "rustpower-sol-klu/static"]
 ldl = ["dep:rustpower-sol-ldl", "rustpower-sol-ldl/static"]
 qdldl = ["dep:clarabel"]
 probe = []
+benchmark = ["klu_dyn", "qdldl", "probe"]
 faer = ["dep:faer"]
 rsparse = ["dep:rsparse"]
 archive = ["dep:bevy_archive"]   
@@ -83,3 +84,19 @@ optional = true
 [dependencies.clarabel]
 version = "0.11"
 optional = true
+
+[[bench]]
+name = "comparison"
+path = "performance/main.rs"
+harness = false
+required-features = ["benchmark"]
+
+[[example]]
+name = "audit_lm"
+path = "performance/audit_lm.rs"
+
+[[example]]
+name = "audit_opf"
+path = "performance/audit_opf.rs"
+
+ 

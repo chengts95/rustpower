@@ -4,26 +4,11 @@
 //! (JᵀJ + μI) δ = −Jᵀ r
 //! ```
 //!
-//! Two modes sharing one driver:
-//!
-//! * **smart (default)** — same architecture discipline as the augmented
-//!   path: the JᵀJ pattern is analyzed once (via one generic spgemm), then
-//!   every LM sweep is numeric-only (two-pointer column dot products, zero
-//!   extra storage, cached μ diagonal slots). This is the strongest fair
-//!   form the NE path can take.
-//! * **dumb (`dumb_mode = true`)** — the ablation floor: nalgebra spgemm
-//!   redoes pattern + numeric every iteration, the write-it-like-a-stranger
-//!   baseline a general-purpose sparse library gives you.
-//!
-//! The only thing shared with the optimized augmented path is the J fill
-//! kernel itself (`fill_jacobian_v4`).
-//!
-//! Numerics warning (by design): κ(JᵀJ + μI) ≈ κ(J)²/μ — this path squares
-//! the condition number, which is exactly what the augmented system avoids.
-//! The fold-neighborhood behavior difference is part of the experiment.
-//!
-//! Kept in its own module so the whole path can be dropped without touching
-//! anything else: delete the folder and the `mod normal_eq;` line.
+//! 两种乘积算法共用驱动器和 V4 Jacobian 填充：
+//! * `dumb_mode = false`：首次建立乘积结构，之后用列交集计算数值。
+//! * `dumb_mode = true`：每轮使用通用稀疏乘法重建乘积。
+//! 两者均复用传给线性求解器的矩阵缓冲区，避免重复符号分析。
+//! 性能由 `lm::comparison` 对照测试衡量，不预设哪种更快。
 
 use nalgebra::DVector;
 use nalgebra_sparse::{CscMatrix, CsrMatrix};
@@ -31,6 +16,7 @@ use num_complex::Complex64;
 
 use super::pattern::KktPattern;
 use super::residual::residual;
+use super::step_control::{LmOptions, TrialError, TrustRegion, polar_trial, predicted_reduction};
 use crate::basic::new_dsdvbus4::fill_jacobian_v4;
 use crate::basic::solver::Solve;
 
@@ -57,6 +43,8 @@ pub struct NeDriver {
     /// Diagonal position within each column of A (cached; kills the μ scan).
     diag_pos: Vec<usize>,
     a_symbolic_done: bool,
+    diag0: Vec<f64>,
+    b: Vec<f64>,
     // Scratch (allocated once).
     ibus: Vec<Complex64>,
     scalc: Vec<Complex64>,
@@ -73,6 +61,8 @@ pub struct NeDriver {
     pub prof_spgemm_ns: u64,
     pub prof_numeric_ns: u64,
     pub prof_mu_ns: u64,
+    pub prof_solve_ns: u64,
+    pub n_solves: u64,
 }
 
 /// Outcome of one NE-LM run (same shape as the GN driver's result).
@@ -103,6 +93,8 @@ impl NeDriver {
             a_vals: Vec::new(),
             diag_pos: Vec::new(),
             a_symbolic_done: false,
+            diag0: vec![0.0; n_state],
+            b: vec![0.0; n_state],
             ibus: vec![Complex64::new(0.0, 0.0); nb],
             scalc: vec![Complex64::new(0.0, 0.0); nb],
             vnorm: vec![Complex64::new(1.0, 0.0); nb],
@@ -117,6 +109,8 @@ impl NeDriver {
             prof_spgemm_ns: 0,
             prof_numeric_ns: 0,
             prof_mu_ns: 0,
+            prof_solve_ns: 0,
+            n_solves: 0,
         }
     }
 
@@ -125,6 +119,8 @@ impl NeDriver {
         self.prof_spgemm_ns = 0;
         self.prof_numeric_ns = 0;
         self.prof_mu_ns = 0;
+        self.prof_solve_ns = 0;
+        self.n_solves = 0;
     }
 
     /// J fill (existing offset kernel) — shared with every other path.
@@ -160,9 +156,17 @@ impl NeDriver {
         let j_csr = CsrMatrix::from(&j_csc); // J as CSR
         let prod = &jt_csr * &j_csr; // spgemm: pattern + numeric
         let a_csc = CscMatrix::from(&prod);
-        self.a_cols = a_csc.col_offsets().to_vec();
-        self.a_rows = a_csc.row_indices().to_vec();
-        self.a_vals = a_csc.values().to_vec(); // spgemm values (dumb mode uses them as-is)
+        if !self.a_symbolic_done {
+            self.a_cols = a_csc.col_offsets().to_vec();
+            self.a_rows = a_csc.row_indices().to_vec();
+            self.a_vals = a_csc.values().to_vec();
+        } else {
+            // 通用乘法可以分配临时矩阵，但传给solver的结构数组保持不动。
+            // 固定J模式应产生相同的乘积模式；检查后只复制数值。
+            assert!(self.a_cols == a_csc.col_offsets()
+                && self.a_rows == a_csc.row_indices(), "JᵀJ pattern changed during solve");
+            self.a_vals.copy_from_slice(a_csc.values());
+        }
         if self.diag_pos.is_empty() {
             // Diagonal position per column (Ybus diag ⇒ JᵀJ diag always present).
             self.diag_pos = (0..n)
@@ -231,76 +235,98 @@ impl NeDriver {
         tol: f64,
         maxit: usize,
     ) -> NeResult {
+        self.solve_ne_with_options(ybus, solver, v, tol, maxit, &LmOptions::default())
+    }
+
+    /// Configurable damping and trial acceptance. Invalid options panic;
+    /// callers accepting external settings can use `LmOptions::validate` first.
+    #[allow(clippy::too_many_arguments)]
+    pub fn solve_ne_with_options<S: Solve>(
+        &mut self,
+        ybus: &CscMatrix<Complex64>,
+        solver: &mut S,
+        v: &mut [Complex64],
+        tol: f64,
+        maxit: usize,
+        options: &LmOptions,
+    ) -> NeResult {
+        options.validate().expect("invalid LM options");
+        let damping = options.damping_metric.prepare(ybus, self.n_act);
         let n = self.n_state;
         let debug = std::env::var("RUSTPOWER_LM_DEBUG").is_ok();
-        let mut mu = 1e-2f64;
+        let mut mu = options.initial_mu;
+        let mut region = TrustRegion::new(options.trust_region.as_ref());
         let mut res_inf;
         for it in 0..maxit {
             let f;
             {
                 let (n_act, npq) = (self.n_act, self.npq);
-                (res_inf, f) = residual(ybus, &self.sbus, &mut self.ibus, n_act, npq, v, &mut self.r);
+                (res_inf, f) = residual(ybus, &self.sbus, &mut self.ibus,
+                    n_act, npq, v, &mut self.r);
             }
             if res_inf < tol {
                 return NeResult { iterations: it, converged: true, res_inf };
             }
             self.jtj(ybus, v);
-
-            // Remember the raw JᵀJ diagonal so each μ try SETS (diag + μ)
-            // absolutely — retries must not accumulate.
-            let diag0: Vec<f64> = (0..n).map(|c| self.a_vals[self.diag_pos[c]]).collect();
-
-            // g = Jᵀ r from the J CSC (column c dotted with r at its rows).
             for c in 0..n {
-                let mut acc = 0.0;
-                for p in self.j_cols[c]..self.j_cols[c + 1] {
-                    acc += self.j_vals[p] * self.r[self.j_rows[p]];
-                }
-                self.g[c] = acc;
+                self.diag0[c] = self.a_vals[self.diag_pos[c]];
+                self.g[c] = (self.j_cols[c]..self.j_cols[c + 1])
+                    .map(|p| self.j_vals[p] * self.r[self.j_rows[p]]).sum();
             }
 
             let mut accepted = false;
-            for _ in 0..30 {
-                // μ on the diagonal: absolute set at the cached positions.
-                let t = std::time::Instant::now();
+            for _ in 0..options.max_trials {
+                let t_mu = std::time::Instant::now();
                 for c in 0..n {
-                    self.a_vals[self.diag_pos[c]] = diag0[c] + mu;
+                    self.a_vals[self.diag_pos[c]] = self.diag0[c]
+                        + mu * damping.weight(v, c, self.n_act);
+                    self.b[c] = -self.g[c];
                 }
-                self.prof_mu_ns += t.elapsed().as_nanos() as u64;
-
-                let mut b: Vec<f64> = self.g.iter().map(|g| -g).collect();
+                self.prof_mu_ns += t_mu.elapsed().as_nanos() as u64;
+                let t_solve = std::time::Instant::now();
                 let solve_ok = solver
                     .solve(
                         &mut self.a_cols,
                         &mut self.a_rows,
                         &mut self.a_vals,
-                        &mut b,
+                        &mut self.b,
                         n,
                     )
                     .is_ok();
-                let delta = &b;
+                self.prof_solve_ns += t_solve.elapsed().as_nanos() as u64;
+                self.n_solves += 1;
+                let delta = &self.b[..n];
                 let finite = solve_ok && delta.iter().all(|x| x.is_finite());
                 if !finite {
-                    mu *= 10.0;
-                    if mu > 1e12 {
+                    if !options.increase_mu(&mut mu, options.failed_step_increase) {
                         return NeResult { iterations: it, converged: false, res_inf };
                     }
                     continue;
                 }
 
-                // Polar trial update (identical to the GN/exact drivers).
-                self.vt.copy_from_slice(v);
-                for k in 0..self.n_act {
-                    let mut mag = self.vt[k].norm();
-                    let ang = self.vt[k].arg() + delta[k];
-                    if k < self.npq {
-                        mag += delta[self.n_act + k];
+                let step_norm_squared = damping.step_norm_squared(v, delta, self.n_act);
+                if !region.allows(step_norm_squared) {
+                    if debug {
+                        eprintln!("it={it} tryμ={mu:.3e} rejected=TrustRadius step={:.3e} radius={:.3e}", step_norm_squared.sqrt(), region.radius);
                     }
-                    self.vt[k] = Complex64::from_polar(mag, ang);
+                    if !options.increase_mu(&mut mu, options.mu_increase) {
+                        return NeResult { iterations: it, converged: false, res_inf };
+                    }
+                    continue;
                 }
-                if self.vt.iter().any(|x| !x.re.is_finite() || !x.im.is_finite()) {
-                    mu *= 10.0;
-                    if mu > 1e12 {
+
+                if let Err(reason) = polar_trial(
+                    v, delta, self.n_act, self.npq, options.reject_nonpositive_voltage, &mut self.vt,
+                ) {
+                    if debug {
+                        eprintln!("it={it} tryμ={mu:.3e} rejected={reason:?}");
+                    }
+                    region.reject();
+                    let factor = match reason {
+                        TrialError::NonFinite => options.failed_step_increase,
+                        TrialError::NonPositiveMagnitude { .. } => options.mu_increase,
+                    };
+                    if !options.increase_mu(&mut mu, factor) {
                         return NeResult { iterations: it, converged: false, res_inf };
                     }
                     continue;
@@ -310,22 +336,22 @@ impl NeDriver {
                     let (n_act, npq) = (self.n_act, self.npq);
                     residual(ybus, &self.sbus, &mut self.ibus, n_act, npq, &self.vt, &mut self.rt)
                 };
-                let pred: f64 = -0.5
-                    * self.g.iter().zip(delta.iter()).map(|(g, d)| g * d).sum::<f64>();
-                let rho = if pred > 0.0 { (f - f_new) / pred } else { -1.0 };
+                let pred = predicted_reduction(&self.g, delta, mu, step_norm_squared);
+                let rho = if pred.is_finite() && pred > 0.0 && f_new.is_finite() {
+                    (f - f_new) / pred
+                } else { -1.0 };
                 if debug {
                     eprintln!("it={it} tryμ={mu:.3e} res={res_inf:.3e} f={f:.4e} f_new={f_new:.4e} pred={pred:.4e} ρ={rho:.4}");
                 }
-                if rho > 1e-4 {
+                if rho.is_finite() && rho > options.acceptance_threshold {
+                    region.accept(rho, step_norm_squared, options.good_step_threshold);
                     v.copy_from_slice(&self.vt);
-                    if rho > 0.75 {
-                        mu = (mu / 3.0).max(1e-12);
-                    }
+                    mu = options.accepted_mu(mu, rho);
                     accepted = true;
                     break;
                 }
-                mu *= 2.0;
-                if mu > 1e12 {
+                region.reject();
+                if !options.increase_mu(&mut mu, options.mu_increase) {
                     return NeResult { iterations: it, converged: false, res_inf };
                 }
             }
