@@ -1,22 +1,94 @@
-name: Rust
+name: Rust CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
+      - "ci/**"
   pull_request:
-    branches: [ "main" ]
+    branches:
+      - main
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
-    runs-on: ubuntu-latest
+  test:
+    name: "${{ matrix.name }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            asset: suitesparse-v7.14.1-linux-x86_64-full.tar.gz
+          - name: windows-x86_64
+            os: windows-latest
+            asset: suitesparse-v7.14.1-windows-x86_64-full.zip
+          - name: macos-arm64
+            os: macos-15
+            asset: suitesparse-v7.14.1-macos-arm64-full.tar.gz
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install SuiteSparse (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libblas-dev liblapack-dev libgomp1
+          mkdir -p "$HOME/suitesparse"
+          curl -sL "https://github.com/chengts95/suitesparse-build/releases/download/v7.14.1/${{ matrix.asset }}" -o ss.tar.gz
+          tar -xzf ss.tar.gz -C "$HOME/suitesparse" --strip-components=1
+          echo "SUITESPARSE_DIR=$HOME/suitesparse" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$HOME/suitesparse/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Install SuiteSparse (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p "C:/suitesparse"
+          curl -sL "https://github.com/chengts95/suitesparse-build/releases/download/v7.14.1/${{ matrix.asset }}" -o ss.zip
+          mkdir -p "C:/suitesparse_tmp"
+          unzip -q -o ss.zip -d "C:/suitesparse_tmp"
+          if [ -d "C:/suitesparse_tmp/suitesparse-v7.14.1-windows-x86_64-full" ]; then
+            cp -r "C:/suitesparse_tmp/suitesparse-v7.14.1-windows-x86_64-full/"* "C:/suitesparse/"
+          else
+            cp -r "C:/suitesparse_tmp/"* "C:/suitesparse/"
+          fi
+          
+          # Install OpenBLAS DLL for runtime execution
+          curl -sL https://github.com/OpenMathLib/OpenBLAS/releases/download/v0.3.28/OpenBLAS-0.3.28-x64.zip -o openblas.zip
+          mkdir -p "C:/openblas"
+          unzip -q -o openblas.zip -d "C:/openblas"
+          cp "C:/openblas/bin/"*.dll "C:/suitesparse/bin/" || true
+          cp "C:/openblas/libopenblas.lib" "C:/suitesparse/lib/" || true
+          
+          echo "SUITESPARSE_DIR=C:/suitesparse" >> "$GITHUB_ENV"
+          echo "C:/suitesparse/bin" >> "$GITHUB_PATH"
+
+      - name: Install SuiteSparse (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p "$HOME/suitesparse"
+          curl -sL "https://github.com/chengts95/suitesparse-build/releases/download/v7.14.1/${{ matrix.asset }}" -o ss.tar.gz
+          tar -xzf ss.tar.gz -C "$HOME/suitesparse" --strip-components=1
+          echo "SUITESPARSE_DIR=$HOME/suitesparse" >> "$GITHUB_ENV"
+          echo "DYLD_LIBRARY_PATH=$HOME/suitesparse/lib:${DYLD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Check workspace
+        run: cargo check --verbose
+
+      - name: Run default tests
+        run: cargo test --verbose
+
+      - name: Run tests with klu_dyn
+        run: cargo test --verbose --features klu_dyn
