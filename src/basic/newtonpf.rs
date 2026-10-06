@@ -1,8 +1,26 @@
 #![allow(unused)]
 use std::f64::consts::PI;
 
-use super::new_dsdvbus2::JacobianPattern2;
-use super::new_dsdvbus3::fill_jacobian_v3;
+use super::jacobian_cache::JacobianCache as V4JacobianCache;
+
+use bevy_ecs::prelude::Resource;
+
+#[derive(Resource, Default, Clone)]
+#[allow(non_snake_case)]
+pub struct NewtonCache {
+    pub npv: usize,
+    pub npq: usize,
+    pub j_pattern: Option<V4JacobianCache>,
+    pub j_values: Vec<f64>,
+    pub ibus: DVector<Complex64>,
+    #[allow(non_snake_case)]
+    pub F: DVector<f64>,
+    pub s_calc: DVector<Complex64>,
+    pub v_m: DVector<f64>,
+    pub v_a: DVector<f64>,
+}
+
+use super::new_dsdvbus4::fill_jacobian_v4;
 use super::solver::Solve;
 use super::sparse::slice::*;
 use nalgebra::*;
@@ -12,7 +30,7 @@ use num_traits::Zero;
 
 // Re-export old implementations so the assembly benchmark can still access
 // them via `crate::basic::newtonpf::{newton_pf_old, newton_pf_v0, …}`.
-#[cfg(feature = "klu")]
+#[cfg(any(feature = "klu", feature = "klu_dyn"))]
 pub(crate) use crate::basic::pf_old_impl::{
     JacobianCache, assemble_f, build_jacobian, build_jacobian_cached, newton_pf_old, newton_pf_v0,
 };
@@ -43,7 +61,7 @@ impl<T: Clone + Zero + Scalar + ClosedAddAssign> Slice for CscMatrix<T> {
 // ─── Default solver: newton_pf ────────────────────────────────────────────────
 
 /// Newton-Raphson power flow under the `[PQ | PV | slack]` bus ordering.
-/// Branch-free Jacobian assembly via `JacobianPattern2` + `fill_jacobian_v2`.
+/// Jacobian assembly via the V4 cache and `fill_jacobian_v4`, without quadrant-start tables.
 ///
 /// Requires `Ybus`, `Sbus`, `v_init` already permuted into `[PQ | PV | slack]`:
 /// PQ buses at indices `0..npq`, PV at `npq..npq+npv`, slack at `npq+npv..`.
@@ -57,41 +75,93 @@ pub fn newton_pf<Solver: Solve>(
     tolerance: Option<f64>,
     max_iter: Option<usize>,
     solver: &mut Solver,
+    mut cache_opt: Option<&mut NewtonCache>,
 ) -> Result<(DVector<Complex64>, usize), (String, DVector<Complex64>, usize)> {
     let mut v = v_init.clone();
     let max_iter = max_iter.unwrap_or(100);
     let tol = tolerance.unwrap_or(1e-6);
 
-    let j_pattern =
-        JacobianPattern2::build_from_permuted(Ybus.col_offsets(), Ybus.row_indices(), npv, npq);
     let n_state = npv + 2 * npq;
-    let mut j_values = vec![0.0; j_pattern.nnz_j];
+    let n_active = npv + npq;
+    let n_bus = v.len();
 
-    let n_bus = npv + npq;
-    let mut ibus = DVector::zeros(n_state);
-    let mut F = DVector::zeros(n_state);
-    let mut s_calc = DVector::zeros(n_state);
-    csc_matvec_complex(
+    // We will use local variables for pattern and buffers if cache is not available.
+    // If cache is available, we will mutably borrow them from the cache.
+    // To satisfy borrow checker cleanly without cloning, we use an enum or mutable references.
+    let mut local_j_pattern = None;
+    let mut local_j_values = Vec::new();
+    let mut local_ibus = DVector::zeros(0);
+    let mut local_F = DVector::zeros(0);
+    let mut local_s_calc = DVector::zeros(0);
+
+    let (j_pattern, j_values, ibus, F, s_calc, mut cache_vm, mut cache_va) =
+        if let Some(ref mut c) = cache_opt {
+            if c.j_pattern.is_none() || c.npv != npv || c.npq != npq {
+                c.j_pattern = Some(V4JacobianCache::build_from_permuted(
+                    Ybus.col_offsets(),
+                    Ybus.row_indices(),
+                    npv,
+                    npq,
+                ));
+                c.j_values = vec![0.0; c.j_pattern.as_ref().unwrap().j_row_indices.len()];
+                c.ibus = DVector::zeros(n_bus);
+                c.F = DVector::zeros(n_state);
+                c.s_calc = DVector::zeros(n_bus);
+                c.npv = npv;
+                c.npq = npq;
+            }
+            (
+                c.j_pattern.as_ref().unwrap(),
+                &mut c.j_values,
+                &mut c.ibus,
+                &mut c.F,
+                &mut c.s_calc,
+                Some(&mut c.v_m),
+                Some(&mut c.v_a),
+            )
+        } else {
+            local_j_pattern = Some(V4JacobianCache::build_from_permuted(
+                Ybus.col_offsets(),
+                Ybus.row_indices(),
+                npv,
+                npq,
+            ));
+            local_j_values = vec![0.0; local_j_pattern.as_ref().unwrap().j_row_indices.len()];
+            local_ibus = DVector::zeros(n_bus);
+            local_F = DVector::zeros(n_state);
+            local_s_calc = DVector::zeros(n_bus);
+            (
+                local_j_pattern.as_ref().unwrap(),
+                &mut local_j_values,
+                &mut local_ibus,
+                &mut local_F,
+                &mut local_s_calc,
+                None,
+                None,
+            )
+        };
+    csc_matvec_and_scalc(
         Ybus.col_offsets(),
         Ybus.row_indices(),
         Ybus.values(),
         v.as_slice(),
         ibus.as_mut_slice(),
+        s_calc.as_mut_slice(),
     );
 
-    // let mut mis = &v.component_mul(&(Ybus * &v).conjugate()) - Sbus;
-    let norm = fill_f_from_ibus::<false>(
-        v.as_slice(),
-        ibus.as_slice(),
+    let norm = fill_f_from_scalc::<false>(
+        s_calc.as_slice(),
         Sbus.as_slice(),
         npq,
-        n_bus,
-        s_calc.as_mut_slice(),
+        n_active,
         F.as_mut_slice(),
     );
 
-    // assemble_f_v2(&mut F, n_bus, &mis, n_state, npq);
     if norm < tol {
+        if let (Some(target_vm), Some(target_va)) = (cache_vm, cache_va) {
+            *target_vm = v.map(|e| e.simd_modulus());
+            *target_va = v.map(|e| e.simd_argument());
+        }
         return Ok((v, 0));
     }
 
@@ -113,9 +183,7 @@ pub fn newton_pf<Solver: Solve>(
     };
 
     for it in 0..max_iter {
-        // let s_calc = v.component_mul(&ibus.map(|e| e.conj()));
-
-        fill_jacobian_v3::<false>(
+        fill_jacobian_v4::<false>(
             Ybus,
             v.as_slice(),
             v_norm.as_slice(),
@@ -126,7 +194,7 @@ pub fn newton_pf<Solver: Solve>(
             &j_pattern.diag_ptrs,
             npv,
             npq,
-            &mut j_values,
+            j_values,
         );
 
         if let Err(err) = solver.solve(
@@ -142,43 +210,50 @@ pub fn newton_pf<Solver: Solve>(
         let dx = &F;
 
         // Angle update: all non-slack buses.
-        v_a.rows_range_mut(0..n_bus)
-            .zip_apply(&dx.rows_range(0..n_bus), |a, b| {
+        v_a.rows_range_mut(0..n_active)
+            .zip_apply(&dx.rows_range(0..n_active), |a, b| {
                 *a -= b;
                 // *a = a;
             });
         // Magnitude update: PQ buses only (at 0..npq in PQ-first ordering).
         let mut vm_pq = v_m.rows_range_mut(0..npq);
-        vm_pq.zip_apply(&dx.rows_range(n_bus..n_state), |a, b| *a -= b);
+        vm_pq.zip_apply(&dx.rows_range(n_active..n_state), |a, b| *a -= b);
 
         v_norm.zip_apply(&v_a, |a, va| *a = Complex64::from_polar(1.0, va));
         v.zip_zip_apply(&v_norm, &v_m, |a, e, vm| *a = vm * e);
 
-        csc_matvec_complex(
+        csc_matvec_and_scalc(
             Ybus.col_offsets(),
             Ybus.row_indices(),
             Ybus.values(),
             v.as_slice(),
             ibus.as_mut_slice(),
+            s_calc.as_mut_slice(),
         );
 
-        let norm2 = fill_f_from_ibus::<false>(
-            v.as_slice(),
-            ibus.as_slice(),
+        let norm_inf = fill_f_from_scalc::<false>(
+            s_calc.as_slice(),
             Sbus.as_slice(),
             npq,
-            n_bus, // 如果这里 n_bus = npq + npv，也就是 active bus count
-            s_calc.as_mut_slice(),
+            n_active,
             F.as_mut_slice(),
         );
 
-        if norm2 < tol * tol {
-            return Ok((v, it));
+        if !norm_inf.is_finite() {
+            return Err(("Non-finite power-flow residual".into(), v, it + 1));
         }
+        if norm_inf < tol {
+            if let (Some(target_vm), Some(target_va)) = (cache_vm, cache_va) {
+                *target_vm = v_m;
+                *target_va = v_a;
+            }
+            return Ok((v, it + 1));
+        }
+    }
 
-        if F.norm() < tol {
-            return Ok((v, it));
-        }
+    if let (Some(target_vm), Some(target_va)) = (cache_vm, cache_va) {
+        *target_vm = v_m;
+        *target_va = v_a;
     }
 
     Err((String::from("Did not converge!"), v, max_iter))
@@ -204,51 +279,58 @@ pub(crate) fn assemble_f_v2(
         .zip_apply(&mis.rows_range(0..npq), |a, b| *a = b.simd_imaginary());
 }
 #[inline(always)]
-pub(crate) fn fill_f_from_ibus<const SPEC_MINUS_CALC: bool>(
-    v: &[Complex64],
-    ibus: &[Complex64],
+pub(crate) fn fill_f_from_scalc<const SPEC_MINUS_CALC: bool>(
+    scalc: &[Complex64],
     sbus: &[Complex64],
     npq: usize,
     n_active: usize,
-    scalc: &mut [Complex64],
     f: &mut [f64],
 ) -> f64 {
-    let mut norm2 = 0.0;
+    fill_f_from_power::<SPEC_MINUS_CALC>(|i| scalc[i], sbus, npq, n_active, f)
+}
+
+/// Shared reduced mismatch assembly for cached powers and on-demand powers.
+/// Returns the infinity norm of the retained P (active) and Q (PQ) equations.
+#[inline(always)]
+pub(crate) fn fill_f_from_power<const SPEC_MINUS_CALC: bool>(
+    mut scalc: impl FnMut(usize) -> Complex64,
+    sbus: &[Complex64],
+    npq: usize,
+    n_active: usize,
+    f: &mut [f64],
+) -> f64 {
+    let mut max_norm: f64 = 0.0;
 
     // PQ: P and Q
     for i in 0..npq {
-        let s = v[i] * ibus[i].conj();
-        scalc[i] = s;
-
         let mis = if SPEC_MINUS_CALC {
-            sbus[i] - s
+            sbus[i] - scalc(i)
         } else {
-            s - sbus[i]
+            scalc(i) - sbus[i]
         };
 
         f[i] = mis.re;
         f[n_active + i] = mis.im;
 
-        norm2 += mis.re * mis.re + mis.im * mis.im;
+        max_norm = if mis.re.is_finite() && mis.im.is_finite() {
+            max_norm.max(mis.re.abs()).max(mis.im.abs())
+        } else { f64::INFINITY };
     }
 
     // PV: P only
     for i in npq..n_active {
-        let s = v[i] * ibus[i].conj();
-        scalc[i] = s;
-
         let mis = if SPEC_MINUS_CALC {
-            sbus[i] - s
+            sbus[i] - scalc(i)
         } else {
-            s - sbus[i]
+            scalc(i) - sbus[i]
         };
 
         f[i] = mis.re;
 
-        norm2 += mis.re * mis.re;
+        max_norm = if mis.re.is_finite() { max_norm.max(mis.re.abs()) } else { f64::INFINITY };
     }
 
-    norm2
+    max_norm
 }
 
 #[inline(always)]
@@ -267,6 +349,44 @@ pub(crate) fn csc_matvec_complex(
         for p in col_ptrs[k]..col_ptrs[k + 1] {
             let i = row_idx[p];
             ibus[i] += y_vals[p] * vk;
+        }
+    }
+}
+
+#[inline(always)]
+pub(crate) fn csc_matvec_and_scalc(
+    col_ptrs: &[usize],
+    row_idx: &[usize],
+    y_vals: &[Complex64],
+    v: &[Complex64],
+    ibus: &mut [Complex64],
+    scalc: &mut [Complex64],
+) {
+    csc_matvec_complex(col_ptrs, row_idx, y_vals, v, ibus);
+
+    for i in 0..v.len() {
+        scalc[i] = v[i] * ibus[i].conj();
+    }
+}
+
+#[cfg(test)]
+mod residual_finiteness_tests {
+    use super::*;
+    #[test]
+    fn nonfinite_retained_equations_cannot_converge() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for (bus, reactive) in [(0,false),(0,true),(1,false)] {
+                let mut s=vec![Complex64::new(0.,0.);2];
+                if reactive {s[bus].im=bad;} else {s[bus].re=bad;}
+                for reverse in [false,true] {
+                    let norm=if reverse {
+                        fill_f_from_scalc::<true>(&s,&[Complex64::new(0.,0.);2],1,2,&mut [0.;3])
+                    } else {
+                        fill_f_from_scalc::<false>(&s,&[Complex64::new(0.,0.);2],1,2,&mut [0.;3])
+                    };
+                    assert_eq!(norm,f64::INFINITY);
+                }
+            }
         }
     }
 }

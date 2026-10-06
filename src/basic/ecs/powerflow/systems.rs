@@ -25,23 +25,24 @@ pub struct PowerFlowConfig {
 /// number of iterations taken, and whether the solution converged.
 #[derive(Debug, Default, Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PowerFlowResult {
-    pub v: DVector<Complex64>, // Final voltage vector after convergence
+    pub v: DVector<Complex64>, // Final voltage vector in original bus order
     pub iterations: usize,     // Number of iterations taken
     pub converged: bool,       // Convergence status
 }
 
 /// Resource holding various matrices required for power flow calculations, including the reordered
 /// matrix, admittance matrix (Y-bus), and the power injection vector (S-bus).
+/// Newton, Iwamoto, DCPF-initialized Newton, and LM all consume the same
+/// `[PQ | PV | slack]` ordering; `from_perm` maps their outputs back to bus order.
 #[derive(Debug, Resource, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PowerFlowMat {
-    pub reorder: CsrMatrix<Complex<f64>>, // Reordering matrix
-    pub y_bus: CscMatrix<Complex<f64>>,   // Y-bus admittance matrix
-    pub s_bus: DVector<Complex64>,        // S-bus power injections
-    pub v_bus_init: DVector<Complex64>,   // V-bus power injections
-    pub npv: usize,                       // Number of PV buses
-    pub npq: usize,                       // Number of PQ buses
-    pub to_perm: Vec<usize>,              // original → reordered
-    pub from_perm: Vec<usize>,            // reordered → original
+    pub y_bus: CscMatrix<Complex<f64>>, // Y-bus admittance matrix
+    pub s_bus: DVector<Complex64>,      // S-bus power injections
+    pub v_bus_init: DVector<Complex64>, // V-bus power injections
+    pub npv: usize,                     // Number of PV buses
+    pub npq: usize,                     // Number of PQ buses
+    pub to_perm: Vec<usize>,            // original → reordered
+    pub from_perm: Vec<usize>,          // reordered → original
 }
 impl PowerFlowMat {
     pub fn reorder_index(&self, orig: usize) -> usize {
@@ -72,6 +73,7 @@ impl PowerFlowMat {
 ///
 /// This function will panic if the indices provided in `pv`, `pq`, or `ext` are out of bounds.
 /// Creates a permutation matrix based on PV, PQ, and EXT nodes.
+#[allow(dead_code)]
 pub(crate) fn create_permutation_matrix(
     pq: &[i64],
     pv: &[i64],
@@ -112,60 +114,177 @@ pub(crate) fn create_permutation_matrix(
 pub(crate) fn create_y_bus(
     common: Res<PFCommonData>,
     node_lookup: Res<NodeLookup>,
+    buses: Query<(&BusID, &VNominal)>,
     y_br: Query<(&Admittance, &Port2, &VBase)>,
-    trans: Query<(&Port4MatPatch, &TransformerDevice, &FromBus, &ToBus)>,
+    lines_and_switches: Query<
+        (&Port4MatPatch, &FromBus, &ToBus),
+        (Without<OutOfService>, Without<TransformerDevice>),
+    >,
+    trafos: Query<(&Port4MatPatch, &TransformerDevice, &FromBus, &ToBus), Without<OutOfService>>,
 ) -> (CsrMatrix<Complex64>, CscMatrix<Complex64>) {
     let nodes = node_lookup.len();
-    let branches = y_br.iter();
-    let s_base = common.sbase;
+    let inv_s_base = 1.0 / common.sbase;
 
-    // Initialize diagonal admittance matrix for branches
-    let mut diag_admit = CsrMatrix::identity(branches.len());
-    let admit_br = diag_admit.values_mut();
-
-    // Initialize incidence matrix in COO format
-    let mut incidence_matrix = CooMatrix::new(nodes, branches.len());
-
-    for (idx, (ad, topo, vbase)) in branches.enumerate() {
-        // Compute branch admittance in per-unit system
-        admit_br[idx] = ad.0 * (vbase.0 * vbase.0) / s_base;
-
-        // Build incidence matrix
-        if topo.0[0] >= 0 {
-            incidence_matrix.push(topo.0[0] as usize, idx, Complex64::one());
+    // Cache bus z_base = (Vn^2) / S_base array using contiguous slice iteration
+    let mut bus_z_base = vec![inv_s_base; nodes];
+    if let Ok(chunks) = buses.contiguous_iter() {
+        for (id_slice, vnom_slice) in chunks {
+            let len = id_slice.len();
+            for i in 0..len {
+                let idx = id_slice[i].0 as usize;
+                if idx < nodes {
+                    let vn = vnom_slice[i].0.0;
+                    bus_z_base[idx] = (vn * vn) * inv_s_base;
+                }
+            }
         }
-        if topo.0[1] >= 0 {
-            incidence_matrix.push(topo.0[1] as usize, idx, -Complex64::one());
+    } else {
+        for (id, vnom) in buses.iter() {
+            let idx = id.0 as usize;
+            if idx < nodes {
+                let vn = vnom.0.0;
+                bus_z_base[idx] = (vn * vn) * inv_s_base;
+            }
+        }
+    }
+
+    let mut coo = CooMatrix::new(nodes, nodes);
+
+    // 1. Stamp Lines and Switches using contiguous slice iteration
+    if let Ok(chunks) = lines_and_switches.contiguous_iter() {
+        for (patch_slice, from_slice, to_slice) in chunks {
+            let len = patch_slice.len();
+            for i in 0..len {
+                let f = from_slice[i].0;
+                let t = to_slice[i].0;
+                let z_base = if f >= 0 && (f as usize) < nodes {
+                    bus_z_base[f as usize]
+                } else if t >= 0 && (t as usize) < nodes {
+                    bus_z_base[t as usize]
+                } else {
+                    inv_s_base
+                };
+                let p = patch_slice[i].0.scale(z_base);
+                if f >= 0 {
+                    coo.push(f as usize, f as usize, p[(0, 0)]);
+                }
+                if t >= 0 {
+                    coo.push(t as usize, t as usize, p[(1, 1)]);
+                }
+                if f >= 0 && t >= 0 {
+                    coo.push(f as usize, t as usize, p[(0, 1)]);
+                    coo.push(t as usize, f as usize, p[(1, 0)]);
+                }
+            }
+        }
+    } else {
+        for (patch, from, to) in lines_and_switches.iter() {
+            let f = from.0;
+            let t = to.0;
+            let z_base = if f >= 0 && (f as usize) < nodes {
+                bus_z_base[f as usize]
+            } else if t >= 0 && (t as usize) < nodes {
+                bus_z_base[t as usize]
+            } else {
+                inv_s_base
+            };
+            let p = patch.0.scale(z_base);
+            if f >= 0 {
+                coo.push(f as usize, f as usize, p[(0, 0)]);
+            }
+            if t >= 0 {
+                coo.push(t as usize, t as usize, p[(1, 1)]);
+            }
+            if f >= 0 && t >= 0 {
+                coo.push(f as usize, t as usize, p[(0, 1)]);
+                coo.push(t as usize, f as usize, p[(1, 0)]);
+            }
         }
     }
 
-    // Convert incidence matrix to CSR format
-    let incidence_matrix = CsrMatrix::from(&incidence_matrix);
-
-    // Compute Y-bus matrix: Y = A * diag(admittance) * A^T
-    let y_bus = &incidence_matrix * (diag_admit * incidence_matrix.transpose());
-
-    // Initialize incidence matrix in COO format
-    let mut trans_patch_matrix = CooMatrix::new(nodes, nodes);
-
-    for (patch, trans, from, to) in trans.iter() {
-        let vbase = trans.vn_lv_kv;
-        // Compute branch admittance in per-unit system
-        let p = patch.0.scale((vbase * vbase) / s_base);
-        // Build incidence matrix
-        if from.0 >= 0 {
-            trans_patch_matrix.push(from.0 as usize, from.0 as usize, p[(0, 0)]);
+    // 2. Stamp Transformers using contiguous slice iteration
+    if let Ok(chunks) = trafos.contiguous_iter() {
+        for (patch_slice, dev_slice, from_slice, to_slice) in chunks {
+            let len = patch_slice.len();
+            for i in 0..len {
+                let vn = dev_slice[i].vn_lv_kv;
+                let z_base = (vn * vn) * inv_s_base;
+                let p = patch_slice[i].0.scale(z_base);
+                let f = from_slice[i].0;
+                let t = to_slice[i].0;
+                if f >= 0 {
+                    coo.push(f as usize, f as usize, p[(0, 0)]);
+                }
+                if t >= 0 {
+                    coo.push(t as usize, t as usize, p[(1, 1)]);
+                }
+                if f >= 0 && t >= 0 {
+                    coo.push(f as usize, t as usize, p[(0, 1)]);
+                    coo.push(t as usize, f as usize, p[(1, 0)]);
+                }
+            }
         }
-        if to.0 >= 0 {
-            trans_patch_matrix.push(to.0 as usize, to.0 as usize, p[(1, 1)]);
-        }
-        if from.0 >= 0 && to.0 >= 0 {
-            trans_patch_matrix.push(from.0 as usize, to.0 as usize, p[(0, 1)]);
-            trans_patch_matrix.push(to.0 as usize, from.0 as usize, p[(1, 0)]);
+    } else {
+        for (patch, dev, from, to) in trafos.iter() {
+            let vn = dev.vn_lv_kv;
+            let z_base = (vn * vn) * inv_s_base;
+            let p = patch.0.scale(z_base);
+            let f = from.0;
+            let t = to.0;
+            if f >= 0 {
+                coo.push(f as usize, f as usize, p[(0, 0)]);
+            }
+            if t >= 0 {
+                coo.push(t as usize, t as usize, p[(1, 1)]);
+            }
+            if f >= 0 && t >= 0 {
+                coo.push(f as usize, t as usize, p[(0, 1)]);
+                coo.push(t as usize, f as usize, p[(1, 0)]);
+            }
         }
     }
-    let y_bus = y_bus + CsrMatrix::from(&trans_patch_matrix);
-    (incidence_matrix, CscMatrix::from(&y_bus))
+
+    // 3. Add ground shunts (EShunt) directly to diagonal
+    if let Ok(chunks) = y_br.contiguous_iter() {
+        for (ad_slice, topo_slice, vbase_slice) in chunks {
+            let len = ad_slice.len();
+            for i in 0..len {
+                let y_pu = ad_slice[i].0 * ((vbase_slice[i].0 * vbase_slice[i].0) * inv_s_base);
+                let topo = &topo_slice[i].0;
+                if topo[0] >= 0 && topo[1] < 0 {
+                    coo.push(topo[0] as usize, topo[0] as usize, y_pu);
+                } else if topo[1] >= 0 && topo[0] < 0 {
+                    coo.push(topo[1] as usize, topo[1] as usize, y_pu);
+                } else if topo[0] >= 0 && topo[1] >= 0 {
+                    let idx0 = topo[0] as usize;
+                    let idx1 = topo[1] as usize;
+                    coo.push(idx0, idx0, y_pu);
+                    coo.push(idx1, idx1, y_pu);
+                    coo.push(idx0, idx1, -y_pu);
+                    coo.push(idx1, idx0, -y_pu);
+                }
+            }
+        }
+    } else {
+        for (ad, topo, vbase) in y_br.iter() {
+            let y_pu = ad.0 * ((vbase.0 * vbase.0) * inv_s_base);
+            if topo.0[0] >= 0 && topo.0[1] < 0 {
+                coo.push(topo.0[0] as usize, topo.0[0] as usize, y_pu);
+            } else if topo.0[1] >= 0 && topo.0[0] < 0 {
+                coo.push(topo.0[1] as usize, topo.0[1] as usize, y_pu);
+            } else if topo.0[0] >= 0 && topo.0[1] >= 0 {
+                let idx0 = topo.0[0] as usize;
+                let idx1 = topo.0[1] as usize;
+                coo.push(idx0, idx0, y_pu);
+                coo.push(idx1, idx1, y_pu);
+                coo.push(idx0, idx1, -y_pu);
+                coo.push(idx1, idx0, -y_pu);
+            }
+        }
+    }
+
+    let y_csc = CscMatrix::from(&coo);
+    (CsrMatrix::zeros(0, 0), y_csc)
 }
 
 /// Initializes the power flow calculation states and inserts necessary resources into the world.
@@ -179,39 +298,31 @@ pub(crate) fn create_y_bus(
 /// # Side Effects
 ///
 /// Inserts a `PowerFlowMat` resource into the world, containing matrices and vectors required for power flow analysis.
+/// Resource holding the original unpermuted Ybus admittance matrix.
+#[derive(Debug, Resource, Clone)]
+pub struct OriginalYBus(pub CscMatrix<Complex64>);
+
 pub fn init_states(world: &mut World) {
     let (_incidence_matrix, y_bus) = world.run_system_once(create_y_bus).unwrap();
+    world.insert_resource(OriginalYBus(y_bus.clone()));
     let cfg = world.run_system_once(init_bus_status).unwrap();
     let s_bus = cfg.s_bus;
     let v_bus_init = cfg.v_bus_init;
-    let mut to_perm = vec![0; v_bus_init.len()]; // 原 → 新
-    let mut from_perm = vec![0; v_bus_init.len()]; // 新 → 原
-    // println!(
-    //     "Power flow system initialized with {} buses, {} PV buses, and {} PQ buses.",
-    //     v_bus_init.len(),
-    //     cfg.npv,
-    //     cfg.npq
-    // );
-    for (new_idx, &original_idx) in cfg.reorder.col_indices().iter().enumerate() {
-        to_perm[original_idx] = new_idx;
-        from_perm[new_idx] = original_idx;
-    }
     world.insert_resource(PowerFlowMat {
-        reorder: cfg.reorder,
         y_bus,
         s_bus,
         v_bus_init,
         npv: cfg.npv,
         npq: cfg.npq,
-        to_perm,
-        from_perm,
+        to_perm: cfg.to_perm,
+        from_perm: cfg.from_perm,
     });
 }
 
-/// Holds the system bus status, including reorder matrix, power injections, initial voltages, and counts of PV and PQ buses.
+/// Holds the system bus status, including permutation indices, power injections, initial voltages, and counts of PV and PQ buses.
 pub(crate) struct SystemBusStatus {
-    /// The permutation matrix for reordering buses.
-    reorder: CsrMatrix<Complex64>,
+    to_perm: Vec<usize>,
+    from_perm: Vec<usize>,
     /// The complex power injections at each bus.
     s_bus: DVector<Complex64>,
     /// The initial voltage vector for each bus.
@@ -268,16 +379,19 @@ pub(crate) fn init_bus_status(
     pq_only.sort_unstable();
     exts.sort_unstable();
 
-    // Create permutation matrix for bus reordering
-    let reorder = create_permutation_matrix(
-        pq_only.as_slice(),
-        pv_only.as_slice(),
-        exts.as_slice(),
-        nodes,
-    );
+    let mut to_perm = vec![0; nodes];
+    let mut from_perm = Vec::with_capacity(nodes);
+    from_perm.extend(pq_only.iter().map(|&x| x as usize));
+    from_perm.extend(pv_only.iter().map(|&x| x as usize));
+    from_perm.extend(exts.iter().map(|&x| x as usize));
+
+    for (new_idx, &original_idx) in from_perm.iter().enumerate() {
+        to_perm[original_idx] = new_idx;
+    }
 
     SystemBusStatus {
-        reorder,
+        to_perm,
+        from_perm,
         s_bus,
         v_bus_init,
         npv,

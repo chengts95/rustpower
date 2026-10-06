@@ -274,7 +274,13 @@ impl GridFactory for PowerGrid {
         buffer.insert_bundle(
             world,
             entity,
-            (Line, FromBus(from_bus), ToBus(to_bus), final_params),
+            (
+                Line,
+                FromBus(from_bus),
+                ToBus(to_bus),
+                final_params,
+                crate::basic::ecs::post_processing::LineResultData::default(),
+            ),
         );
         if let Some(n) = name {
             buffer.insert(world, entity, Name::new(n));
@@ -418,7 +424,16 @@ impl GridFactory for PowerGrid {
 
         let world = self.world_mut();
         let entity = world.spawn_empty().id();
-        buffer.insert_bundle(world, entity, (final_dev, FromBus(hv_bus), ToBus(lv_bus)));
+        buffer.insert_bundle(
+            world,
+            entity,
+            (
+                final_dev,
+                FromBus(hv_bus),
+                ToBus(lv_bus),
+                crate::basic::ecs::post_processing::TrafoResultData::default(),
+            ),
+        );
         if let Some(n) = name {
             buffer.insert(world, entity, Name::new(n));
         }

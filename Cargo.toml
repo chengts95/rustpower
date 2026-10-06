@@ -31,6 +31,7 @@ klu = ["dep:rustpower-sol-klu", "rustpower-sol-klu/static"]
 ldl = ["dep:rustpower-sol-ldl", "rustpower-sol-ldl/static"]
 qdldl = ["dep:clarabel"]
 probe = []
+benchmark = ["klu_dyn", "qdldl", "probe"]
 faer = ["dep:faer"]
 rsparse = ["dep:rsparse"]
 archive = ["dep:bevy_archive"]   
@@ -41,12 +42,9 @@ python = ["dep:pyo3", "dep:numpy"]
 opt-level = 3              
 overflow-checks = false     
 
-[profile.dev.package.faer]
+[profile.dev.package."*"]
 opt-level = 3
-[profile.dev.package.nalgebra]
-opt-level = 3
-[profile.dev.package.nalgebra-sparse]
-opt-level = 3
+debug=false
 
 [dependencies]
 ordered-float = { version = ">3.0", default-features = false }
@@ -65,7 +63,7 @@ bevy_ecs = "0.19.0"
 bevy_app = "0.19.0"
 derive_more = { version = "^1.0", features = ["full"] }
 tabled = "^0.16.0"
-bevy_archive = { version = "0.4.0", optional=true } 
+bevy_archive = { version = "0.5.0", optional=true } 
 const_format = {version = "^0.2.34"}
 faer = {version = "^0.24", optional = true}
 rustpower_proc_marco = {path = "crates/rustpower_proc_marco", version = "0.4.0"}
@@ -86,3 +84,19 @@ optional = true
 [dependencies.clarabel]
 version = "0.11"
 optional = true
+
+[[bench]]
+name = "comparison"
+path = "performance/main.rs"
+harness = false
+required-features = ["benchmark"]
+
+[[example]]
+name = "audit_lm"
+path = "performance/audit_lm.rs"
+
+[[example]]
+name = "audit_opf"
+path = "performance/audit_opf.rs"
+
+ 

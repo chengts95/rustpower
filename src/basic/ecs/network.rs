@@ -4,7 +4,7 @@ use std::fmt;
 use bevy_app::prelude::*;
 use bevy_ecs::{component::Mutable, prelude::*, world::error::EntityMutableFetchError};
 
-use crate::basic::{newton_pf, newton_pf_iwamoto, solver::DefaultSolver};
+use crate::basic::{newton_pf, newton_pf_iwamoto, newtonpf::NewtonCache, solver::DefaultSolver};
 
 use super::{
     plugin::DefaultPlugins,
@@ -127,6 +127,7 @@ pub fn ecs_run_pf(
     mat: Res<PowerFlowMat>,
     cfg: Res<PowerFlowConfig>,
     mut solver: ResMut<PowerFlowSolver>,
+    mut cache: Option<ResMut<NewtonCache>>,
 ) {
     // A grid without buses, or without a slack bus (npv + npq == n), has no
     // valid power flow problem; report non-convergence instead of letting the
@@ -152,26 +153,32 @@ pub fn ecs_run_pf(
         tol,
         max_it,
         &mut solver.solver,
+        cache.as_deref_mut(),
     );
 
-    // Handle the results of the power flow calculation.
-    match v {
-        Ok((v, iterations)) => {
-            //let v = mat.reorder.transpose() * v;
-            cmd.insert_resource(PowerFlowResult {
-                v,
-                iterations,
-                converged: true,
-            });
-        }
-        Err((_err, v_err, its)) => {
-            // let v = mat.reorder.transpose() * v_err;
-            cmd.insert_resource(PowerFlowResult {
-                v: v_err,
-                iterations: its,
-                converged: false,
-            });
-        }
+    cmd.insert_resource(result_from_permuted(&mat, v));
+}
+
+/// Convert a numerical solver result into the natural bus order used by ECS.
+pub(crate) fn result_from_permuted(
+    mat: &PowerFlowMat,
+    result: Result<
+        (nalgebra::DVector<num_complex::Complex64>, usize),
+        (String, nalgebra::DVector<num_complex::Complex64>, usize),
+    >,
+) -> PowerFlowResult {
+    let (v_perm, iterations, converged) = match result {
+        Ok((v, it)) => (v, it, true),
+        Err((_, v, it)) => (v, it, false),
+    };
+    let mut v = nalgebra::DVector::zeros(v_perm.len());
+    for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
+        v[orig_idx] = v_perm[new_idx];
+    }
+    PowerFlowResult {
+        v,
+        iterations,
+        converged,
     }
 }
 
@@ -205,22 +212,7 @@ pub fn iwamoto_run_pf(
         &mut solver.solver,
     );
 
-    match v {
-        Ok((v, iterations)) => {
-            cmd.insert_resource(PowerFlowResult {
-                v,
-                iterations,
-                converged: true,
-            });
-        }
-        Err((_err, v_err, its)) => {
-            cmd.insert_resource(PowerFlowResult {
-                v: v_err,
-                iterations: its,
-                converged: false,
-            });
-        }
-    }
+    cmd.insert_resource(result_from_permuted(&mat, v));
 }
 impl PowerGrid {
     pub fn app(&self) -> &App {

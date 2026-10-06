@@ -62,22 +62,7 @@ pub fn lm_run_pf(
         &mut state.solver,
     );
 
-    match v {
-        Ok((v, iterations)) => {
-            cmd.insert_resource(PowerFlowResult {
-                v,
-                iterations,
-                converged: true,
-            });
-        }
-        Err((_err, v_err, its)) => {
-            cmd.insert_resource(PowerFlowResult {
-                v: v_err,
-                iterations: its,
-                converged: false,
-            });
-        }
-    }
+    cmd.insert_resource(super::network::result_from_permuted(&mat, v));
 }
 
 /// Plugin for running power flow with the exact-LM second-order method.

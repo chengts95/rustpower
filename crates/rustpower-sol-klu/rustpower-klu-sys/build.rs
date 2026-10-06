@@ -130,6 +130,7 @@ fn main() {
 
     if cfg!(target_os = "linux") {
         println!("cargo:rustc-link-search=/usr/local/lib");
+        println!("cargo:rustc-link-search=/usr/lib");
     } else if cfg!(target_os = "macos") {
         // Search Homebrew paths
         println!("cargo:rustc-link-search=/usr/local/lib");

@@ -2,154 +2,157 @@
 [![Crates.io](https://img.shields.io/crates/v/rustpower.svg)](https://crates.io/crates/rustpower)
 [![Docs.rs](https://docs.rs/rustpower/badge.svg)](https://docs.rs/rustpower)
 [![CI](https://github.com/chengts95/rustpower/actions/workflows/rust.yml/badge.svg)](https://github.com/chengts95/rustpower/actions)
-RustPower is a cutting-edge power flow calculation library written in Rust, specifically designed for steady-state analysis of electrical power systems. With the introduction of **ECS-based architecture** in version 0.2.0, RustPower offers unparalleled modularity and extensibility.
-
----
-## **What's New in 0.5.0**
-- **Massive Performance Breakthrough**: 
-  - **1.6x faster than LightSim2Grid (C++ Native)** on PEGASE 9241 grid.
-  - **3.5x faster than LightSim2Grid** on IEEE 118 grid.
-- **KLU Refactor Integration**: Implemented `klu_l_refactor` support, bypassing expensive symbolic analysis and pivoting for iterations 2-5 of the NR process and subsequent time-series steps.
-- **Zero-Allocation Hot Path**: Optimized the core Newton-Raphson loop to eliminate all heap allocations (`Vec` clones) during iterations via `unsafe` pointer passing.
-- **Bevy 0.19**: Rustpower 0.5 deps on Bevy 0.19, which can iterate ECS archetype tables with true SIMD parallelism.
-
-## **What's New in 0.4.1**
-- **Jacobian Optimization Backport**: Backported the new Jacobian matrix formation from 0.5.0, resulting in a **20-40% speed-up** per Newton-Raphson iteration.
-- **Upgraded Archive System**: Updated `bevy_archive` to 0.3.0 for enhanced ECS state persistence and case file management.
-
-## **What's New in 0.3.0**
-- **New Solvers**:  
-  **faer**: A highly efficient and scalable solver for large-scale power systems.
-- **Inital support for native ECS archive files**
-- **Initali support for time-series simulations**
-
-## **What's New in 0.2.0**
-- **World's First ECS-Based Power Flow Solver**:  
-  RustPower now adopts the **Entity-Component-System (ECS)** architecture using Bevy, enabling modular design and extensibility for domain-specific applications such as:
-  - Time-series simulations.
-  - Real-time monitoring.
-  - Custom plugin development.  
-  The legacy `PFNetwork` is now deprecated but remains available as a demo for the basic Newton-Raphson solver.
-
-- **Post-Processing Trait**:  
-  Added a flexible post-processing trait to manage simulation results, allowing users to handle data as if working with a dataframe. This demonstrates Rust's compositional design philosophy and makes ECS highly effective for handling large datasets.
-
-- **Experimental Switch Handling**:  
-  Introduced two optional methods for modeling switch elements:
-  1. **Admittance-Based Method**: Adjusts admittance matrices.
-  2. **Node-Merging Method**: Merges connected nodes for simplified modeling.  
-  These are implemented as plugins and can be enabled as needed.
-
----
+RustPower is an ECS-based power flow calculation library written in Rust, specifically designed for high-performance steady-state analysis of electrical power systems. It provides a transactional Python binding and direct solver interfaces for Python libraries such as pandapower.
 
 ## **Key Features**
-- High-performance power flow computation with Newton-Raphson.
-- Modular and extensible design using ECS for future-proof applications.
-- Support for `pandapower` JSON network files (with experimental CSV support).
-- Handles external grid nodes, transformers, and switch elements.
-- Includes both RSparse and KLU solvers (KLU requires `SUITESPARSE_DIR` on Windows).
+- **High-Performance Newton-Raphson Engine**: Optimized single-pass $O(\text{nnz})$ `dSbus_dV` evaluation and branch-free symbolic Jacobian filling (`fill_jacobian_ultimate`).
+- **DCPF Solver & Warm-Start Initialization**: Built-in DC power flow calculation and DCPF-initialized Newton-Raphson for accelerated convergence on stressed networks.
+- **Iwamoto Optimal Multiplier**: Robust nonlinear solver using optimal deceleration step size $\mu$ to ensure convergence on ill-conditioned or heavily-loaded grids.
+- **Standard 2-Port Branch Modeling**: Rigorous $\Pi$-equivalent model for lines and transformers with complex tap ratios and phase shifts.
+- **Stateful Jacobian & Solver Caching (`NewtonCache`)**: Reuses symbolic LU factorization and sparsity patterns across consecutive iterations.
+- **Modular ECS Architecture**: Built on Bevy ECS for data-oriented composability, custom plugins, and zero heap allocation during hot iteration loops.
+- **Seamless Pandapower Interoperability**: Direct zero-copy data ingestion from `pandapower` networks in Python, plus CSV-ZIP and JSON formats.
+- **Multiple High-Performance Solvers**: Supports RSparse, Faer, and SuiteSparse KLU backends.
+- **Apache Arrow & Parquet Archiving**: High-performance state persistence powered by `bevy_archive 0.5.0`.
 
 ---
 
 ## **Performance Comparison**
 
-RustPower is designed for extreme performance and memory efficiency. Below is a comparison between established industry standards and RustPower (all using the KLU solver where applicable, tested on Intel i7 10700K 4.7GHz with 32GB DDR4 3000 MHz).
+RustPower is designed for extreme performance and memory efficiency. Below is a comparison between established standards and RustPower on the hot loop (caches Ybus and solver data for an invariant topology).
 
-### **Core Solve Time (Newton-Raphson)**
+### **Core Solve Time (Newton-Raphson, Hot Loop)**
+ 
+* Tested on Intel i7-10700K@4.7GHz with 32GB DDR4-3000 under Windows 11 with identical iteration counts at flat start initial condition:
+  
+| Case | Pandapower 3.5.4 (PyPI, Numba) | LightSim2Grid 1.0.0 (PyPI, KLU) | RustPower 0.5.2 (Python, KLU) | **RustPower (Rust Native, KLU)** |
+| --- | --- | --- | --- | --- |
+| **IEEE 39** | 15.1 ms | 0.035 ms | 0.044 ms | **0.023 ms** |
+| **IEEE 118** | 17.1 ms | 0.095 ms | 0.080 ms | **0.059 ms** |
+| **PEGASE 9241** | 244.1 ms | 22.9 ms | 21.0 ms | **20.0 ms** |
 
-| Case | Pandapower 3 (Default) | LightSim2Grid (Native KLU) | **RustPower (KLU)** | Speedup vs Pandapower |
-| :--- | :--- | :--- | :--- | :--- |
-| **IEEE 39** | 38.9 ms | 0.12 ms | **0.04 ms** | **~970x** |
-| **IEEE 118** | 42.8 ms | 0.35 ms | **0.10 ms** | **~420x** |
-| **PEGASE 9241** | 145.5 ms | 51.2 ms | **30.5 ms** | **~4.8x** |
+* On Intel Core Ultra 7 288V@5.1GHz, 32GB LPDDR5X-8533 under CachyOS / Linux 7.x:
+  
+| Case | Pandapower 3.5.4 (PyPI, Numba) | LightSim2Grid 1.0.0 (PyPI, KLU) | RustPower 0.5.2 (Python, KLU) | **RustPower (Rust Native, KLU)** |
+| --- | --- | --- | --- | --- |
+| **IEEE 39** | 4.36 ms | 0.017 ms | 0.021 ms | **0.014 ms** |
+| **IEEE 118** | 5.18 ms | 0.051 ms | 0.040 ms | **0.031 ms** | 
+| **PEGASE 9241** | 147.19 ms | 13.67 ms | 11.53 ms | **11.36 ms** |
 
-![Performance Comparison](docs/performance_comparison.png)
-*Note: For smaller grids like IEEE 39/118, RustPower is nearly **1000x faster** than traditional Python-based tools and **3x faster** than optimized C++ implementations.*
+*Note: Python columns reflect end-to-end execution within the Python runtime using official package builds.*
+
+RustPower achieves native C++-grade performance with sub-millisecond execution on IEEE benchmark grids, scaling to solve the 9241-bus PEGASE system in just 11.3 ms on a modern laptop.
 
 ### **Key Advantages**
-- **Extreme Memory Efficiency**: For the 9241-node case, RustPower peaks at only **~34 MB** of memory, while Python-based environments typically require **500+ MB**. This **15x reduction** enables running massive parallel simulations (e.g., N-1 analysis, Monte-Carlo) on standard hardware or cloud/docker containers with high resource utilization.
-- **Zero-Clone Solver Path**: Leveraging Rust's memory safety and our ECS-based architecture, the power flow loop avoids any heap allocations during iterations.
-- **Interoperability**: While RustPower provides a significant speedup for core calculations, it remains friendly to the ecosystem by supporting `pandapower` network formats.
+
+* **Low Memory Footprint**: For the 9,241-bus PEGASE system, RustPower peaks at only ~34 MB of RAM (a **15× reduction** compared to the 500+ MB footprint of pandapower frameworks). This allows thousands of parallel grid simulations (e.g., N-1 screening, Monte Carlo, RL environments) to run concurrently on standard hardware or resource-constrained cloud containers without thrashing memory bandwidth.
+* **Memory Safety & Zero Allocation**: Leveraging Rust's compile-time ownership guarantees, RustPower eliminates segmentation faults, data races, and memory leaks by design. Combined with our ECS architecture, the core power flow iteration loop operates with zero heap allocations.
+* **Seamless Ecosystem Interoperability**: Delivers pure-native performance while remaining drop-in compatible with established Python workflows. It provides zero-cost data ingestion directly from standard formats like `pandapower`, eliminating migration friction for existing pipelines.
 
 ---
-
-### **Advanced Features**
 
 ### **Plugin-Based Architecture**
-RustPower leverages the **Bevy Plugin System**, allowing users to extend the solver with custom logic without modifying the core. Current official plugins include:
-- **Archive Plugin**: A high-performance state persistence system.
-- **QLim Plugin**: Automatically enforces generator reactive power limits by dynamically switching PV buses to PQ during the iteration process.
-- **Switch Plugins**: Optional modeling for switch elements:
-  - **Type A**: Node-merging method (aggregates nodes for simplified modeling).
-  - **Type B**: Admittance-based method (directly processes switch admittance).
-- **Time-Series Plugin**: A complex, high-level plugin for handling quasi-static time-series simulations with scheduled events.
+RustPower leverages the **Bevy Plugin System**, allowing users to extend the solver with custom logic without modifying the core:
+- **`BasePFPlugin`**: Core power flow pipeline (structure init, matrix builder, Newton-Raphson).
+- **`DcpfNewtonPfPlugin`**: Solves DC power flow to initialize bus voltage angles prior to AC power flow.
+- **`IwamotoPlugin`**: Implements Iwamoto's optimal step-size multiplier method for robust convergence under extreme load conditions.
+- **`QLimPlugin`**: Automatically enforces generator reactive power limits by dynamically switching PV buses to PQ during the iteration process.
+- **`SwitchPluginTypeA` / `SwitchPluginTypeB`**: Optional modeling for switch elements (node-merging or admittance-based).
+- **`TimeSeriesDefaultPlugins`**: Quasi-static time-series simulations with scheduled events.
+- **`ArchivePlugin`**: High-performance ECS state persistence system.
 
 ### **High-Performance Data Archiving**
-
-RustPower features a unique **Archive System** (based on `bevy_archive`) that enables flexible runtime handling of any ECS structure:
-- **Custom Arrow Integration**: To handle complex power system structures that are difficult for standard `serde`, we implemented **custom schema overrides**. This ensures type-safe and efficient data transition.
-- **Multi-Format Persistence**: Seamlessly save the entire network state and results into:
-  - **Apache Parquet**: For compressed, high-performance binary storage (ideal for large-scale time-series).
-  - **CSV**: For easy inspection and interoperability with Excel/Pandas.
-
-### **Time-Series Simulations**
-By combining the ECS architecture with the Archive system, RustPower can execute large-scale time-series simulations with minimal overhead. Check the `examples/time_series.rs` for a complete workflow.
+RustPower features a unique **Archive System** (based on `bevy_archive 0.5.0`):
+- **Custom Arrow & Parquet Integration**: Columnar snapshot storage for high-performance time-series data and grid state persistence.
+- **Multi-Format Persistence**: Save and restore full network state into Apache Parquet (`.parquet` / `.zip`), TOML, or CSV.
 
 ---
 
-RustPower is available on [Crates.io](https://crates.io/crates/rustpower). You can add it to your project using:
+## **Installation**
 
-```bash
-cargo add rustpower
-```
-
-Or by adding the following to your `Cargo.toml`:
+### Rust Crate
+Add RustPower to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rustpower = "0.5.0-rc.3"
+rustpower = "0.5.2"
+```
+
+Available features:
+- `rsparse` (default): Fast native pure-Rust sparse solver.
+- `arrow` (default): Apache Arrow and Parquet snapshot support via `bevy_archive`.
+- `faer`: High-performance portable linear algebra solver.
+- `klu`: SuiteSparse KLU direct sparse solver (statically or dynamically linked).
+- `python`: Python C-extension module bindings (PyO3).
+
+### Python Package
+```bash
+pip install rustpower
 ```
 
 ---
 
-## **Usage Example**
+## **Usage Examples**
 
-### **Python API (Recommended for Data Science)**
+### **Python API**
 
 ```python
 import rustpower as rp
+import pandapower.networks as nw
 
-# Load a network and solve
-grid = rp.PowerGrid("cases/pegase9241/data.zip")
-report = grid.solve()
+# 1. Load network from pandapower or a CSV-ZIP case file
+net = nw.case118()
+grid = rp.PowerGrid.from_pandapower(net)
+# Or: grid = rp.PowerGrid("cases/IEEE118/data.zip")
 
-if report:
-    print(f"Converged in {report.iterations} iterations")
+# 2. Configure solver options (optional)
+grid.enable_cache(True)       # Enable Jacobian / LU factorization caching
+grid.enable_dcpf_init(True)   # Enable DCPF angle initialization for faster convergence
+# grid.enable_iwamoto(True)   # Use Iwamoto optimal multiplier for ill-conditioned cases
+
+# 3. Solve power flow
+report = grid.solve(tol=1e-8, max_iter=20)
+
+if report.converged:
+    print(f"Converged in {report.iterations} iterations, time: {report.runtime_ms:.2f} ms")
     print(grid.res_bus.head())
+    print(grid.res_line.head())
+    print(grid.res_trafo.head())
 
-# Fast parameter updates
+# 4. Fast parameter updates (warm-start incremental path)
 load = grid.load(bus=10)
-load.p_mw = 100.0
-grid.solve() # Runs an incremental solve (fast!)
+if load:
+    load.p_mw = 100.0
+grid.solve()  # Runs incremental solve reusing cached matrix topology
+
+# 5. Transactional topology editing
+with grid.edit() as e:
+    new_bus_id, _ = e.add_bus(vn_kv=110.0, name="Substation_C")
+    e.add_line(from_bus=10, to_bus=new_bus_id, length_km=15.0)
+    e.add_load(bus=new_bus_id, p_mw=25.0, q_mvar=5.0)
+grid.solve()  # Automatically triggers topology rebuild
 ```
 
-### **Basic Rust ECS Example**
+### **Rust ECS Examples**
+
+#### 1. Basic Power Flow
+Run with: `cargo run --example basic_powerflow`
 
 ```rust
-use rustpower::{io::pandapower::*, prelude::*};
-use ecs::post_processing::PostProcessing; // for print bus results
+use std::env;
+use rustpower::io::pandapower::load_csv_zip;
+use rustpower::prelude::*;
+use ecs::post_processing::PostProcessing;
 
 fn main() {
-    let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let zipfile = format!("{}/cases/pegase9241/data.zip", dir);
-    let net = load_csv_zip(&zipfile).unwrap();
+    let dir = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+    let zipfile = format!("{}/cases/IEEE118/data.zip", dir);
+    let net = load_csv_zip(&zipfile).expect("Failed to load case zip");
 
-    // Initialize the ECS application with plugins
+    // Initialize the ECS application with default plugins
     let mut pf_net = default_app();
-
-    // Register the power network as a resource
     pf_net.world_mut().insert_resource(PPNetwork(net));
-    pf_net.update(); // Initializes the data for the first run
+    pf_net.update(); // Initializes and solves power flow
 
     // Retrieve results
     let results = pf_net.world().get_resource::<PowerFlowResult>().unwrap();
@@ -162,9 +165,42 @@ fn main() {
 }
 ```
 
-For more examples, check the `examples` and `cases` folder.
+#### 2. DCPF-Initialized Power Flow
+Run with: `cargo run --example dcpf_example`
 
----
+```rust
+use rustpower::prelude::{
+    default_app,
+    ecs::dcpf::{DcpfNewtonPfPlugin, DcpfSolverActive},
+    PPNetwork, PowerFlowResult,
+};
+
+let mut pf_net = default_app();
+pf_net.add_plugins(DcpfNewtonPfPlugin);
+pf_net.world_mut().insert_resource(DcpfSolverActive);
+pf_net.world_mut().insert_resource(PPNetwork(net));
+pf_net.update();
+```
+
+#### 3. Iwamoto Optimal Multiplier Solver
+Run with: `cargo run --example iwamoto_example`
+
+```rust
+use rustpower::prelude::{
+    default_app,
+    CustomSolverActive, IwamotoPlugin, PPNetwork, PowerFlowResult,
+};
+
+let mut pf_net = default_app();
+pf_net.add_plugins(IwamotoPlugin);
+pf_net.world_mut().insert_resource(CustomSolverActive);
+pf_net.world_mut().insert_resource(PPNetwork(net));
+pf_net.update();
+```
+
+Additional examples available in the `examples/` directory:
+- `archive_example.rs`: TOML-based state restoration.
+- `arrow_archive_example.rs`: Apache Arrow / Parquet snapshot serialization.
 
 ## **License**
 

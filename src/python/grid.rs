@@ -17,6 +17,12 @@ use super::handles::*;
 /// Core power grid object.
 ///
 /// Supports three primary workflows:
+/// Dedicated cached state for standalone DCPF calculations (`compute_dcpf_v`, `apply_dcpf_init`).
+struct StandaloneDcpf {
+    model: crate::basic::dcpf::DcpfModel,
+    workspace: crate::basic::ecs::dcpf::DcpfWorkspace,
+}
+
 /// A. Batch:      PowerGrid("case.zip").solve(); grid.res_bus
 /// B. Parameter:  load.p_mw = p; grid.solve()        # incremental, warm start
 /// C. Topology:   with grid.edit() as e: ...; grid.solve()  # auto rebuild
@@ -25,11 +31,10 @@ pub struct PowerGrid {
     pub(crate) inner: crate::prelude::PowerGrid,
     pub(crate) buffer: crate::bevy_cmdbuffer::buffer::HarvardCommandBuffer,
     pub(crate) next_bus_id: i64,
-    pub(crate) id_map: std::collections::HashMap<i64, i64>,
-    pub(crate) bus_to_elements: std::collections::HashMap<i64, Vec<Entity>>,
     /// Lazy post-processing: set to `true` after a converged solve(),
     /// cleared when `res_bus` / `res_line` (or any result getter) is accessed.
     post_process_dirty: bool,
+    standalone_dcpf: Option<StandaloneDcpf>,
 }
 
 /// Report returned by PowerGrid.solve(). Truthy iff converged.
@@ -183,14 +188,8 @@ impl GridEditor {
         name: Option<String>,
     ) -> PyResult<LoadHandle> {
         let mut parent = self.parent.borrow_mut(py);
-        let PowerGrid {
-            inner,
-            buffer,
-            bus_to_elements,
-            ..
-        } = &mut *parent;
+        let PowerGrid { inner, buffer, .. } = &mut *parent;
         let entity = inner.add_load(buffer, bus, p_mw, q_mvar, name);
-        bus_to_elements.entry(bus).or_default().push(entity);
         self.created.push(entity.to_bits());
         Ok(LoadHandle::new(entity, self.parent.clone_ref(py)))
     }
@@ -217,14 +216,8 @@ impl GridEditor {
         name: Option<String>,
     ) -> PyResult<GenHandle> {
         let mut parent = self.parent.borrow_mut(py);
-        let PowerGrid {
-            inner,
-            buffer,
-            bus_to_elements,
-            ..
-        } = &mut *parent;
+        let PowerGrid { inner, buffer, .. } = &mut *parent;
         let entity = inner.add_gen(buffer, bus, p_mw, vm_pu, p_min, p_max, q_min, q_max, name);
-        bus_to_elements.entry(bus).or_default().push(entity);
         self.created.push(entity.to_bits());
         Ok(GenHandle::new(entity, self.parent.clone_ref(py)))
     }
@@ -344,8 +337,13 @@ impl GridEditor {
         if is_bus {
             let bus_id = parent.inner.world().get::<BusID>(entity).map(|b| b.0);
             if let Some(bus_id) = bus_id {
-                let attached = parent.bus_to_elements.remove(&bus_id).unwrap_or_default();
                 let world = parent.inner.world_mut();
+                let attached: Vec<Entity> = {
+                    let mut q = world.query::<(Entity, &TargetBus)>();
+                    q.iter(world)
+                        .filter_map(|(e, tb)| if tb.0 == bus_id { Some(e) } else { None })
+                        .collect()
+                };
                 for e in attached {
                     if world.get_entity(e).is_ok() {
                         world.entity_mut(e).despawn();
@@ -373,7 +371,6 @@ impl GridEditor {
             .inner
             .world_mut()
             .write_message(crate::basic::ecs::powerflow::structure_update::FullRebuildEvent);
-        parent.sync_bus_to_elements();
         self.created.clear();
         Ok(())
     }
@@ -393,7 +390,6 @@ impl GridEditor {
             }
         }
         parent.next_bus_id = self.start_next_bus_id;
-        parent.sync_bus_to_elements();
         Ok(())
     }
 }
@@ -522,9 +518,8 @@ impl PowerGrid {
             inner,
             buffer,
             next_bus_id: 0,
-            id_map: std::collections::HashMap::new(),
-            bus_to_elements: std::collections::HashMap::new(),
             post_process_dirty: false,
+            standalone_dcpf: None,
         };
 
         if let Some(path) = case_path {
@@ -569,6 +564,7 @@ impl PowerGrid {
     /// pipeline that FullRebuildEvent triggers inside solve()). Kept public
     /// for explicit use; normal workflows never need to call it.
     fn init_pf(&mut self) {
+        self.standalone_dcpf = None;
         let _ = self
             .inner
             .world_mut()
@@ -586,7 +582,6 @@ impl PowerGrid {
             msgs.clear();
         }
         self.sync_next_bus_id();
-        self.sync_bus_to_elements();
     }
 
     /// Run the power flow. Fully event-driven: pending FullRebuildEvents
@@ -600,11 +595,13 @@ impl PowerGrid {
     /// id. Pure warm start — PV/slack setpoints are re-pinned afterwards, so
     /// it never alters the physics. The bus-id → solver-ordering permutation
     /// is applied internally.
-    #[pyo3(signature = (v_init=None))]
+    #[pyo3(signature = (v_init=None, max_iter=None, tol=None))]
     fn solve(
         &mut self,
         py: Python<'_>,
         v_init: Option<Bound<'_, numpy::PyArray1<num_complex::Complex64>>>,
+        max_iter: Option<usize>,
+        tol: Option<f64>,
     ) -> PyResult<SolveReport> {
         use crate::basic::ecs::powerflow::structure_update::{
             FullRebuildEvent, LastStructureAction,
@@ -633,6 +630,13 @@ impl PowerGrid {
             let _ = self.inner.world_mut().write_message(FullRebuildEvent);
         }
 
+        self.inner.world_mut().insert_resource(
+            crate::basic::ecs::powerflow::systems::PowerFlowConfig {
+                max_it: max_iter,
+                tol: tol,
+            },
+        );
+
         self.inner.run_pf();
 
         let full_rebuild = sync_full
@@ -643,8 +647,8 @@ impl PowerGrid {
                 .map(|a| a.full_rebuild)
                 .unwrap_or(false);
         if full_rebuild {
+            self.standalone_dcpf = None;
             self.sync_next_bus_id();
-            self.sync_bus_to_elements();
         }
 
         // Post-rebuild validation with readable errors (the solver itself
@@ -732,6 +736,97 @@ impl PowerGrid {
                 ActiveSolver::NewtonRaphson => {}
             }
         }
+        self.inner.world_mut().remove_resource::<crate::basic::ecs::dcpf::DcpfSolverActive>();
+        self.inner.world_mut().insert_resource(sel);
+        Ok(())
+    }
+
+    /// Enable or disable the Iwamoto optimal multiplier solver dynamically at
+    /// runtime. Deprecated alias for `set_solver("iwamoto" | "nr")`.
+    #[pyo3(signature = (enable=true))]
+    fn enable_iwamoto(&mut self, enable: bool) -> PyResult<()> {
+        self.set_solver(if enable { "iwamoto" } else { "nr" })
+    }
+
+    /// Enable or disable the DCPF-initialized Newton-Raphson solver dynamically at runtime.
+    #[pyo3(signature = (enable=true))]
+    fn enable_dcpf_init(&mut self, enable: bool) -> PyResult<()> {
+        if enable {
+            let app = self.inner.app_mut();
+            if !app.is_plugin_added::<crate::basic::ecs::dcpf::DcpfNewtonPfPlugin>() {
+                app.add_plugins(crate::basic::ecs::dcpf::DcpfNewtonPfPlugin);
+            }
+            let world = self.inner.world_mut();
+            if !world.contains_resource::<crate::basic::dcpf::DcpfModel>() {
+                let model = world
+                    .run_system_once(crate::basic::ecs::dcpf::build_dcpf_model)
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
+                world.insert_resource(model);
+            }
+            if !world.contains_resource::<crate::basic::ecs::dcpf::DcpfWorkspace>() {
+                world.insert_resource(crate::basic::ecs::dcpf::DcpfWorkspace::default());
+            }
+            world.insert_resource(crate::basic::ecs::dcpf::DcpfSolverActive);
+            world.insert_resource(crate::basic::ecs::plugin::ActiveSolver::NewtonRaphson);
+        } else {
+            let world = self.inner.world_mut();
+            world.remove_resource::<crate::basic::ecs::dcpf::DcpfSolverActive>();
+            world.remove_resource::<crate::basic::dcpf::DcpfModel>();
+            world.remove_resource::<crate::basic::ecs::dcpf::DcpfWorkspace>();
+        }
+        Ok(())
+    }
+
+
+    /// Compute the DCPF initial voltage vector (unpermuted, in original bus order) as a numpy array.
+    fn compute_dcpf_v<'py>(
+        &mut self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
+        let v_perm = self.solve_standalone_dcpf_permuted()?;
+        let mat = self
+            .inner
+            .world()
+            .get_resource::<crate::basic::ecs::powerflow::systems::PowerFlowMat>()
+            .unwrap();
+        let mut v_orig = vec![num_complex::Complex64::new(0.0, 0.0); mat.v_bus_init.len()];
+        for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
+            v_orig[orig_idx] = v_perm[new_idx];
+        }
+        Ok(numpy::PyArray1::from_vec(py, v_orig))
+    }
+
+    /// Solves DCPF and applies the resulting phase angles to the internal initial voltage vector.
+    fn apply_dcpf_init(&mut self) -> PyResult<()> {
+        let v_perm = self.solve_standalone_dcpf_permuted()?;
+        let mut mat = self
+            .inner
+            .world_mut()
+            .get_resource_mut::<crate::basic::ecs::powerflow::systems::PowerFlowMat>()
+            .unwrap();
+        mat.v_bus_init = v_perm;
+        Ok(())
+    }
+
+    /// Enable or disable Jacobian caching for the power grid solver.
+    /// When enabled, it reuses the symbolic factorization across multiple solves.
+    #[pyo3(signature = (enable=true))]
+    fn enable_cache(&mut self, enable: bool) {
+        if enable {
+            if !self
+                .inner
+                .world()
+                .contains_resource::<crate::basic::newtonpf::NewtonCache>()
+            {
+                self.inner
+                    .world_mut()
+                    .insert_resource(crate::basic::newtonpf::NewtonCache::default());
+            }
+        } else {
+            self.inner
+                .world_mut()
+                .remove_resource::<crate::basic::newtonpf::NewtonCache>();
+        }
         self.inner.world_mut().insert_resource(sel);
         Ok(())
     }
@@ -774,14 +869,37 @@ impl PowerGrid {
                 "No power flow result: call solve() first",
             )
         })?;
-        let mat = world.get_resource::<PowerFlowMat>().ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Power flow not initialized")
-        })?;
-        let mut out = vec![num_complex::Complex64::new(0.0, 0.0); res.v.len()];
-        for (i, &val) in res.v.iter().enumerate() {
-            out[mat.from_perm[i]] = val;
+        Ok(res.v.as_slice().to_vec().into_pyarray(py))
+    }
+
+    /// Return the original (unpermuted) Y-bus as a scipy.sparse.csc_matrix.
+    #[getter]
+    fn y_bus<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let world = self.inner.world();
+        if let Some(orig) = world.get_resource::<crate::basic::ecs::powerflow::systems::OriginalYBus>() {
+            let indptr = orig.0.col_offsets().to_vec().into_pyarray(py);
+            let indices = orig.0.row_indices().to_vec().into_pyarray(py);
+            let data = orig.0.values().to_vec().into_pyarray(py);
+            let sp = py.import("scipy.sparse")?;
+            let shape = (orig.0.nrows(), orig.0.ncols());
+            return sp.call_method1("csc_matrix", ((data, indices, indptr), shape));
         }
-        Ok(out.into_pyarray(py))
+        if let Some(mat) = world.get_resource::<PowerFlowMat>() {
+            let orig = crate::basic::sparse::utils::permute_csc_to_csc_local_sort(
+                &mat.y_bus,
+                &mat.to_perm,
+                &mat.from_perm,
+            );
+            let indptr = orig.col_offsets().to_vec().into_pyarray(py);
+            let indices = orig.row_indices().to_vec().into_pyarray(py);
+            let data = orig.values().to_vec().into_pyarray(py);
+            let sp = py.import("scipy.sparse")?;
+            let shape = (orig.nrows(), orig.ncols());
+            return sp.call_method1("csc_matrix", ((data, indices, indptr), shape));
+        }
+        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            "Ybus not initialized: solve() or init_pf() must be called first",
+        ))
     }
 
     /// Set the voltage start vector (p.u. complex), indexed by bus id.
@@ -809,17 +927,11 @@ impl PowerGrid {
                 n
             )));
         }
-        // Resolve bus id -> entity up front so the NodeLookup borrow ends
-        // before the component writes.
-        let entities: Vec<Option<Entity>> = {
-            let lookup = world.resource::<NodeLookup>();
-            (0..n).map(|i| lookup.get_entity(i as i64)).collect()
-        };
-        for (i, e) in entities.into_iter().enumerate() {
-            if let Some(e) = e {
-                if let Some(mut bus_v) = world.get_mut::<VBusPu>(e) {
-                    bus_v.0 = v_arr[i];
-                }
+        let mut bus_q = world.query::<(&BusID, &mut VBusPu)>();
+        for (id, mut bus_v) in bus_q.iter_mut(world) {
+            let idx = id.0 as usize;
+            if idx < v_arr.len() {
+                bus_v.0 = v_arr[idx];
             }
         }
         // Re-pin PV/slack magnitude and slack angle targets: v overrides the
@@ -1046,18 +1158,22 @@ impl PowerGrid {
             .count()
     }
 
-    /// Return the raw bus results as a dictionary.
+    /// Return the raw bus results as a DataFrame.
     fn get_bus_results<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.ensure_post_processed();
-        let res = self.get_bus_results_impl(py)?;
-        py.import("pandas")?.call_method1("DataFrame", (res,))
+        self.get_bus_results_impl(py)
     }
 
-    /// Return the raw line results as a dictionary.
+    /// Return the raw line results as a DataFrame.
     fn get_line_results<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.ensure_post_processed();
-        let res = self.get_line_results_impl(py)?;
-        py.import("pandas")?.call_method1("DataFrame", (res,))
+        self.get_line_results_impl(py)
+    }
+
+    /// Return the raw transformer results as a DataFrame.
+    fn get_trafo_results<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.ensure_post_processed();
+        self.get_trafo_results_impl(py)
     }
 
     /// Return the raw bus parameters as a dictionary.
@@ -1078,6 +1194,13 @@ impl PowerGrid {
     #[getter]
     fn res_line<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.get_line_results(py)
+    }
+
+    /// Transformer results of the last solve as a DataFrame (pandapower's res_trafo).
+    /// Lazy: triggers post-processing on first access after solve().
+    #[getter]
+    fn res_trafo<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.get_trafo_results(py)
     }
 
     /// Return a pandas DataFrame showing all bus parameters in the case.
@@ -1180,7 +1303,6 @@ impl PowerGrid {
         })?;
 
         self.sync_next_bus_id();
-        self.sync_bus_to_elements();
         self.init_pf();
 
         Ok(())
@@ -1188,10 +1310,60 @@ impl PowerGrid {
 }
 
 impl PowerGrid {
+    /// Internal helper to solve standalone DCPF in permuted bus order using the cached standalone workspace.
+    fn solve_standalone_dcpf_permuted(
+        &mut self,
+    ) -> PyResult<nalgebra::DVector<num_complex::Complex64>> {
+        let rebuild_pending = !self
+            .inner
+            .world()
+            .contains_resource::<crate::basic::ecs::powerflow::systems::PowerFlowMat>()
+            || self
+                .inner
+                .world()
+                .get_resource::<bevy_ecs::message::Messages<
+                    crate::basic::ecs::powerflow::structure_update::FullRebuildEvent,
+                >>()
+                .map(|m| !m.is_empty())
+                .unwrap_or(false);
+        if rebuild_pending {
+            self.init_pf();
+        }
+
+        if self.standalone_dcpf.is_none() {
+            let model = self
+                .inner
+                .world_mut()
+                .run_system_once(crate::basic::ecs::dcpf::build_dcpf_model)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
+            self.standalone_dcpf = Some(StandaloneDcpf {
+                model,
+                workspace: crate::basic::ecs::dcpf::DcpfWorkspace::default(),
+            });
+        }
+
+        let standalone = self.standalone_dcpf.as_mut().unwrap();
+        let mat = self
+            .inner
+            .world()
+            .get_resource::<crate::basic::ecs::powerflow::systems::PowerFlowMat>()
+            .unwrap();
+        let n_active = standalone.model.n_active;
+        standalone.workspace.ensure_capacity(n_active);
+
+        crate::basic::dcpf::dcpf_initial_v(
+            &mut standalone.model,
+            &mat.s_bus,
+            &mat.v_bus_init,
+            &mut standalone.workspace.buffer[..n_active],
+            &mut standalone.workspace.solver,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("DCPF solve failed: {e}")))
+    }
     /// Run ECS post-processing (bus + line result extraction) only if the
     /// dirty flag is set.  Called lazily from `res_bus`, `res_line`, and any
     /// other result getter.
-    fn ensure_post_processed(&mut self) {
+    pub(crate) fn ensure_post_processed(&mut self) {
         if self.post_process_dirty {
             self.inner.post_process();
             self.post_process_dirty = false;
@@ -1212,6 +1384,7 @@ impl PowerGrid {
     /// Bevy, schedules/systems are entity-backed and a blanket clear would
     /// destroy the Main schedule along with the grid.
     pub(crate) fn clear_grid_entities(&mut self) {
+        self.standalone_dcpf = None;
         let world = self.inner.world_mut();
         let mut to_despawn: Vec<Entity> = Vec::new();
         macro_rules! collect {
@@ -1248,16 +1421,6 @@ impl PowerGrid {
                 }
             });
         self.next_bus_id = max_id + 1;
-    }
-
-    fn sync_bus_to_elements(&mut self) {
-        let world = self.inner.world_mut();
-        self.bus_to_elements.clear();
-        world.iter_entities().for_each(|e| {
-            if let Some(bus) = e.get::<TargetBus>() {
-                self.bus_to_elements.entry(bus.0).or_default().push(e.id());
-            }
-        });
     }
 
     fn reset_state_impl(&mut self) {
@@ -1316,18 +1479,18 @@ impl PowerGrid {
         Ok(dict)
     }
 
-    fn get_bus_results_impl<'py>(
-        &mut self,
-        py: Python<'py>,
-    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    fn get_bus_results_impl<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let world = self.inner.world_mut();
-        let mut bus_ids = Vec::new();
-        let mut v_complex = Vec::new();
-        let mut vms = Vec::new();
-        let mut vas = Vec::new();
-        let mut ps = Vec::new();
-        let mut qs = Vec::new();
         let mut query = world.query::<(&BusID, &VBusResult, &SBusResult)>();
+        let count = query.iter(world).count();
+
+        let mut bus_ids = Vec::with_capacity(count);
+        let mut v_complex = Vec::with_capacity(count);
+        let mut vms = Vec::with_capacity(count);
+        let mut vas = Vec::with_capacity(count);
+        let mut ps = Vec::with_capacity(count);
+        let mut qs = Vec::with_capacity(count);
+
         query.iter(world).for_each(|(id, v, s)| {
             bus_ids.push(id.0);
             v_complex.push(v.0);
@@ -1336,6 +1499,7 @@ impl PowerGrid {
             ps.push(s.0.re);
             qs.push(s.0.im);
         });
+
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item("bus_id", bus_ids.into_pyarray(py))?;
         dict.set_item("v_pu", v_complex.into_pyarray(py))?;
@@ -1343,33 +1507,91 @@ impl PowerGrid {
         dict.set_item("va_degree", vas.into_pyarray(py))?;
         dict.set_item("p_mw", ps.into_pyarray(py))?;
         dict.set_item("q_mvar", qs.into_pyarray(py))?;
-        Ok(dict)
+        py.import("pandas")?.call_method1("DataFrame", (dict,))
     }
 
-    fn get_line_results_impl<'py>(
-        &mut self,
-        py: Python<'py>,
-    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    fn get_line_results_impl<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let world = self.inner.world_mut();
-        let mut from_bus = Vec::new();
-        let mut to_bus = Vec::new();
-        let mut p_f = Vec::new();
-        let mut q_f = Vec::new();
-        let mut i_f = Vec::new();
         let mut query = world.query::<(&FromBus, &ToBus, &LineResultData)>();
+        let count = query.iter(world).count();
+
+        let mut from_bus = Vec::with_capacity(count);
+        let mut to_bus = Vec::with_capacity(count);
+        let mut data = Vec::with_capacity(count * 14);
+
         query.iter(world).for_each(|(f, t, d)| {
             from_bus.push(f.0);
             to_bus.push(t.0);
-            p_f.push(d.p_from_mw);
-            q_f.push(d.q_from_mvar);
-            i_f.push(d.i_from_ka);
+            data.extend_from_slice(d.as_slice());
         });
-        let dict = pyo3::types::PyDict::new(py);
-        dict.set_item("from_bus", from_bus.into_pyarray(py))?;
-        dict.set_item("to_bus", to_bus.into_pyarray(py))?;
-        dict.set_item("p_mw", p_f.into_pyarray(py))?;
-        dict.set_item("q_mvar", q_f.into_pyarray(py))?;
-        dict.set_item("i_ka", i_f.into_pyarray(py))?;
-        Ok(dict)
+
+        let pandas = py.import("pandas")?;
+        let py_data_2d = data
+            .into_pyarray(py)
+            .call_method1("reshape", ((count, 14),))?;
+        const LINE_COLS: &[&str] = &[
+            "p_from_mw",
+            "q_from_mvar",
+            "p_to_mw",
+            "q_to_mvar",
+            "pl_mw",
+            "ql_mvar",
+            "i_from_ka",
+            "i_to_ka",
+            "i_ka",
+            "vm_from_pu",
+            "va_from_degree",
+            "vm_to_pu",
+            "va_to_degree",
+            "loading_percent",
+        ];
+        let kwargs = pyo3::types::PyDict::new(py);
+        kwargs.set_item("columns", LINE_COLS)?;
+        let df = pandas.call_method("DataFrame", (py_data_2d,), Some(&kwargs))?;
+        df.call_method1("insert", (0, "to_bus", to_bus.into_pyarray(py)))?;
+        df.call_method1("insert", (0, "from_bus", from_bus.into_pyarray(py)))?;
+        Ok(df)
+    }
+
+    fn get_trafo_results_impl<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let world = self.inner.world_mut();
+        let mut query = world.query::<(&FromBus, &ToBus, &TrafoResultData)>();
+        let count = query.iter(world).count();
+
+        let mut hv_bus = Vec::with_capacity(count);
+        let mut lv_bus = Vec::with_capacity(count);
+        let mut data = Vec::with_capacity(count * 13);
+
+        query.iter(world).for_each(|(f, t, d)| {
+            hv_bus.push(f.0);
+            lv_bus.push(t.0);
+            data.extend_from_slice(d.as_slice());
+        });
+
+        let pandas = py.import("pandas")?;
+        let py_data_2d = data
+            .into_pyarray(py)
+            .call_method1("reshape", ((count, 13),))?;
+        const TRAFO_COLS: &[&str] = &[
+            "p_hv_mw",
+            "q_hv_mvar",
+            "p_lv_mw",
+            "q_lv_mvar",
+            "pl_mw",
+            "ql_mvar",
+            "i_hv_ka",
+            "i_lv_ka",
+            "vm_hv_pu",
+            "va_hv_degree",
+            "vm_lv_pu",
+            "va_lv_degree",
+            "loading_percent",
+        ];
+        let kwargs = pyo3::types::PyDict::new(py);
+        kwargs.set_item("columns", TRAFO_COLS)?;
+        let df = pandas.call_method("DataFrame", (py_data_2d,), Some(&kwargs))?;
+        df.call_method1("insert", (0, "lv_bus", lv_bus.into_pyarray(py)))?;
+        df.call_method1("insert", (0, "hv_bus", hv_bus.into_pyarray(py)))?;
+        Ok(df)
     }
 }

@@ -1,17 +1,10 @@
-use crate::{
-    basic::{
-        ecs::powerflow::systems::create_permutation_matrix,
-        sparse::{self, cast::Cast},
-    },
-    io::pandapower::SwitchType,
-};
+use crate::{basic::sparse::cast::Cast, io::pandapower::SwitchType};
 use bevy_ecs::prelude::*;
 use derive_more::{Deref, DerefMut};
 use nalgebra::{Complex, DVector, vector};
 use nalgebra_sparse::{CooMatrix, CscMatrix};
 use std::collections::{HashMap, HashSet};
 
-use self::sparse::conj::RealImage;
 use super::{super::powerflow::systems::PowerFlowMat, *};
 
 mod comps;
@@ -158,7 +151,7 @@ pub fn process_switch_state(
     buses: Query<&VNominal>,
     q: Query<(Entity, &Switch, &SwitchState)>,
 ) {
-    let node_idx: Vec<u64> = nodes.reverse.values().map(|&x| x as u64).collect();
+    let node_idx: Vec<u64> = nodes.iter().map(|(id, _)| id as u64).collect();
     let mut union_find: Option<NodeMerge> = if q.iter().count() > 0 {
         Some(NodeMerge::new(&node_idx))
     } else {
@@ -196,33 +189,27 @@ pub fn process_switch_state(
 ///
 /// This function adds admittance branches based on the state of switches, no ideal switch.
 #[allow(dead_code)]
-pub fn process_switch_state_admit(
-    mut cmd: Commands,
-    nodes: Res<NodeLookup>,
-    buses: Query<&VNominal>,
-    q: Query<(Entity, &Switch, &SwitchState)>,
-) {
+pub fn process_switch_state_admit(mut cmd: Commands, q: Query<(Entity, &Switch, &SwitchState)>) {
     q.iter().for_each(|(entity, switch, closed)| {
         let _z_ohm = switch.z_ohm;
         match switch.et {
             SwitchType::SwitchTwoBuses if **closed && _z_ohm == 0.0 => {
-                let (node1, node2) = (switch.bus, switch.element);
-                let bus = nodes.get_entity(switch.bus).unwrap();
-                let v_base = *buses.get(bus).unwrap().0;
-                cmd.entity(entity).insert(AdmittanceBranch {
-                    y: Admittance(Complex::new(1e6, 0.0)),
-                    port: Port2(vector![node1, node2]),
-                    v_base: VBase(v_base),
-                });
+                let y = Complex::new(1e6, 0.0);
+                let g = nalgebra::Matrix2::new(y, -y, -y, y);
+                cmd.entity(entity).insert((
+                    FromBus(switch.bus),
+                    ToBus(switch.element),
+                    Port4MatPatch(g),
+                ));
             }
             SwitchType::SwitchTwoBuses if **closed => {
-                let bus = nodes.get_entity(switch.bus).unwrap();
-                let v_base = *buses.get(bus).unwrap().0;
-                cmd.entity(entity).insert(AdmittanceBranch {
-                    y: Admittance(Complex::new(_z_ohm, 0.0)),
-                    port: Port2(vector![switch.bus, switch.element]),
-                    v_base: VBase(v_base),
-                });
+                let y = Complex::new(_z_ohm, 0.0);
+                let g = nalgebra::Matrix2::new(y, -y, -y, y);
+                cmd.entity(entity).insert((
+                    FromBus(switch.bus),
+                    ToBus(switch.element),
+                    Port4MatPatch(g),
+                ));
             }
             _ => {}
         }
@@ -322,8 +309,7 @@ pub fn node_aggregation_system(
     let coo = build_aggregation_matrix(&node_mapping.0);
     let mut nodes: Vec<_> = node_mapping.keys().copied().collect();
     nodes.sort_unstable();
-    let current_node_order =
-        (&mats.reorder * DVector::from_vec(nodes).cast::<Complex<f64>>()).map(|x| x.re as u64);
+    let current_node_order: Vec<u64> = mats.from_perm.iter().map(|&idx| nodes[idx]).collect();
     let mask = set_mask_for_merged_nodes(
         &node_mapping,
         current_node_order.as_slice(),
@@ -421,16 +407,21 @@ fn extract_pv_pq_ext_nodes(
     mats: &PowerFlowMat,
     input_vector: &DVector<f64>,
 ) -> (Vec<i64>, Vec<i64>, Vec<i64>) {
-    // reordered_v_before is in [PQ | PV | EXT] order
-    let reordered_v_before = &mats.reorder.real() * input_vector;
-    let reordered_v_before = reordered_v_before.map(|x| x as i64);
-
     let (npv, npq) = (mats.npv, mats.npq);
     let ext_idx = npv + npq;
 
-    let pq_nodes = reordered_v_before.as_slice()[0..npq].to_vec();
-    let pv_nodes = reordered_v_before.as_slice()[npq..ext_idx].to_vec();
-    let ext_nodes = reordered_v_before.as_slice()[ext_idx..].to_vec();
+    let pq_nodes: Vec<i64> = mats.from_perm[0..npq]
+        .iter()
+        .map(|&idx| input_vector[idx] as i64)
+        .collect();
+    let pv_nodes: Vec<i64> = mats.from_perm[npq..ext_idx]
+        .iter()
+        .map(|&idx| input_vector[idx] as i64)
+        .collect();
+    let ext_nodes: Vec<i64> = mats.from_perm[ext_idx..]
+        .iter()
+        .map(|&idx| input_vector[idx] as i64)
+        .collect();
 
     (pv_nodes, pq_nodes, ext_nodes)
 }
@@ -514,9 +505,6 @@ fn update_power_flow_matrix(
     mat_v: &CscMatrix<f64>,
     new_total_nodes: usize,
 ) {
-    let permutation_matrix = create_permutation_matrix(&pv, &pq, &ext, new_total_nodes);
-    mats.reorder = permutation_matrix;
-
     let mut to_perm = vec![0; new_total_nodes];
     let mut from_perm = vec![0; new_total_nodes];
     let n_bus_re = pq.len() + pv.len();
@@ -755,8 +743,11 @@ mod tests {
         );
 
         // Verify that nodes 29 and 30 are swapped in the reordered structure
-        let reordered_v_before = &mats.reorder.real() * &input_vector;
-        let reordered_v_before = reordered_v_before.map(|x| x as i64);
+        let reordered_v_before: Vec<i64> = mats
+            .from_perm
+            .iter()
+            .map(|&idx| input_vector[idx] as i64)
+            .collect();
         assert_eq!(
             reordered_v_before[29], 30,
             "Node 29 should map to position 30 after reordering."
@@ -766,21 +757,21 @@ mod tests {
             "Node 30 should map to position 29 after reordering."
         );
 
-        // Step 8: Update PowerFlowMat and verify permutation matrix dimensions
+        // Step 8: Update PowerFlowMat and verify permutation vector dimensions
         let mut mats = pf_net
             .world_mut()
             .get_resource_mut::<PowerFlowMat>()
             .unwrap();
         update_power_flow_matrix(&mut mats, pv, pq, ext, &mat, &mat_v, new_total_nodes);
         assert_eq!(
-            mats.reorder.nrows(),
+            mats.to_perm.len(),
             new_total_nodes,
-            "Reorder matrix row count should match new total nodes."
+            "to_perm length should match new total nodes."
         );
         assert_eq!(
-            mats.reorder.ncols(),
+            mats.from_perm.len(),
             new_total_nodes,
-            "Reorder matrix column count should match new total nodes."
+            "from_perm length should match new total nodes."
         );
 
         // Step 9: Check resulting matrices (optional, for further verification)

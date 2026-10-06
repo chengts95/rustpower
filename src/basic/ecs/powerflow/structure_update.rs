@@ -93,6 +93,9 @@ pub fn reset_solvers(world: &mut World) {
     if let Some(mut solver) = world.get_resource_mut::<PowerFlowSolver>() {
         solver.solver.reset();
     }
+    if let Some(mut ws) = world.get_resource_mut::<crate::basic::ecs::dcpf::DcpfWorkspace>() {
+        ws.solver.reset();
+    }
     // LM-family plugins own their solver state; their cached symbolics die
     // with any structure change too. (Each solver additionally self-detects
     // pattern changes, so this reset is the cheap intended path, not the

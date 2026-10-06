@@ -1,4 +1,4 @@
-use bevy_ecs::prelude::Entity;
+use bevy_ecs::prelude::{Entity, With, Without};
 use pyo3::prelude::*;
 
 use crate::basic::ecs::elements::generator::{
@@ -99,7 +99,8 @@ impl BusHandle {
     /// Voltage magnitude (p.u.) from the last solve.
     #[getter]
     fn vm_pu(&self, py: Python<'_>) -> PyResult<f64> {
-        let grid_py = self.grid.borrow(py);
+        let mut grid_py = self.grid.borrow_mut(py);
+        grid_py.ensure_post_processed();
         grid_py
             .inner
             .world()
@@ -115,7 +116,8 @@ impl BusHandle {
     /// Voltage angle (degrees) from the last solve.
     #[getter]
     fn va_degree(&self, py: Python<'_>) -> PyResult<f64> {
-        let grid_py = self.grid.borrow(py);
+        let mut grid_py = self.grid.borrow_mut(py);
+        grid_py.ensure_post_processed();
         grid_py
             .inner
             .world()
@@ -131,7 +133,8 @@ impl BusHandle {
     /// Net injected active power (MW) from the last solve. Positive for production.
     #[getter]
     fn p_mw(&self, py: Python<'_>) -> PyResult<f64> {
-        let grid_py = self.grid.borrow(py);
+        let mut grid_py = self.grid.borrow_mut(py);
+        grid_py.ensure_post_processed();
         grid_py
             .inner
             .world()
@@ -147,7 +150,8 @@ impl BusHandle {
     /// Net injected reactive power (MVar) from the last solve.
     #[getter]
     fn q_mvar(&self, py: Python<'_>) -> PyResult<f64> {
-        let grid_py = self.grid.borrow(py);
+        let mut grid_py = self.grid.borrow_mut(py);
+        grid_py.ensure_post_processed();
         grid_py
             .inner
             .world()
@@ -174,28 +178,21 @@ impl BusHandle {
                 .0
         };
 
-        let PowerGrid {
-            inner,
-            bus_to_elements,
-            ..
-        } = &mut *grid_py;
-        let entities = bus_to_elements.get(&bus_id).cloned().unwrap_or_default();
-        let world = inner.world_mut();
-        let mut found = false;
-        for e in entities {
-            // Only touch load entities; gens/sgens at the same bus also carry TargetPMW
-            if world.get::<LoadCfg>(e).is_none() {
-                continue;
-            }
-            found = true;
-            mutation::set_load_p(world, e, p_mw);
-            mutation::set_load_q(world, e, q_mvar);
-        }
-        if !found {
+        let world = grid_py.inner.world_mut();
+        let mut q = world.query_filtered::<(Entity, &TargetBus), With<LoadCfg>>();
+        let targets: Vec<Entity> = q
+            .iter(world)
+            .filter_map(|(e, tb)| if tb.0 == bus_id { Some(e) } else { None })
+            .collect();
+        if targets.is_empty() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "No loads found at bus {}",
                 bus_id
             )));
+        }
+        for e in targets {
+            mutation::set_load_p(world, e, p_mw);
+            mutation::set_load_q(world, e, q_mvar);
         }
         Ok(())
     }
@@ -214,28 +211,22 @@ impl BusHandle {
                 .0
         };
 
-        let PowerGrid {
-            inner,
-            bus_to_elements,
-            ..
-        } = &mut *grid_py;
-        let entities = bus_to_elements.get(&bus_id).cloned().unwrap_or_default();
-        let world = inner.world_mut();
-        let mut found = false;
-        for e in entities {
-            // Only touch PV generators; skip loads and the slack machine
-            if world.get::<GeneratorCfg>(e).is_none() || world.get::<Slack>(e).is_some() {
-                continue;
-            }
-            found = true;
-            mutation::set_gen_p(world, e, p_mw);
-            mutation::set_gen_vm(world, e, vm_pu);
-        }
-        if !found {
+        let world = grid_py.inner.world_mut();
+        let mut q =
+            world.query_filtered::<(Entity, &TargetBus), (With<GeneratorCfg>, Without<Slack>)>();
+        let targets: Vec<Entity> = q
+            .iter(world)
+            .filter_map(|(e, tb)| if tb.0 == bus_id { Some(e) } else { None })
+            .collect();
+        if targets.is_empty() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "No generators found at bus {}",
                 bus_id
             )));
+        }
+        for e in targets {
+            mutation::set_gen_p(world, e, p_mw);
+            mutation::set_gen_vm(world, e, vm_pu);
         }
         Ok(())
     }

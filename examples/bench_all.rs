@@ -2,10 +2,10 @@ use ecs::{
     elements::PPNetwork,
     network::{DataOps, PowerFlow, PowerGrid},
 };
+use newtonpf::NewtonCache;
 use rustpower::{io::pandapower::*, prelude::*, testcases::case_ieee39::IEEE_39};
 use std::env;
 use std::time::{Duration, Instant};
-
 #[macro_export]
 macro_rules! timeit {
     ($name:expr, $times:expr, $block:expr) => {{
@@ -39,10 +39,12 @@ macro_rules! timeit {
 fn run_benchmark(name: &str, net: Network, iterations: u32) {
     let mut pf_net = PowerGrid::default();
     pf_net.world_mut().insert_resource(PPNetwork(net));
+    pf_net.world_mut().insert_resource(NewtonCache::default());
     pf_net.init_pf_net();
 
     // Warmup
     pf_net.run_pf();
+    pf_net.post_process();
 
     let res = pf_net.world().get_resource::<PowerFlowResult>().unwrap();
 
@@ -56,9 +58,17 @@ fn run_benchmark(name: &str, net: Network, iterations: u32) {
     let max_v = vm.iter().fold(f64::MIN, |a, &b| a.max(b));
     println!("  Vm range: [{:.4}, {:.4}]", min_v, max_v);
 
-    timeit!(name, iterations, || {
+    timeit!(format!("{:<12} [Pure Solve]", name), iterations, || {
         pf_net.run_pf();
     });
+    timeit!(format!("{:<12} [PostProcess]", name), iterations, || {
+        pf_net.post_process();
+    });
+    timeit!(format!("{:<12} [Solve+Post ]", name), iterations, || {
+        pf_net.run_pf();
+        pf_net.post_process();
+    });
+    println!();
 }
 
 fn main() {

@@ -442,14 +442,7 @@ pub fn fill_j_and_jt_exp(
 
 #[cfg(test)]
 mod tests {
-    //! V4 vs V3: bitwise-identical output on synthetic fixtures and on the
-    //! IEEE118 system, plus a fill-only timing comparison (assembly cost
-    //! isolated — no solver involved).
-    //!
-    //! Timing run (release, output visible):
-    //! ```text
-    //! cargo test --release v4_vs_v3_perf_ieee118 -- --nocapture
-    //! ```
+    //! V3/V4 数值一致性单元测试；性能对比位于 performance/v4.rs。
 
     use super::*;
     use crate::basic::ecs::elements::PPNetwork;
@@ -457,10 +450,10 @@ mod tests {
     use crate::basic::ecs::powerflow::systems::PowerFlowMat;
     use crate::lm::{KktPattern, fill_jt};
     use crate::basic::new_dsdvbus2::JacobianPattern2;
+    use crate::basic::jacobian_cache::JacobianCache;
     use crate::basic::new_dsdvbus3::fill_jacobian_v3;
     use crate::io::pandapower::{Network, load_csv_zip};
     use nalgebra_sparse::{CooMatrix, CscMatrix};
-    use std::time::{Duration, Instant};
 
     fn ybus_from_edges(nb: usize, edges: &[(usize, usize)]) -> CscMatrix<Complex64> {
         let mut coo = CooMatrix::new(nb, nb);
@@ -500,10 +493,10 @@ mod tests {
         (v, vnorm, scalc)
     }
 
-    /// V4 block view on the same pattern tables V3 uses.
+    /// V4 block view using its independent cache, without V3 quadrant-start tables.
     fn fill_v4_block(
         ybus: &CscMatrix<Complex64>,
-        pat: &JacobianPattern2,
+        pat: &JacobianCache,
         v: &[Complex64],
         vnorm: &[Complex64],
         scalc: &[Complex64],
@@ -518,17 +511,30 @@ mod tests {
         );
     }
 
+    fn assert_jacobians_agree(a: &[f64], b: &[f64]) {
+        assert_eq!(a.len(), b.len());
+        // Main's V3 derives magnitude entries from angle entries, while V4
+        // retains some direct products. Equivalent arithmetic can round differently.
+        for (slot, (&x, &y)) in a.iter().zip(b).enumerate() {
+            let tolerance = 16.0 * f64::EPSILON * (1.0 + x.abs().max(y.abs()));
+            assert!((x - y).abs() <= tolerance, "Jacobian slot {slot}: {x} != {y}");
+        }
+    }
+
     fn assert_v4_matches_v3(ybus: &CscMatrix<Complex64>, npv: usize, npq: usize) {
         let nb = ybus.ncols();
         let pat = JacobianPattern2::build_from_permuted(ybus.col_offsets(), ybus.row_indices(), npv, npq);
         let (v, vnorm, scalc) = eval_inputs(nb, ybus);
 
         let mut j_v3 = vec![0.0; pat.nnz_j];
-        fill_jacobian_v3::<false>(ybus, &v, &vnorm, &scalc, &pat.j_col_ptrs, &pat.pq_ends, &pat.active_ends, &pat.diag_ptrs, npv, npq, &mut j_v3);
+        fill_jacobian_v3(ybus, &v, &vnorm, &scalc, &pat, npv, npq, &mut j_v3);
         let mut j_v4 = vec![0.0; pat.nnz_j];
-        fill_v4_block(ybus, &pat, &v, &vnorm, &scalc, npv, npq, &mut j_v4);
+        let v4_cache = JacobianCache::build_from_permuted(ybus.col_offsets(), ybus.row_indices(), npv, npq);
+        assert_eq!(pat.j_col_ptrs, v4_cache.j_col_ptrs);
+        assert_eq!(pat.j_row_indices, v4_cache.j_row_indices);
+        fill_v4_block(ybus, &v4_cache, &v, &vnorm, &scalc, npv, npq, &mut j_v4);
 
-        assert_eq!(j_v3, j_v4, "V4 block view disagrees with V3");
+        assert_jacobians_agree(&j_v3, &j_v4);
     }
 
     #[test]
@@ -536,6 +542,10 @@ mod tests {
         // 4 buses: 0,1 PQ; 2 PV; 3 slack.
         let y4 = ybus_from_edges(4, &[(0, 1), (0, 2), (1, 2), (2, 3)]);
         assert_v4_matches_v3(&y4, 1, 2);
+        // Empty PQ or PV segments, and a system containing only a slack bus.
+        assert_v4_matches_v3(&y4, 3, 0);
+        assert_v4_matches_v3(&y4, 0, 3);
+        assert_v4_matches_v3(&ybus_from_edges(1, &[]), 0, 0);
         // 14 buses: 0..9 PQ, 9..13 PV, 13 slack; ring + chords.
         let nb = 14;
         let mut edges: Vec<(usize, usize)> = (0..nb).map(|i| (i, (i + 1) % nb)).collect();
@@ -583,52 +593,16 @@ mod tests {
             .collect();
 
         let mut j_v3 = vec![0.0; pat.nnz_j];
-        fill_jacobian_v3::<false>(ybus, &v, &vnorm, &scalc, &pat.j_col_ptrs, &pat.pq_ends, &pat.active_ends, &pat.diag_ptrs, npv, npq, &mut j_v3);
+        fill_jacobian_v3(ybus, &v, &vnorm, &scalc, &pat, npv, npq, &mut j_v3);
         let mut j_v4 = vec![0.0; pat.nnz_j];
-        fill_v4_block(ybus, &pat, &v, &vnorm, &scalc, npv, npq, &mut j_v4);
+        let v4_cache = JacobianCache::build_from_permuted(ybus.col_offsets(), ybus.row_indices(), npv, npq);
+        assert_eq!(pat.j_col_ptrs, v4_cache.j_col_ptrs);
+        assert_eq!(pat.j_row_indices, v4_cache.j_row_indices);
+        fill_v4_block(ybus, &v4_cache, &v, &vnorm, &scalc, npv, npq, &mut j_v4);
 
-        assert_eq!(j_v3, j_v4, "V4 block view disagrees with V3 on IEEE118");
+        assert_jacobians_agree(&j_v3, &j_v4);
     }
 
-    fn timeit(label: &str, repeats: usize, mut f: impl FnMut()) -> Duration {
-        f(); // warm-up
-        let mut total = Duration::ZERO;
-        let mut min = Duration::MAX;
-        for _ in 0..repeats {
-            let t = Instant::now();
-            f();
-            let d = t.elapsed();
-            total += d;
-            min = min.min(d);
-        }
-        let avg = total / repeats as u32;
-        println!("    {label:<24} avg {avg:?}   min {min:?}");
-        avg
-    }
-
-    /// Fill-only race, no solver: V3 (stored quadrant tables) vs
-    /// V4 (inline derivation). Isolates the table-load vs add difference.
-    #[test]
-    fn v4_vs_v3_perf_ieee118() {
-        let mat = load_ieee118_mat();
-        let ybus = &mat.y_bus;
-        let (npv, npq) = (mat.npv, mat.npq);
-        let nb = ybus.ncols();
-        let pat = JacobianPattern2::build_from_permuted(ybus.col_offsets(), ybus.row_indices(), npv, npq);
-        let (v, vnorm, scalc) = eval_inputs(nb, ybus);
-
-        let repeats = 2000;
-        let mut j = vec![0.0; pat.nnz_j];
-        println!("--- IEEE118 Jacobian fill: V3 (stored tables) vs V4 (inline) ---");
-        let avg_v3 = timeit("V3 fill_jacobian_v3", repeats, | |
-            fill_jacobian_v3::<false>(ybus, &v, &vnorm, &scalc, &pat.j_col_ptrs, &pat.pq_ends, &pat.active_ends, &pat.diag_ptrs, npv, npq, &mut j)
-        );
-        let avg_v4 = timeit("V4 fill_jacobian_v4", repeats, | |
-            fill_v4_block(ybus, &pat, &v, &vnorm, &scalc, npv, npq, &mut j)
-        );
-        let ratio = avg_v3.as_secs_f64() / avg_v4.as_secs_f64();
-        println!("    V3/V4 = {ratio:.3}x");
-    }
 
     // ─── Fused J+Jᵀ experiment ──────────────────────────────────────────────
 
@@ -707,27 +681,4 @@ mod tests {
         assert_fused_matches_two_pass(&mat.y_bus, mat.npv, mat.npq);
     }
 
-    /// The real race: (v4 + fill_jt) two passes vs the fused single pass.
-    #[test]
-    fn fused_vs_two_pass_perf_ieee118() {
-        let mat = load_ieee118_mat();
-        let ybus = &mat.y_bus;
-        let (npv, npq) = (mat.npv, mat.npq);
-        let nb = ybus.ncols();
-        let pat = KktPattern::build(ybus, npv, npq);
-        let (v, vnorm, scalc) = eval_inputs(nb, ybus);
-        let nnz = pat.graph.nnz;
-
-        let repeats = 2000;
-        let (mut j, mut jt) = (vec![0.0; nnz], vec![0.0; nnz]);
-        println!("--- IEEE118: (v4 + fill_jt) two-pass vs fused single-pass ---");
-        let avg_two = timeit("two-pass v4+fill_jt", repeats, | |
-            two_pass_j_jt(ybus, &pat, &v, &vnorm, &scalc, npv, npq, &mut j, &mut jt)
-        );
-        let avg_fused = timeit("fused fill_j_and_jt", repeats, | |
-            fused_fill(ybus, &pat, &v, &vnorm, &scalc, npv, npq, &mut j, &mut jt)
-        );
-        let ratio = avg_two.as_secs_f64() / avg_fused.as_secs_f64();
-        println!("    two-pass/fused = {ratio:.3}x");
-    }
 }

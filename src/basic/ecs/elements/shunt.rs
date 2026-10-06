@@ -62,7 +62,7 @@ pub mod shunt_systems {
     use nalgebra::{Complex, vector};
 
     fn shunt_internal(item: &ShuntDevice, bus: &TargetBus) -> AdmittanceBranch {
-        let s = Complex::new(-item.p_mw, -item.q_mvar) * Complex::new(item.step as f64, 0.0);
+        let s = Complex::new(item.p_mw, -item.q_mvar) * Complex::new(item.step as f64, 0.0);
         let y = s / (item.vn_kv * item.vn_kv);
         AdmittanceBranch {
             y: Admittance(y),
