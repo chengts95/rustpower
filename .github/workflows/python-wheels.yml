@@ -2,10 +2,18 @@ name: Python Wheels
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - "ci/**"
+    paths:
+      - ".github/workflows/python-wheels.yml"
+      - "crates/**"
+      - "src/**"
+      - "Cargo.toml"
 
 jobs:
   build_linux_wheels:
-    name: Build Linux wheels
+    name: Build Linux wheels (statically linked KLU)
     runs-on: ubuntu-latest
 
     steps:
@@ -15,19 +23,29 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: x86_64
-          args: --release --out dist --no-default-features --features python,archive,klu_dyn,arrow
+          args: --release --out dist --no-default-features --features python,archive,klu,arrow
           sccache: 'true'
           manylinux: 2_28
           before-script-linux: |
             if command -v dnf >/dev/null 2>&1; then
-              dnf install -y epel-release || true
-              dnf install -y suitesparse-devel clang
+              dnf install -y clang libgomp || true
             elif command -v yum >/dev/null 2>&1; then
-              yum install -y epel-release || true
-              yum install -y suitesparse-devel clang
+              yum install -y clang libgomp || true
             fi
 
-      - name: Inspect wheel dependencies
+            # Download prebuilt SuiteSparse static libraries
+            curl -sL https://github.com/chengts95/suitesparse-build/releases/download/v7.14.1/suitesparse-v7.14.1-linux-x86_64-klu.tar.gz -o /tmp/ss.tar.gz
+            mkdir -p /opt/suitesparse
+            tar -xzf /tmp/ss.tar.gz -C /opt/suitesparse --strip-components=1
+
+            # Place headers and static libraries in compiler search paths
+            mkdir -p /usr/include/suitesparse
+            cp -r /opt/suitesparse/include/suitesparse/* /usr/include/suitesparse/ 2>/dev/null || cp -r /opt/suitesparse/include/* /usr/include/suitesparse/
+            cp /opt/suitesparse/lib/*.a /usr/lib64/ 2>/dev/null || cp /opt/suitesparse/lib/*.a /usr/lib/
+
+            export SUITESPARSE_DIR=/opt/suitesparse
+
+      - name: Inspect and repair wheel dependencies
         run: |
           python -m pip install --upgrade auditwheel
           auditwheel show dist/*.whl || true
@@ -36,4 +54,67 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wheels-linux-x86_64
+          path: dist/*.whl
+
+  build_windows_wheels:
+    name: Build Windows wheels (statically linked KLU)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SuiteSparse
+        shell: bash
+        run: |
+          mkdir -p "C:/suitesparse"
+          curl -sL "https://github.com/chengts95/suitesparse-build/releases/download/v7.14.1/suitesparse-v7.14.1-windows-x86_64-klu.zip" -o ss.zip
+          mkdir -p "C:/suitesparse_tmp"
+          unzip -q -o ss.zip -d "C:/suitesparse_tmp"
+          if [ -d "C:/suitesparse_tmp/suitesparse-v7.14.1-windows-x86_64-klu" ]; then
+            cp -r "C:/suitesparse_tmp/suitesparse-v7.14.1-windows-x86_64-klu/"* "C:/suitesparse/"
+          else
+            cp -r "C:/suitesparse_tmp/"* "C:/suitesparse/"
+          fi
+          echo "SUITESPARSE_DIR=C:/suitesparse" >> "$GITHUB_ENV"
+          echo "C:/suitesparse/bin" >> "$GITHUB_PATH"
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64
+          args: --release --out dist --no-default-features --features python,archive,klu,arrow
+          sccache: 'true'
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-x86_64
+          path: dist/*.whl
+
+  build_macos_wheels:
+    name: Build macOS wheels (statically linked KLU)
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SuiteSparse
+        shell: bash
+        run: |
+          mkdir -p "$HOME/suitesparse"
+          curl -sL "https://github.com/chengts95/suitesparse-build/releases/download/v7.14.1/suitesparse-v7.14.1-macos-arm64-klu.tar.gz" -o ss.tar.gz
+          tar -xzf ss.tar.gz -C "$HOME/suitesparse" --strip-components=1
+          echo "SUITESPARSE_DIR=$HOME/suitesparse" >> "$GITHUB_ENV"
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: aarch64
+          args: --release --out dist --no-default-features --features python,archive,klu,arrow
+          sccache: 'true'
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-arm64
           path: dist/*.whl
