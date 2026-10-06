@@ -78,6 +78,7 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
+          brew install gcc
           mkdir -p "$HOME/suitesparse"
           curl -sL "https://github.com/chengts95/suitesparse-build/releases/download/v7.14.1/${{ matrix.asset }}" -o ss.tar.gz
           tar -xzf ss.tar.gz -C "$HOME/suitesparse" --strip-components=1
