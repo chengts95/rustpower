@@ -128,6 +128,16 @@ fn main() {
     println!("cargo:rustc-link-lib={}colamd", link_type);
     println!("cargo:rustc-link-lib={}suitesparseconfig", link_type);
 
+    if is_static && cfg!(target_os = "linux") {
+        println!("cargo:rustc-link-lib=gomp");
+        println!("cargo:rustc-link-lib=m");
+    }
+
+    let suitesparse_dir = env::var("SUITESPARSE_DIR").unwrap_or_default();
+    if !suitesparse_dir.is_empty() {
+        println!("cargo:rustc-link-search={}/lib", suitesparse_dir);
+    }
+
     if cfg!(target_os = "linux") {
         println!("cargo:rustc-link-search=/usr/local/lib");
         println!("cargo:rustc-link-search=/usr/lib");
@@ -152,6 +162,12 @@ fn main() {
         .blocklist_item("FP_INFINITE")
         .blocklist_item("FP_NAN")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()));
+
+    if !suitesparse_dir.is_empty() {
+        builder = builder
+            .clang_arg(format!("-I{}/include", suitesparse_dir))
+            .clang_arg(format!("-I{}/include/suitesparse", suitesparse_dir));
+    }
 
     if cfg!(target_os = "linux") {
         builder = builder
