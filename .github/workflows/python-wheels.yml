@@ -30,9 +30,9 @@ jobs:
           manylinux: 2_28
           before-script-linux: |
             if command -v dnf >/dev/null 2>&1; then
-              dnf install -y cmake clang libgomp || true
+              dnf install -y cmake clang libgomp openblas-devel || true
             elif command -v yum >/dev/null 2>&1; then
-              yum install -y cmake clang libgomp || true
+              yum install -y cmake clang libgomp openblas-devel || true
             fi
 
             # Build KLU static library directly inside container with x86-64-v3 (AVX2 + FMA)
