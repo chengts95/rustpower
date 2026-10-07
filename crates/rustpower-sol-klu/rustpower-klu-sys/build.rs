@@ -135,11 +135,14 @@ fn main() {
 
     let suitesparse_dir = env::var("SUITESPARSE_DIR").unwrap_or_default();
     if !suitesparse_dir.is_empty() {
+        println!("cargo:rustc-link-search={}/lib64", suitesparse_dir);
         println!("cargo:rustc-link-search={}/lib", suitesparse_dir);
     }
 
     if cfg!(target_os = "linux") {
+        println!("cargo:rustc-link-search=/usr/local/lib64");
         println!("cargo:rustc-link-search=/usr/local/lib");
+        println!("cargo:rustc-link-search=/usr/lib64");
         println!("cargo:rustc-link-search=/usr/lib");
     } else if cfg!(target_os = "macos") {
         // Search Homebrew paths
