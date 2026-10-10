@@ -9,12 +9,12 @@ use rustpower::lm::{gn_flat::GnDriver, gn_triu::GnTriuDriver};
 use serde::Serialize;
 
 pub(super) struct Case {
-    name: String,
-    y: CscMatrix<Complex64>,
-    s: Vec<Complex64>,
-    v: Vec<Complex64>,
-    npv: usize,
-    npq: usize,
+    pub(crate) name: String,
+    pub(crate) y: CscMatrix<Complex64>,
+    pub(crate) s: Vec<Complex64>,
+    pub(crate) v: Vec<Complex64>,
+    pub(crate) npv: usize,
+    pub(crate) npq: usize,
 }
 
 pub(super) fn load_case(name: &str) -> Case {
