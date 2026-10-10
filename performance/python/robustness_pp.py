@@ -31,6 +31,7 @@ from time import perf_counter
 import numpy as np
 import pandapower as pp
 import pandapower.networks as pn
+from pandapower.pypower.makeBdc import makeBdc
 
 DEFAULT_CASES = ["case39", "case118", "case300", "case6470rte", "case6495rte", "case6515rte"]
 ALPHA_STEP = 0.05
@@ -78,6 +79,10 @@ def run_once(net, init):
             s_re=S[order].real.tolist(), s_im=S[order].imag.tolist(),
             v_start_re=V[order].real.tolist(), v_start_im=V[order].imag.tolist(),
         ))
+        # DC 相移注入（与 rustpower ECS build_dcpf_model 同公式），供 import 模式
+        # 复现 pandapower 的 DC 启动；同一 permuted 母线顺序。
+        _, _, pbusinj, _, _ = makeBdc(ppci["bus"], ppci["branch"])
+        captured["p_shift"] = np.asarray(pbusinj).ravel()[order].tolist()
         t = perf_counter()
         result = original(Y, S, V, ref, pv, pq, ppci, options, *args)
         elapsed = perf_counter() - t
@@ -118,7 +123,7 @@ for case in cli.case or DEFAULT_CASES:
             cap = run_once(net, init)
             if base is None and init == "flat":
                 base = {k: cap[k] for k in
-                        ["nb", "npq", "npv", "cp", "ri", "y_re", "y_im", "s_re", "s_im"]}
+                        ["nb", "npq", "npv", "cp", "ri", "y_re", "y_im", "s_re", "s_im", "p_shift"]}
                 base["case"] = case
                 base["v_flat_re"] = cap["v_start_re"]
                 base["v_flat_im"] = cap["v_start_im"]
