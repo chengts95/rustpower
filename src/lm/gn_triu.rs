@@ -207,6 +207,9 @@ pub struct GnTriuDriver {
     pub(crate) rt: Vec<f64>,
     pub(crate) b: Vec<f64>, // 求解前[0; −r]，求解后[δ; s]，s = r + Jδ。
     pub(crate) vt: Vec<Complex64>,
+    // Cauchy 护送工作区（self_damped 的免分解路径；复数中间量）。
+    pub(crate) cw1: Vec<Complex64>,
+    pub(crate) cw2: Vec<Complex64>,
     pub(crate) n_act: usize,
     pub(crate) npq: usize,
     pub(crate) n_state: usize,
@@ -281,6 +284,8 @@ impl GnTriuDriver {
             rt: vec![0.0; n_state],
             b: vec![0.0; 2 * n_state],
             vt: vec![Complex64::new(0.0, 0.0); nb],
+            cw1: vec![Complex64::new(0.0, 0.0); nb],
+            cw2: vec![Complex64::new(0.0, 0.0); nb],
             n_act: n_pv + n_pq,
             npq: n_pq,
             n_state,
