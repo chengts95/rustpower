@@ -371,8 +371,12 @@ fn run_import(name: &str) {
         let alpha = row.alpha;
         let s_scaled: Vec<Complex64> = case.s.iter().map(|s| s * alpha).collect();
         let s_dvec = DVector::from_column_slice(&s_scaled);
-        let v_dc_ours =
-            dcpf_initial_v(&mut dc_model, &s_dvec, &v_init, &mut theta_ws, &mut dc_solver).ok();
+        let v_dc_ours = if bench::option("--pp-dc-start").is_some() {
+            // 实验开关：dc 行直接用 pandapower 的 dc 起点（裁决"起点差异"还是"求解器差异"）。
+            Some(DVector::from_column_slice(&complex(&row.dc_start_re, &row.dc_start_im)))
+        } else {
+            dcpf_initial_v(&mut dc_model, &s_dvec, &v_init, &mut theta_ws, &mut dc_solver).ok()
+        };
         let d_start = v_dc_ours.as_ref().map(|v| {
             max_dangle(&row.dc_start_re, &row.dc_start_im, v.as_slice(), n_act)
         });
