@@ -171,6 +171,17 @@ impl Solve for QDLDLSolver {
         Ok(())
     }
 
+    fn resolve(&mut self, b: &mut [f64]) -> Result<(), &'static str> {
+        let s = self
+            .symbolic
+            .as_mut()
+            .ok_or("QDLDL resolve: no factorization to reuse")?;
+        crate::timeit!(qdldl_probe::SOLVE_NS, {
+            s.factor.solve(b);
+        });
+        Ok(())
+    }
+
     fn reset(&mut self) {
         self.symbolic = None;
     }

@@ -15,7 +15,7 @@
 //! 输出 JSONL + 每算例四堵墙汇总；更密的网格留作后处理，不在此自适应。
 
 use super::comparison::{Case, load_case};
-use super::harness::{MAXIT, TOL, lm_options, run_gn, run_nr, run_sd};
+use super::harness::{MAXIT, TOL, lm_options, run_gn, run_nr, run_sd, run_ts};
 use crate::bench;
 use nalgebra::DVector;
 use num_complex::Complex64;
@@ -40,10 +40,13 @@ fn sweep_case(case: &Case, out: &mut Vec<serde_json::Value>) {
     let mut gn_solver = QDLDLSolver::default();
     let (opts, options_note) = lm_options();
 
-    // 六格各自的墙（最后收敛的 α）；分开记"干净解"与"含低压解"。
-    // 方法：NR = 生产 Newton；GN = 调度/信赖域 LM；SD = γ=‖F‖² 自缩放阻尼（独立算法）。
-    let mut wall = vec![(-1.0f64, -1.0f64); 6]; // (last_converged, last_clean)
-    let labels = ["flat+NR", "flat+GN", "flat+SD", "dc+NR", "dc+GN", "dc+SD"];
+    // 八格各自的墙（最后收敛的 α）；分开记"干净解"与"含低压解"。
+    // 方法：NR = 生产 Newton；GN = 调度/信赖域 LM；SD = γ=‖F‖² 自缩放阻尼；
+    // TS = SD 的三步复合（一次分解三枪，TSLM）。
+    let mut wall = vec![(-1.0f64, -1.0f64); 8]; // (last_converged, last_clean)
+    let labels = [
+        "flat+NR", "flat+GN", "flat+SD", "flat+TS", "dc+NR", "dc+GN", "dc+SD", "dc+TS",
+    ];
 
     let mut alpha = 1.0;
     println!(
@@ -58,7 +61,7 @@ fn sweep_case(case: &Case, out: &mut Vec<serde_json::Value>) {
         let s_dvec = DVector::from_column_slice(&s_scaled);
         let v_dc = dcpf_initial_v(&mut dc_model, &s_dvec, &v_init, &mut theta_ws, &mut dc_solver).ok();
 
-        let mut cells = Vec::with_capacity(6);
+        let mut cells = Vec::with_capacity(8);
         let (mut c, _) = run_nr(case, &s_dvec, &case.v);
         c.start = "flat";
         c.method = "nr";
@@ -70,6 +73,10 @@ fn sweep_case(case: &Case, out: &mut Vec<serde_json::Value>) {
         let mut c = run_sd(case, &mut gn, &mut gn_solver, &s_scaled, &case.v);
         c.start = "flat";
         c.method = "sd";
+        cells.push(c);
+        let mut c = run_ts(case, &mut gn, &mut gn_solver, &s_scaled, &case.v);
+        c.start = "flat";
+        c.method = "ts";
         cells.push(c);
         if let Some(v0) = &v_dc {
             let (mut c, _) = run_nr(case, &s_dvec, v0.as_slice());
@@ -83,6 +90,10 @@ fn sweep_case(case: &Case, out: &mut Vec<serde_json::Value>) {
             let mut c = run_sd(case, &mut gn, &mut gn_solver, &s_scaled, v0.as_slice());
             c.start = "dc";
             c.method = "sd";
+            cells.push(c);
+            let mut c = run_ts(case, &mut gn, &mut gn_solver, &s_scaled, v0.as_slice());
+            c.start = "dc";
+            c.method = "ts";
             cells.push(c);
         }
 
@@ -110,13 +121,15 @@ fn sweep_case(case: &Case, out: &mut Vec<serde_json::Value>) {
                 .unwrap_or_else(|| "dc失败".into())
         };
         println!(
-            "  α={alpha:.2} | flat: NR {:>6} GN {:>6} SD {:>6} | dc: NR {:>6} GN {:>6} SD {:>6}",
+            "  α={alpha:.2} | flat: NR {:>6} GN {:>6} SD {:>6} TS {:>6} | dc: NR {:>6} GN {:>6} SD {:>6} TS {:>6}",
             show("flat", "nr"),
             show("flat", "gn"),
             show("flat", "sd"),
+            show("flat", "ts"),
             show("dc", "nr"),
             show("dc", "gn"),
             show("dc", "sd"),
+            show("dc", "ts"),
         );
 
         let all_failed = cells.iter().all(|c| !c.converged);
@@ -277,8 +290,12 @@ fn run_import(name: &str) {
     let (opts, options_note) = lm_options();
 
     let mut out = Vec::new();
-    let mut walls = vec![-1.0f64; 8]; // our flatNR flatGN flatSD dcNR dcGN dcSD | pp flat dc
-    let wall_labels = ["our flat+NR", "our flat+GN", "our flat+SD", "our dc+NR", "our dc+GN", "our dc+SD", "pp flat", "pp dc"];
+    let mut walls = vec![-1.0f64; 10]; // our flatNR flatGN flatSD flatTS dcNR dcGN dcSD dcTS | pp flat dc
+    let wall_labels = [
+        "our flat+NR", "our flat+GN", "our flat+SD", "our flat+TS",
+        "our dc+NR", "our dc+GN", "our dc+SD", "our dc+TS",
+        "pp flat", "pp dc",
+    ];
 
     println!("\n=== {name}（pandapower 同模型对照）| GN: {options_note} | SD: γ=‖F‖² ===");
     for line in lines {
@@ -296,7 +313,7 @@ fn run_import(name: &str) {
             max_dangle(&row.dc_start_re, &row.dc_start_im, v.as_slice(), n_act)
         });
 
-        let mut cells = Vec::with_capacity(6);
+        let mut cells = Vec::with_capacity(8);
         let mut v_dc_nr: Option<Vec<Complex64>> = None;
         let (mut c, v_flat_nr) = run_nr(&case, &s_dvec, &case.v);
         let v_flat_nr = Some(v_flat_nr);
@@ -310,6 +327,10 @@ fn run_import(name: &str) {
         let mut c = run_sd(&case, &mut gn, &mut gn_solver, &s_scaled, &case.v);
         c.start = "flat";
         c.method = "sd";
+        cells.push(c);
+        let mut c = run_ts(&case, &mut gn, &mut gn_solver, &s_scaled, &case.v);
+        c.start = "flat";
+        c.method = "ts";
         cells.push(c);
         if let Some(v0) = &v_dc_ours {
             let (mut c, v) = run_nr(&case, &s_dvec, v0.as_slice());
@@ -325,6 +346,10 @@ fn run_import(name: &str) {
             c.start = "dc";
             c.method = "sd";
             cells.push(c);
+            let mut c = run_ts(&case, &mut gn, &mut gn_solver, &s_scaled, v0.as_slice());
+            c.start = "dc";
+            c.method = "ts";
+            cells.push(c);
         }
         for (idx, cell) in cells.iter().enumerate() {
             if cell.converged {
@@ -332,10 +357,10 @@ fn run_import(name: &str) {
             }
         }
         if row.flat.converged {
-            walls[6] = alpha;
+            walls[8] = alpha;
         }
         if row.dc.converged {
-            walls[7] = alpha;
+            walls[9] = alpha;
         }
 
         // 电压对照（双方均收敛时）：ours flat+NR vs pp flat，ours dc+NR vs pp dc。
@@ -349,7 +374,7 @@ fn run_import(name: &str) {
             Some(max_dv(&pp_v, ours))
         };
         let dv_flat = if cells[0].converged { dv(&v_flat_nr, &row.flat) } else { None };
-        let dv_dc = if cells.get(3).map(|c| c.converged).unwrap_or(false) {
+        let dv_dc = if cells.get(4).map(|c| c.converged).unwrap_or(false) {
             dv(&v_dc_nr, &row.dc)
         } else {
             None
@@ -370,13 +395,15 @@ fn run_import(name: &str) {
             }
         };
         println!(
-            "  α={alpha:.2} | our flat: NR {:>5} GN {:>5} SD {:>5} | our dc: NR {:>5} GN {:>5} SD {:>5} | pp: flat {:>5} dc {:>5} | ΔV flat {} dc {} | Δθstart {}",
+            "  α={alpha:.2} | our flat: NR {:>5} GN {:>5} SD {:>5} TS {:>5} | our dc: NR {:>5} GN {:>5} SD {:>5} TS {:>5} | pp: flat {:>5} dc {:>5} | ΔV flat {} dc {} | Δθstart {}",
             show("flat", "nr"),
             show("flat", "gn"),
             show("flat", "sd"),
+            show("flat", "ts"),
             show("dc", "nr"),
             show("dc", "gn"),
             show("dc", "sd"),
+            show("dc", "ts"),
             pp_mark(&row.flat),
             pp_mark(&row.dc),
             dv_flat.map(|x| format!("{x:.1e}")).unwrap_or("—".into()),
