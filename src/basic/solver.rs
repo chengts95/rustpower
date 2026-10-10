@@ -77,5 +77,16 @@ pub trait Solve {
         _n: usize,
     ) -> Result<(), &'static str>;
 
+    /// Re-solves with a fresh right-hand side, reusing the factorization
+    /// from the most recent `solve`. Only valid while the matrix values
+    /// are unchanged since that call. Composite-step methods (e.g. TSLM)
+    /// use this to fire several right-hand sides through one factorization.
+    /// Backends that cannot separate factor and triangular-solve phases
+    /// keep this default; callers must treat `Err` as "not supported" and
+    /// fall back to a full `solve` (numerically identical, just refactored).
+    fn resolve(&mut self, _b: &mut [f64]) -> Result<(), &'static str> {
+        Err("resolve: backend cannot reuse its factorization")
+    }
+
     fn reset(&mut self);
 }

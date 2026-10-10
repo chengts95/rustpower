@@ -151,6 +151,19 @@ pub(super) fn run_sd(case: &Case, driver: &mut GnTriuDriver, solver: &mut QDLDLS
     finish(case, s, &v, r.converged, r.iterations, driver.n_solves, t)
 }
 
+/// TSLM：三步复合自缩放阻尼（一次分解三枪；见 rustpower::lm::self_damped）。
+pub(super) fn run_ts(case: &Case, driver: &mut GnTriuDriver, solver: &mut QDLDLSolver, s: &[Complex64], v0: &[Complex64]) -> Cell {
+    driver.sbus.clear();
+    driver.sbus.extend_from_slice(s);
+    let mut v = v0.to_vec();
+    let t = Instant::now();
+    let maxit = bench::option("--sd-maxit")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(MAXIT);
+    let r = driver.solve_self_damped_ts(&case.y, solver, &mut v, TOL, maxit);
+    finish(case, s, &v, r.converged, r.iterations, driver.n_solves, t)
+}
+
 /// `--lm-options '<json>'`：LmOptions 的 serde JSON，缺省字段用 Default。
 pub(super) fn lm_options() -> (LmOptions, String) {
     match bench::option("--lm-options") {
