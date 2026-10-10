@@ -117,7 +117,7 @@ fn run_nr(case: &Case, s: &DVector<Complex64>, v0: &[Complex64]) -> (Cell, Vec<C
 }
 
 /// GN 驱动在整个 α 扫描上复用（符号结构与 α 无关；sbus 逐格覆盖）。
-fn run_gn(case: &Case, driver: &mut GnTriuDriver, solver: &mut QDLDLSolver, s: &[Complex64], v0: &[Complex64]) -> Cell {
+fn run_gn(case: &Case, driver: &mut GnTriuDriver, solver: &mut QDLDLSolver, s: &[Complex64], v0: &[Complex64], opts: &LmOptions) -> Cell {
     driver.sbus.clear();
     driver.sbus.extend_from_slice(s);
     let mut v = v0.to_vec();
@@ -128,9 +128,21 @@ fn run_gn(case: &Case, driver: &mut GnTriuDriver, solver: &mut QDLDLSolver, s: &
         &mut v,
         TOL,
         MAXIT,
-        &LmOptions::default(),
+        opts,
     );
     finish(case, s, &v, r.converged, r.iterations, driver.n_solves, t)
+}
+
+/// `--lm-options '<json>'`：LmOptions 的 serde JSON，缺省字段用 Default。
+fn lm_options() -> (LmOptions, String) {
+    match bench::option("--lm-options") {
+        Some(json) => {
+            let opts: LmOptions = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("--lm-options JSON 解析失败: {e}"));
+            (opts, json)
+        }
+        None => (LmOptions::default(), "LmOptions::default()".into()),
+    }
 }
 
 fn sweep_case(case: &Case, out: &mut Vec<serde_json::Value>) {
@@ -144,7 +156,7 @@ fn sweep_case(case: &Case, out: &mut Vec<serde_json::Value>) {
     let mut theta_ws = vec![0.0; n_act];
     let mut gn = GnTriuDriver::build_operator(&case.y, case.npv, case.npq, case.s.clone());
     let mut gn_solver = QDLDLSolver::default();
-    let options_note = "LmOptions::default()";
+    let (opts, options_note) = lm_options();
 
     // 四格各自的墙（最后收敛的 α）；分开记"干净解"与"含低压解"。
     let mut wall = vec![(-1.0f64, -1.0f64); 4]; // (last_converged, last_clean)
@@ -168,7 +180,7 @@ fn sweep_case(case: &Case, out: &mut Vec<serde_json::Value>) {
         c.start = "flat";
         c.method = "nr";
         cells.push(c);
-        let mut c = run_gn(case, &mut gn, &mut gn_solver, &s_scaled, &case.v);
+        let mut c = run_gn(case, &mut gn, &mut gn_solver, &s_scaled, &case.v, &opts);
         c.start = "flat";
         c.method = "gn";
         cells.push(c);
@@ -177,7 +189,7 @@ fn sweep_case(case: &Case, out: &mut Vec<serde_json::Value>) {
             c.start = "dc";
             c.method = "nr";
             cells.push(c);
-            let mut c = run_gn(case, &mut gn, &mut gn_solver, &s_scaled, v0.as_slice());
+            let mut c = run_gn(case, &mut gn, &mut gn_solver, &s_scaled, v0.as_slice(), &opts);
             c.start = "dc";
             c.method = "gn";
             cells.push(c);
@@ -275,6 +287,10 @@ struct PpBase {
     s_im: Vec<f64>,
     v_flat_re: Vec<f64>,
     v_flat_im: Vec<f64>,
+    /// DC 相移注入（pandapower makeBdc 的 Pbusinj，permuted 顺序）；
+    /// 旧版导出文件没有此字段，按零注入退化。
+    #[serde(default)]
+    p_shift: Vec<f64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -354,18 +370,24 @@ fn run_import(name: &str) {
     let n_act = case.npv + case.npq;
     let v_init = DVector::from_column_slice(&case.v);
     let identity: Vec<usize> = (0..case.v.len()).collect();
-    let zeros = vec![0.0; case.v.len()];
-    let mut dc_model = DcpfModel::from_ybus(&case.y, &v_init, n_act, &identity, &zeros);
+    // DC 相移注入：导出文件带 p_shift 时用真实值（与生产 ECS 路径一致），否则零注入。
+    let p_shift = if base.p_shift.len() == case.v.len() {
+        base.p_shift.clone()
+    } else {
+        vec![0.0; case.v.len()]
+    };
+    let mut dc_model = DcpfModel::from_ybus(&case.y, &v_init, n_act, &identity, &p_shift);
     let mut dc_solver = KLUSolver::default();
     let mut theta_ws = vec![0.0; n_act];
     let mut gn = GnTriuDriver::build_operator(&case.y, case.npv, case.npq, case.s.clone());
     let mut gn_solver = QDLDLSolver::default();
+    let (opts, options_note) = lm_options();
 
     let mut out = Vec::new();
     let mut walls = vec![-1.0f64; 6]; // our flatNR flatGN dcNR dcGN | pp flat dc
     let wall_labels = ["our flat+NR", "our flat+GN", "our dc+NR", "our dc+GN", "pp flat", "pp dc"];
 
-    println!("\n=== {name}（pandapower 同模型对照）===");
+    println!("\n=== {name}（pandapower 同模型对照）| GN: {options_note} ===");
     for line in lines {
         let row: PpRow = serde_json::from_str(line).unwrap();
         let alpha = row.alpha;
@@ -388,7 +410,7 @@ fn run_import(name: &str) {
         c.start = "flat";
         c.method = "nr";
         cells.push(c);
-        let mut c = run_gn(&case, &mut gn, &mut gn_solver, &s_scaled, &case.v);
+        let mut c = run_gn(&case, &mut gn, &mut gn_solver, &s_scaled, &case.v, &opts);
         c.start = "flat";
         c.method = "gn";
         cells.push(c);
@@ -398,7 +420,7 @@ fn run_import(name: &str) {
             c.method = "nr";
             v_dc_nr = Some(v);
             cells.push(c);
-            let mut c = run_gn(&case, &mut gn, &mut gn_solver, &s_scaled, v0.as_slice());
+            let mut c = run_gn(&case, &mut gn, &mut gn_solver, &s_scaled, v0.as_slice(), &opts);
             c.start = "dc";
             c.method = "gn";
             cells.push(c);
