@@ -108,6 +108,7 @@ pub(super) fn run_gn(case: &Case, driver: &mut GnTriuDriver, solver: &mut QDLDLS
     driver.sbus.extend_from_slice(s);
     let mut v = v0.to_vec();
     let t = Instant::now();
+    let solves0 = driver.n_solves;
     let r = driver.solve_gn_with_options(
         &case.y,
         solver,
@@ -116,7 +117,9 @@ pub(super) fn run_gn(case: &Case, driver: &mut GnTriuDriver, solver: &mut QDLDLS
         MAXIT,
         opts,
     );
-    finish(case, s, &v, r.converged, r.iterations, driver.n_solves, t)
+    // n_solves 是驱动的跨调用累计计数；每格记差值（TR 拒绝的试步也是分解，
+    // 比较 TR vs TS 的分解成本靠这个数）。
+    finish(case, s, &v, r.converged, r.iterations, driver.n_solves - solves0, t)
 }
 
 /// 与 run_gn 相同，但带回终止电压（LS 证书实验需要残差分布）。
@@ -125,6 +128,7 @@ pub(super) fn run_gn_v(case: &Case, driver: &mut GnTriuDriver, solver: &mut QDLD
     driver.sbus.extend_from_slice(s);
     let mut v = v0.to_vec();
     let t = Instant::now();
+    let solves0 = driver.n_solves;
     let r = driver.solve_gn_with_options(
         &case.y,
         solver,
@@ -133,7 +137,7 @@ pub(super) fn run_gn_v(case: &Case, driver: &mut GnTriuDriver, solver: &mut QDLD
         MAXIT,
         opts,
     );
-    (finish(case, s, &v, r.converged, r.iterations, driver.n_solves, t), v)
+    (finish(case, s, &v, r.converged, r.iterations, driver.n_solves - solves0, t), v)
 }
 
 /// 自缩放阻尼 LM（γ=‖F‖² 全步走，无步控；见 rustpower::lm::self_damped）。
@@ -147,8 +151,9 @@ pub(super) fn run_sd(case: &Case, driver: &mut GnTriuDriver, solver: &mut QDLDLS
     let maxit = bench::option("--sd-maxit")
         .and_then(|s| s.parse().ok())
         .unwrap_or(MAXIT);
+    let solves0 = driver.n_solves;
     let r = driver.solve_self_damped(&case.y, solver, &mut v, TOL, maxit);
-    finish(case, s, &v, r.converged, r.iterations, driver.n_solves, t)
+    finish(case, s, &v, r.converged, r.iterations, driver.n_solves - solves0, t)
 }
 
 /// TSLM：三步复合自缩放阻尼（一次分解三枪；见 rustpower::lm::self_damped）。
@@ -160,8 +165,9 @@ pub(super) fn run_ts(case: &Case, driver: &mut GnTriuDriver, solver: &mut QDLDLS
     let maxit = bench::option("--sd-maxit")
         .and_then(|s| s.parse().ok())
         .unwrap_or(MAXIT);
+    let solves0 = driver.n_solves;
     let r = driver.solve_self_damped_ts(&case.y, solver, &mut v, TOL, maxit);
-    finish(case, s, &v, r.converged, r.iterations, driver.n_solves, t)
+    finish(case, s, &v, r.converged, r.iterations, driver.n_solves - solves0, t)
 }
 
 /// `--lm-options '<json>'`：LmOptions 的 serde JSON，缺省字段用 Default。
