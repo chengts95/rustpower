@@ -45,10 +45,14 @@
 //!   is declared failed. This only shortens the step — no history is kept
 //!   between iterations, so the method remains state-driven.
 //! - **Stationarity stop**: besides `res_inf < tol` we stop when the merit
-//!   stagnates (`|Δf| ≤ 1e-12·max(1, f)` after an accepted step). That is
+//!   stagnates (`|Δf| ≤ 1e-12·f` after an accepted step). That is
 //!   the practical form of the literature's `‖JᵀF‖ = 0` test and lets the
 //!   loop exit at least-squares points of infeasible specs instead of
-//!   burning the remaining iterations.
+//!   burning the remaining iterations. The threshold is relative to `f`
+//!   itself — an absolute floor (e.g. `max(1, f)`) misreads the slow final
+//!   approach on ill-conditioned cases as stagnation and kills runs that
+//!   were still converging (observed on case6495rte α=1.05, stopped at
+//!   f ≈ 2e-13 one step before the quadratic finish).
 
 use crate::basic::solver::Solve;
 use crate::lm::residual::residual_with_power;
@@ -97,7 +101,9 @@ impl GnTriuDriver {
                 return GnTriuResult { iterations: it, converged: true, res_inf };
             }
             // Stationarity (least-squares point): merit no longer decreases.
-            if (merit - f).abs() <= STAGNATION * f.max(1.0) {
+            // Relative to f: an absolute floor misjudges the slow final
+            // approach as stagnation (see module docs).
+            if (merit - f).abs() <= STAGNATION * f {
                 return GnTriuResult { iterations: it, converged: false, res_inf };
             }
             merit = f;
