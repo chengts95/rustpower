@@ -22,6 +22,7 @@ No reactive-limit switching, distributed slack, or ZIP loads; the stopping
 tolerance is passed as 1e-8 (pandapower's tolerance_mva field) on both sides.
 """
 import argparse
+import copy
 import importlib
 import json
 from pathlib import Path
@@ -93,8 +94,11 @@ def run_once(net, init):
 
     mod.newtonpf = capture
     try:
-        pp.runpp(net, init=init, max_iteration=MAX_ITER, tolerance_mva=TOL,
-                 enforce_q_lims=False, distributed_slack=False)
+        try:
+            pp.runpp(net, init=init, max_iteration=MAX_ITER, tolerance_mva=TOL,
+                     enforce_q_lims=False, distributed_slack=False, numba=False)
+        except pp.LoadflowNotConverged:
+            pass  # capture() 已记录 converged=False 的完整结果
     finally:
         mod.newtonpf = original
     return captured
@@ -109,7 +113,7 @@ for case in cli.case or DEFAULT_CASES:
     while alpha <= cli.alpha_max + 1e-9:
         row = {"alpha": round(alpha, 4)}
         for init in ["flat", "dc"]:
-            net = net0.deepcopy()
+            net = copy.deepcopy(net0)
             scale_injections(net, alpha)
             cap = run_once(net, init)
             if base is None and init == "flat":
