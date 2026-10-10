@@ -8,7 +8,7 @@ use num_complex::Complex64;
 use rustpower::lm::{gn_flat::GnDriver, gn_triu::GnTriuDriver};
 use serde::Serialize;
 
-pub(super) struct Case {
+pub(crate) struct Case {
     pub(crate) name: String,
     pub(crate) y: CscMatrix<Complex64>,
     pub(crate) s: Vec<Complex64>,
@@ -17,7 +17,7 @@ pub(super) struct Case {
     pub(crate) npq: usize,
 }
 
-pub(super) fn load_case(name: &str) -> Case {
+pub(crate) fn load_case(name: &str) -> Case {
     use crate::basic::ecs::{
         elements::PPNetwork,
         network::{DataOps, PowerFlow, PowerGrid},
@@ -53,7 +53,7 @@ struct Export {
     v_re: Vec<f64>,
     v_im: Vec<f64>,
 }
-pub(super) fn load_6515(init: &str) -> Case {
+pub(crate) fn load_6515(init: &str) -> Case {
     let path = format!(
         "{}/target/research/lm_audit/6515rte_{init}.json",
         env!("CARGO_MANIFEST_DIR")
@@ -83,7 +83,7 @@ pub(super) fn load_6515(init: &str) -> Case {
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
-pub(super) enum Method {
+pub(crate) enum Method {
     FullBaseline,
     FullOperator,
     UpperBaseline,
@@ -91,7 +91,7 @@ pub(super) enum Method {
 }
 
 #[derive(Serialize)]
-pub(super) struct Measurement {
+pub(crate) struct Measurement {
     pub build_ms: f64,
     pub solve_ms: f64,
     pub fill_ms: f64,
@@ -136,7 +136,7 @@ macro_rules! measurement {
     };
 }
 
-pub(super) fn run_with_options(
+pub(crate) fn run_with_options(
     case: &Case,
     method: Method,
     max_iter: usize,
@@ -181,7 +181,7 @@ pub(super) fn run_with_options(
 }
 
 /// 正规方程的两种乘积模式及所有线性后端共用此调用。
-pub(super) fn run_normal<S: crate::basic::solver::Solve>(
+pub(crate) fn run_normal<S: crate::basic::solver::Solve>(
     case: &Case,
     solver: &mut S,
     rebuild: bool,
@@ -420,7 +420,7 @@ impl AssemblyMethod {
     }
 }
 
-pub(super) fn benchmark_cases() -> Vec<Case> {
+pub(crate) fn benchmark_cases() -> Vec<Case> {
     let cases: Vec<_> = [
         "IEEE39",
         "IEEE118",
@@ -439,7 +439,7 @@ pub(super) fn benchmark_cases() -> Vec<Case> {
     assert!(!cases.is_empty(), "--case没有匹配的LM算例");
     cases
 }
-pub(super) fn benchmark_options(case: &Case) -> rustpower::lm::LmOptions {
+pub(crate) fn benchmark_options(case: &Case) -> rustpower::lm::LmOptions {
     let mut options = rustpower::lm::LmOptions::default();
     if case.name.ends_with("flat") {
         options.trust_region = Some(Default::default());
