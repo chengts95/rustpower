@@ -1,6 +1,6 @@
 //! 运行LM已有的原填充/operator切换，直接读取驱动器内置计时器。
 //! taskset -c 1 cargo bench --features benchmark --bench comparison -- v4vsoperator
-use super::lm_comparison::{Method, load_case, run_with_options};
+use super::lm_exp::comparison::{Method, load_case, run_with_options};
 use num_complex::Complex64;
 use rustpower::lm::LmOptions;
 use serde_json::json;

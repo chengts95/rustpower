@@ -4,9 +4,9 @@
 //! 协议（每个算例、每个 α 四格完全同参）：
 //! - 指定注入 S_spec × α（P、Q 同步缩放，功率因数不变）；
 //! - flat 起点 = 算例自带初值；dc 起点 = 生产 DCPF 插件同一模型
-//!   （`DcpfModel::from_ybus` + `dcpf_initial_v`，相移注入置零）；
+//!   （import 模式带 pandapower 相移注入，zip 算例置零）；
 //! - NR = 生产 `newton_pf`（KLU）；GN = 生产默认路径
-//!   （triu-operator + QDLDL，`LmOptions::default()`）；
+//!   （triu-operator + QDLDL，参数见 --lm-options）；
 //! - tol∞ = 1e-8，外层上限 300。
 //!
 //! 每格记录：收敛/失败、迭代数（GN 另记线性求解次数）、独立残差∞、
@@ -14,136 +14,18 @@
 //! 用于识别鼻点附近的非物理解支）。α 以 0.05 步进，四格全败即停，上限 3.0。
 //! 输出 JSONL + 每算例四堵墙汇总；更密的网格留作后处理，不在此自适应。
 
+use super::comparison::{Case, load_case};
+use super::harness::{Cell, MAXIT, TOL, lm_options, run_gn, run_nr};
 use crate::bench;
-use crate::lm_comparison::{Case, load_case};
 use nalgebra::DVector;
 use num_complex::Complex64;
 use rustpower::basic::dcpf::{DcpfModel, dcpf_initial_v};
-use rustpower::basic::newtonpf::newton_pf;
 use rustpower::basic::solver::{KLUSolver, QDLDLSolver};
-use rustpower::lm::LmOptions;
 use rustpower::lm::gn_triu::GnTriuDriver;
 use serde_json::json;
-use std::time::Instant;
 
-const TOL: f64 = 1e-8;
-const MAXIT: usize = 300;
 const ALPHA_STEP: f64 = 0.05;
 const ALPHA_MAX: f64 = 3.0;
-/// PQ 最小幅值低于此值视为可疑低压解支（原始数值同时记录，可后处理调整）。
-const LOW_VMAG: f64 = 0.8;
-
-struct Cell {
-    start: &'static str,
-    method: &'static str,
-    converged: bool,
-    iterations: usize,
-    linear_solves: u64,
-    res_inf: f64,
-    merit: f64,
-    min_vmag_pq: f64,
-    wall_ms: f64,
-}
-
-impl Cell {
-    fn outcome(&self) -> &'static str {
-        if !self.converged {
-            "failed"
-        } else if self.min_vmag_pq < LOW_VMAG {
-            "low_voltage"
-        } else {
-            "solution"
-        }
-    }
-
-    fn mark(&self) -> String {
-        match self.outcome() {
-            "solution" => format!("✓{}", self.iterations),
-            "low_voltage" => format!("⚠{}({:.2})", self.iterations, self.min_vmag_pq),
-            _ => "✗".into(),
-        }
-    }
-}
-
-/// 独立的 (∞范数, ½‖r‖²) 统计，不依赖任何驱动的内部残差。
-fn residual_stats(case: &Case, s: &[Complex64], v: &[Complex64]) -> (f64, f64) {
-    let current = &case.y * &DVector::from_column_slice(v);
-    let (mut inf, mut ssq) = (0.0_f64, 0.0_f64);
-    for i in 0..case.npv + case.npq {
-        let r = v[i] * current[i].conj() - s[i];
-        if !r.re.is_finite() || !r.im.is_finite() {
-            return (f64::INFINITY, f64::INFINITY);
-        }
-        inf = inf.max(r.re.abs());
-        ssq += r.re * r.re;
-        if i < case.npq {
-            inf = inf.max(r.im.abs());
-            ssq += r.im * r.im;
-        }
-    }
-    (inf, 0.5 * ssq)
-}
-
-fn finish(case: &Case, s: &[Complex64], v: &[Complex64], converged: bool, iterations: usize, linear_solves: u64, wall: Instant) -> Cell {
-    let (res_inf, merit) = residual_stats(case, s, v);
-    let min_vmag_pq = v[..case.npq]
-        .iter()
-        .map(|x| x.norm())
-        .fold(f64::INFINITY, f64::min);
-    // 声称收敛但独立残差不达标：按失败处理（生产残差与独立残差同源，仅防御）。
-    let converged = converged && res_inf < TOL;
-    Cell {
-        start: "",
-        method: "",
-        converged,
-        iterations,
-        linear_solves,
-        res_inf,
-        merit,
-        min_vmag_pq,
-        wall_ms: wall.elapsed().as_secs_f64() * 1e3,
-    }
-}
-
-fn run_nr(case: &Case, s: &DVector<Complex64>, v0: &[Complex64]) -> (Cell, Vec<Complex64>) {
-    let t = Instant::now();
-    let mut solver = KLUSolver::default();
-    let v0 = DVector::from_column_slice(v0);
-    let (cell, v) = match newton_pf(&case.y, s, &v0, case.npv, case.npq, Some(TOL), Some(MAXIT), &mut solver, None) {
-        Ok((v, it)) => (finish(case, s.as_slice(), v.as_slice(), true, it, 0, t), v),
-        Err((_, v, it)) => (finish(case, s.as_slice(), v.as_slice(), false, it, 0, t), v),
-    };
-    (cell, v.as_slice().to_vec())
-}
-
-/// GN 驱动在整个 α 扫描上复用（符号结构与 α 无关；sbus 逐格覆盖）。
-fn run_gn(case: &Case, driver: &mut GnTriuDriver, solver: &mut QDLDLSolver, s: &[Complex64], v0: &[Complex64], opts: &LmOptions) -> Cell {
-    driver.sbus.clear();
-    driver.sbus.extend_from_slice(s);
-    let mut v = v0.to_vec();
-    let t = Instant::now();
-    let r = driver.solve_gn_with_options(
-        &case.y,
-        solver,
-        &mut v,
-        TOL,
-        MAXIT,
-        opts,
-    );
-    finish(case, s, &v, r.converged, r.iterations, driver.n_solves, t)
-}
-
-/// `--lm-options '<json>'`：LmOptions 的 serde JSON，缺省字段用 Default。
-fn lm_options() -> (LmOptions, String) {
-    match bench::option("--lm-options") {
-        Some(json) => {
-            let opts: LmOptions = serde_json::from_str(&json)
-                .unwrap_or_else(|e| panic!("--lm-options JSON 解析失败: {e}"));
-            (opts, json)
-        }
-        None => (LmOptions::default(), "LmOptions::default()".into()),
-    }
-}
 
 fn sweep_case(case: &Case, out: &mut Vec<serde_json::Value>) {
     let n_act = case.npv + case.npq;
