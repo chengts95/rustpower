@@ -1,0 +1,139 @@
+% !TeX program = pdflatex
+% LMPF preprint skeleton — outline only.
+% Each (sub)section carries 1-2 guiding sentences in the text;
+% Chinese % TODO comments mark the experiments/data to (re)generate.
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb,booktabs,graphicx,hyperref}
+\usepackage[margin=1in]{geometry}
+
+\title{A Symbolic Levenberg--Marquardt Power Flow Engine:\\
+Fast Assembly, Honest Accounting, and the Least-Squares Role of LMPF}
+\author{(authors)}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+% 一句话电梯稿：我们造了最快的 LMPF 引擎；用它按统一口径复测文献的
+% “病态潮流”场景，发现所谓病态大多可被 dc 启动的 NR 直接求解，
+% 既往性能声明不可复现；LMPF 的正确定位是最小二乘解的研究工具。
+\end{abstract}
+
+\section{Introduction}
+Power flow is folklore-solved, yet the literature keeps reporting Newton failures on
+``ill-conditioned'' systems and remedies built on the Levenberg--Marquardt (LM) idea.
+This paper contributes: (1) an LMPF engine whose assembly cost is eliminated by reusing a
+symbolic Jacobian operator; (2) a symmetric-factorization path (QDLDL) that beats
+general-purpose LU on the LM normal equations; (3) a controlled numerical re-examination
+showing that today's so-called ill-conditioned scenarios yield directly to a dc-started
+Newton--Raphson, and that prior performance claims do not reproduce; (4) a repositioning
+of LMPF as an instrument for least-squares analysis of power flow equations.
+% TODO 实验: 无（引言回收第 5 节数字：RTE dc+NR 迭代数、2383wp 4 次收敛、
+%            11 节点 merit 驻点值、TSLM 记账对比 44--48 vs 152--504 次分解）
+
+\section{Background and Problem Setup}
+\subsection{Power Flow Equations and Newton--Raphson}
+Standard mismatch formulation $F(x)=0$ in polar coordinates; reduced Jacobian structure
+and the $[\mathrm{PQ}|\mathrm{PV}|\mathrm{slack}]$ ordering used throughout.
+\subsection{The Levenberg--Marquardt Family}
+One umbrella: $(J^{\top}J+\mu I)\,\delta = -J^{\top}F$. Variants differ only in how $\mu$
+is chosen (residual-scaled $\gamma=\|F\|^2$, trust region) and in how many right-hand sides
+each factorization serves.
+\subsection{DC Initialization}
+The dc model as an angle initializer: one linear solve, exact for the angle channel up to
+phase-shifter injections. We state precisely what it fixes and what it cannot fix
+(voltage magnitudes stay flat).
+% TODO 实验: 无新实验；引用 RTE 的 Δθstart 量级（~0.03--0.05 rad）说明 dc 角度质量
+
+\section{The LMPF Engine}
+\subsection{Symbolic Jacobian Operator Reuse}
+The production ACPF symbolic operator (Ybus-driven, pre-sorted CSC) transfers verbatim to
+LMPF; sparsity analysis is done once per topology, not per iteration.
+\subsection{Direct-Offset Fill}
+Diagonal entries and per-column starts are computed from the Ybus base offsets;
+assembly is a straight-line pass with no COO round-trip.
+\subsection{Normal-Equation Symbolic Analysis and Symmetric Factorization}
+The nonzero pattern of $J^{\top}J+\mu I$ is built symbolically; QDLDL factorizes the SPD
+system. Measured against KLU on identical iterates.
+\subsection{Factorization Reuse (resolve)}
+The solver interface exposes a pure-triangular resolve; composite-step methods
+(one factorization, several right-hand sides) ride on it.
+% TODO 实验: 重做组装/分解占比基准（6470/6495/6515/2383wp/9241），
+%            QDLDL vs KLU 同迭代序列计时表；chord resolve 单次回代成本
+
+\section{Evaluation Methodology}
+Three confounds have never been controlled simultaneously in this literature;
+our protocol controls all three.
+\subsection{Dual-Start Protocol}
+Every case is run from flat and from dc start under identical tolerances and inputs,
+cross-validated bit-for-bit against pandapower ($\Delta V\sim10^{-13}$).
+\subsection{Factorization Accounting}
+Costs are reported in factorizations (linear solves), not outer iterations;
+an outer iteration is not a unit of work.
+\subsection{Merit Certificate (Existence)}
+The merit $\tfrac12\|F\|^2$ and its gradient at convergence distinguish
+``no solution exists'' (stationary, nonzero floor) from ``solution not reached''.
+\subsection{Condition-Number Certificate (Near-Singularity)}
+$\sigma_{\max}/\sigma_{\min}$ of the reduced Jacobian at the solution by power and
+inverse-power iteration; ill-conditioning is a measured property, not a label.
+\subsection{Fold Location by Continuation}
+A Newton corrector chained from the previous solution separates
+``beyond the nose (unsolvable)'' from ``outside the basin (reachable)''.
+% TODO 实验: 无（方法学节）；第 5 节所有表格都按这里的口径生成
+
+\section{Numerical Results}
+\subsection{Implementation Performance}
+Assembly share vs.\ solver share on 2k--9k-bus cases; ms-scale total times;
+the factorization is the only remaining cost.
+% TODO 实验: 重做性能表（release+KLU/QDLDL）：39/118/300/2383wp/6470/6495/6515/9241，
+%            列 = 组装 ms / 分解 ms / 总 ms / 每次分解成本
+\subsection{The RTE Cases: dc Start Settles Them}
+All three RTE snapshots, previously treated as hard, are solved by dc-started NR in
+6--8 iterations; flat-started NR fails. The hard features concentrate around
+phase-shifting transformers and low-voltage-inducing data settings.
+% TODO 实验: 重做 RTE 三家 flat/dc 对照表（α 网格 + 墙）；
+%            补越墙点 GN merit 驻点值（6470 α=1.25、6495 α=1.20、6515 α=1.15）判定无解/未到；
+%            低电压节点与极端变压器参数的关联统计
+\subsection{Autopsy: case2383wp}
+Prior work reported NR divergence and $\kappa=2.3\times10^{12}$ on this flagship case.
+With a correct NR it converges in 4 iterations from both starts (both phase-shifter sign
+conventions tested); measured $\kappa(J^*)=6.0\times10^{5}$ at base, $2.8\times10^{6}$
+near the fold at $\alpha\approx1.88$, located by continuation.
+% TODO 实验: 重做 2383wp 全表（双起点迭代/墙/cond(J*)-α 曲线/延拓鼻点）；
+%            旧符号变体一行；引用文献表 6 的分解数重算
+\subsection{Autopsy: the Tripathy 11-Bus System}
+The canonical ill-conditioned system has its fold below nominal load
+($\alpha\approx0.643$): no power flow solution exists at the reported operating point.
+GN converges from both starts to the same least-squares point
+($\tfrac12\|F\|^2=8.917\times10^{-4}$), settling a 40-year literature conflict
+(Iwamoto's judgment confirmed; the constant-impedance ``solution'' in a textbook
+explained as a different problem).
+% TODO 实验: 重做 11 节点延拓定位（σmin-α）+ 双起点 merit 驻点表；
+%            13/43 节点若找到数据在此补小节
+\subsection{LM Variants under Honest Accounting}
+Residual-scaled damping converges parameter-free but pays linear rates in the filtered
+subspace; trust region with a sound radius is far ahead (44--48 vs 152--504 factorizations).
+We exhibit a case where 15 outer iterations hide 1\,214 factorizations: outer-iteration
+reporting is not an acceptable cost metric for this family.
+% TODO 实验: 重做 TR vs SD/TS 对决表（分解数与墙时）；6495 重试风暴表；
+%            chord 列（健康网省时、病态网停滞）作为分解复用边界的量化
+
+\section{The Role of LMPF}
+\subsection{Least-Squares Semantics}
+When a solution exists and the start is sane, dc+NR ends the discussion; LMPF's unique
+deliverable is the stationary point of $\tfrac12\|F\|^2$ where NR has nothing to say.
+\subsection{Infeasibility as Information}
+The least-squares point certifies infeasibility numerically and its residual pattern
+localizes the conflicting specifications --- actionable information, historically
+anticipated by Iwamoto's optimal-multiplier judgment.
+\subsection{Re-examining ``Ill-Conditioned Power Flow''}
+We call for the term to be re-founded on measurable properties (existence, conditioning,
+initialization), with the certificates of Section~4 as the reporting standard.
+% TODO 实验: 回收 5.3/5.4 数据；无新实验
+
+\section{Conclusion}
+Fast instrumentation plus honest accounting turns a folklore problem into a settled one,
+and turns LMPF from a rescue device into a diagnostic instrument.
+
+\end{document}
