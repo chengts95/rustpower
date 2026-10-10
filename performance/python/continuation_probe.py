@@ -23,25 +23,32 @@ from scipy import sparse
 from scipy.sparse import linalg as spla
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--mpc", type=Path, required=True)
+parser.add_argument("--mpc", type=Path)
+parser.add_argument("--case", help="pandapower.networks case name (e.g. case6470rte)")
+parser.add_argument("--init", default="flat", choices=["flat", "dc"],
+                    help="start for the alpha0 anchor solve")
 parser.add_argument("--alpha0", type=float, required=True)
 parser.add_argument("--chain", type=float, nargs="+", required=True)
 cli = parser.parse_args()
 
-from matpowercaseframes import CaseFrames
-from pandapower.converter.matpower import from_ppc
 from pandapower.pypower.dSbus_dV import dSbus_dV
 
 mod = importlib.import_module("pandapower.pf.run_newton_raphson_pf")
 original = mod.newtonpf
 
-cf = CaseFrames(str(cli.mpc))
-ppc = {"version": "2", "baseMVA": float(cf.baseMVA),
-       "bus": np.array(cf.bus.values, dtype=float),
-       "gen": np.array(cf.gen.values, dtype=float),
-       "branch": np.array(cf.branch.values, dtype=float),
-       "gencost": np.array(cf.gencost.values, dtype=float)}
-net0 = from_ppc(ppc)
+if cli.mpc is not None:
+    from matpowercaseframes import CaseFrames
+    from pandapower.converter.matpower import from_ppc
+    cf = CaseFrames(str(cli.mpc))
+    ppc = {"version": "2", "baseMVA": float(cf.baseMVA),
+           "bus": np.array(cf.bus.values, dtype=float),
+           "gen": np.array(cf.gen.values, dtype=float),
+           "branch": np.array(cf.branch.values, dtype=float),
+           "gencost": np.array(cf.gencost.values, dtype=float)}
+    net0 = from_ppc(ppc)
+else:
+    import pandapower.networks as pn
+    net0 = getattr(pn, cli.case)()
 
 
 def scale_injections(net, alpha):
@@ -68,7 +75,7 @@ def solve_capture(net):
     mod.newtonpf = capture
     try:
         try:
-            pp.runpp(net, init="flat", max_iteration=300, tolerance_mva=1e-8,
+            pp.runpp(net, init=cli.init, max_iteration=300, tolerance_mva=1e-8,
                      enforce_q_lims=False, distributed_slack=False, numba=False)
         except pp.LoadflowNotConverged:
             pass
