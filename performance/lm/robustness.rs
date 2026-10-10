@@ -153,6 +153,33 @@ fn sweep_case(case: &Case, out: &mut Vec<serde_json::Value>) {
 }
 
 pub fn run() {
+    if bench::option("--handoff").is_some() {
+        if let Some(name) = bench::option("--import") {
+            let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+            let path = format!("{dir}/target/research/lm_robustness/{name}.jsonl");
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|_| panic!("找不到 {path}；先用 robustness_pp.py 生成"));
+            let mut lines = text.lines();
+            let (case, p_shift) = import_case(&name, lines.next().unwrap());
+            let alphas: Vec<f64> = lines
+                .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["alpha"].as_f64().unwrap())
+                .collect();
+            run_handoff(&case, &p_shift, &alphas);
+        } else {
+            let names: Vec<&str> = ["IEEE39", "IEEE118", "pegase9241"]
+                .into_iter()
+                .filter(|name| bench::selected(name))
+                .collect();
+            assert!(!names.is_empty(), "--case 没有匹配的算例");
+            for name in names {
+                let case = load_case(name);
+                let p_shift = vec![0.0; case.v.len()];
+                let alphas: Vec<f64> = (0..=40).map(|i| 1.0 + ALPHA_STEP * i as f64).collect();
+                run_handoff(&case, &p_shift, &alphas);
+            }
+        }
+        return;
+    }
     if let Some(name) = bench::option("--import") {
         run_import(&name);
         return;
@@ -242,15 +269,10 @@ fn max_dangle(pp_re: &[f64], pp_im: &[f64], ours: &[Complex64], n_act: usize) ->
         .fold(0.0_f64, f64::max)
 }
 
-fn run_import(name: &str) {
-    let out_dir = std::env::var("RUSTPOWER_ROBUSTNESS_OUTPUT")
-        .expect("main 应设置 RUSTPOWER_ROBUSTNESS_OUTPUT");
-    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let path = format!("{dir}/target/research/lm_robustness/{name}.jsonl");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|_| panic!("找不到 {path}；先用 robustness_pp.py 生成"));
-    let mut lines = text.lines();
-    let base: PpBase = serde_json::from_str(lines.next().unwrap())
+/// 从 pp 导出文件首行（base 记录）构造算例与 DC 相移注入。
+/// 相移缺失时按零注入退化（与旧版导出文件兼容）。
+fn import_case(name: &str, base_line: &str) -> (Case, Vec<f64>) {
+    let base: PpBase = serde_json::from_str(base_line)
         .map(|v: serde_json::Value| v)
         .ok()
         .and_then(|v| serde_json::from_value(v["base"].clone()).ok())
@@ -273,15 +295,111 @@ fn run_import(name: &str) {
         npv: base.npv,
         npq: base.npq,
     };
-    let n_act = case.npv + case.npq;
-    let v_init = DVector::from_column_slice(&case.v);
-    let identity: Vec<usize> = (0..case.v.len()).collect();
-    // DC 相移注入：导出文件带 p_shift 时用真实值（与生产 ECS 路径一致），否则零注入。
     let p_shift = if base.p_shift.len() == case.v.len() {
         base.p_shift.clone()
     } else {
         vec![0.0; case.v.len()]
     };
+    (case, p_shift)
+}
+
+// ─── SD→NR 交接扫描（--handoff）──────────────────────────────────────
+// flat 起点先由自缩放阻尼护送 k 步（solve_self_damped maxit=k，返回的状态
+// 即暖启动点），再交生产 NR（KLU）收尾。回答三个问题：
+//   1. 最小交接步数 k*——flat 起点距 NR 吸引域多远（以 SD 分解计价）；
+//   2. 总分解账 k*+NR 迭代 vs TR 全程（6470 上 ~44 次）；
+//   3. 与 dc 启动对照——dc 是 NR 的朋友但不是 LM 的（6470 上 dc+SD 比
+//      flat+SD 更慢），SD 护送可能是 LM 家族自己的起点发生器。
+// k=0 列即 flat+NR 对照。单元格 = NR 收尾迭代数；SD✓ = k 步内 SD 自收敛。
+
+const K_GRID: &[usize] = &[0, 1, 2, 5, 10, 20, 50, 100, 200];
+
+fn run_handoff(case: &Case, p_shift: &[f64], alphas: &[f64]) {
+    let n_act = case.npv + case.npq;
+    let v_init = DVector::from_column_slice(&case.v);
+    let identity: Vec<usize> = (0..case.v.len()).collect();
+    let mut dc_model = DcpfModel::from_ybus(&case.y, &v_init, n_act, &identity, p_shift);
+    let mut dc_solver = KLUSolver::default();
+    let mut theta_ws = vec![0.0; n_act];
+    let mut gn = GnTriuDriver::build_operator(&case.y, case.npv, case.npq, case.s.clone());
+    let mut gn_solver = QDLDLSolver::default();
+
+    let out_dir = std::env::var("RUSTPOWER_ROBUSTNESS_OUTPUT")
+        .expect("main 应设置 RUSTPOWER_ROBUSTNESS_OUTPUT");
+    println!("\n=== {} SD→NR 交接扫描（flat 起点，tol={TOL}）===", case.name);
+    println!("  列: dc+NR 对照 | k=SD护送步数（=SD分解数）；格=NR收尾迭代数 | best=最小总分解 k(总)");
+    let mut out = Vec::new();
+    for &alpha in alphas {
+        let s_scaled: Vec<Complex64> = case.s.iter().map(|s| s * alpha).collect();
+        let s_dvec = DVector::from_column_slice(&s_scaled);
+        let dc_mark = match dcpf_initial_v(&mut dc_model, &s_dvec, &v_init, &mut theta_ws, &mut dc_solver) {
+            Ok(v0) => {
+                let (c, _) = run_nr(case, &s_dvec, v0.as_slice());
+                if c.converged { format!("✓{}", c.iterations) } else { "✗".into() }
+            }
+            Err(_) => "✗".into(),
+        };
+        let mut marks = Vec::with_capacity(K_GRID.len());
+        let mut best: Option<(usize, u64)> = None; // (k, total_solves)
+        let mut any_converged = dc_mark.starts_with('✓');
+        for &k in K_GRID {
+            gn.sbus.clear();
+            gn.sbus.extend_from_slice(&s_scaled);
+            let mut v = case.v.clone();
+            let solves0 = gn.n_solves;
+            let r = gn.solve_self_damped(&case.y, &mut gn_solver, &mut v, TOL, k);
+            let sd_solves = gn.n_solves - solves0;
+            let (mark, total) = if r.converged {
+                (format!("SD✓{sd_solves}"), Some(sd_solves))
+            } else {
+                let (c, _) = run_nr(case, &s_dvec, &v);
+                if c.converged {
+                    (format!("✓{}", c.iterations), Some(sd_solves + c.iterations as u64))
+                } else {
+                    ("✗".into(), None)
+                }
+            };
+            if let Some(t) = total {
+                any_converged = true;
+                if best.map_or(true, |(_, bt)| t < bt) {
+                    best = Some((k, t));
+                }
+            }
+            out.push(json!({
+                "case": case.name, "alpha": alpha, "k": k,
+                "sd_solves": sd_solves, "sd_self_converged": r.converged,
+                "nr_converged": total.is_some(), "total_solves": total,
+            }));
+            marks.push(mark);
+        }
+        let best_str = best.map_or("—".into(), |(k, t)| format!("k={k}({t})"));
+        println!(
+            "  α={alpha:.2} | dc {dc_mark:>4} | {} | best {best_str}",
+            marks.iter().map(|m| format!("{m:>5}")).collect::<Vec<_>>().join(" ")
+        );
+        if !any_converged && alpha > 1.05 {
+            break; // 全灭即停（含 dc 对照列）
+        }
+    }
+    println!("  k 列顺序: {}", K_GRID.iter().map(|k| k.to_string()).collect::<Vec<_>>().join(" "));
+    let path = format!("{out_dir}/handoff-{}.jsonl", case.name);
+    let body: Vec<String> = out.iter().map(|r| r.to_string()).collect();
+    std::fs::write(&path, body.join("\n") + "\n").unwrap();
+    println!("已写出 {path}（{} 行）", out.len());
+}
+
+fn run_import(name: &str) {
+    let out_dir = std::env::var("RUSTPOWER_ROBUSTNESS_OUTPUT")
+        .expect("main 应设置 RUSTPOWER_ROBUSTNESS_OUTPUT");
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let path = format!("{dir}/target/research/lm_robustness/{name}.jsonl");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("找不到 {path}；先用 robustness_pp.py 生成"));
+    let mut lines = text.lines();
+    let (case, p_shift) = import_case(name, lines.next().unwrap());
+    let n_act = case.npv + case.npq;
+    let v_init = DVector::from_column_slice(&case.v);
+    let identity: Vec<usize> = (0..case.v.len()).collect();
     let mut dc_model = DcpfModel::from_ybus(&case.y, &v_init, n_act, &identity, &p_shift);
     let mut dc_solver = KLUSolver::default();
     let mut theta_ws = vec![0.0; n_act];
@@ -305,7 +423,11 @@ fn run_import(name: &str) {
         let s_dvec = DVector::from_column_slice(&s_scaled);
         let v_dc_ours = if bench::option("--pp-dc-start").is_some() {
             // 实验开关：dc 行直接用 pandapower 的 dc 起点（裁决"起点差异"还是"求解器差异"）。
-            Some(DVector::from_column_slice(&complex(&row.dc_start_re, &row.dc_start_im)))
+            Some(DVector::from_column_slice(
+                &row.dc_start_re.iter().zip(&row.dc_start_im)
+                    .map(|(&r, &i)| Complex64::new(r, i))
+                    .collect::<Vec<_>>(),
+            ))
         } else {
             dcpf_initial_v(&mut dc_model, &s_dvec, &v_init, &mut theta_ws, &mut dc_solver).ok()
         };
