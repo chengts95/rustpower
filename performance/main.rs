@@ -8,6 +8,8 @@ mod jacobian;
 mod kkt;
 #[path = "lm.rs"]
 mod lm_comparison;
+#[path = "lm_robustness.rs"]
+mod lm_robustness;
 #[path = "opf.rs"]
 mod opf_comparison;
 mod pf_builder;
@@ -23,6 +25,7 @@ fn main() {
     let output_key = match name.as_str() {
         "opf" | "opf-assembly" | "opf-v4-v5" => Some("RUSTPOWER_OPF_OUTPUT"),
         "lm-assembly" | "lm-ablation" => Some("RUSTPOWER_NE_AUDIT_DIR"),
+        "lm-robustness" => Some("RUSTPOWER_ROBUSTNESS_OUTPUT"),
         "lm-solvers" => Some("RUSTPOWER_CHOLESKY_OUTPUT"),
         "v4vsoperator" => Some("RUSTPOWER_V4_OPERATOR_OUTPUT"),
         _ => None,
@@ -85,8 +88,10 @@ fn main() {
     }
     match name.as_str() {
         "lm-check" => lm_comparison::operator_lm_matches_original_drivers(),
+        "lm-robustness" => lm_robustness::run(),
         "lm-assembly" => lm_comparison::benchmark_cached_normal_equations(),
         "lm-ablation" => lm_comparison::benchmark_coo_ablation(),
+        #[cfg(all(feature = "probe", target_os = "linux"))]
         "lm-solvers" => lm_comparison::linear_solvers::benchmark_linear_solvers(),
         "acpf" => acpf::acpf_v3_vs_v4_fill(),
         "jacobian" => jacobian::bench_jacobian_fill(),
@@ -101,7 +106,7 @@ fn main() {
         "v4-fused" => v4::fused_vs_two_pass_perf_ieee118(),
         "v4vsoperator" => v4vsoperator::run(),
         "help" | "--help" => println!(
-            "cargo bench --bench comparison --features benchmark -- <入口>\nLM: lm-check, lm-assembly, lm-ablation, lm-solvers\nACPF: acpf, jacobian, ecs, ecs-klu, ecs-lm, pf-builder, v3-v4, v4-fused, v4vsoperator\nOPF: opf, opf-assembly, opf-v4-v5, kkt\nLM/OPF可选：--case IEEE39 --repeats 7（另加1次预热）"
+            "cargo bench --bench comparison --features benchmark -- <入口>\nLM: lm-check, lm-assembly, lm-ablation, lm-solvers, lm-robustness\nACPF: acpf, jacobian, ecs, ecs-klu, ecs-lm, pf-builder, v3-v4, v4-fused, v4vsoperator\nOPF: opf, opf-assembly, opf-v4-v5, kkt\nLM/OPF可选：--case IEEE39 --repeats 7（另加1次预热）"
         ),
         _ => panic!("未知性能入口：{name}；使用 --help 查看"),
     }

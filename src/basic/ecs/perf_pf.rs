@@ -112,7 +112,7 @@ fn perf_pf_klu_breakdown() {
     #[cfg(feature = "probe")]
     klu_probe::reset();
     let t = Instant::now();
-    let r = crate::basic::newtonpf::newton_pf(ybus, sbus, v_init, npv, npq, Some(1e-8), Some(100), &mut s);
+    let r = crate::basic::newtonpf::newton_pf(ybus, sbus, v_init, npv, npq, Some(1e-8), Some(100), &mut s, None);
     let total = t.elapsed();
     let it = r.map(|(_, it)| it).unwrap_or(usize::MAX);
     println!("NR      : total={total:9.?} it={it:2}");
