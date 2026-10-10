@@ -198,17 +198,18 @@ pub struct GnTriuDriver {
     pub triu: GnTriuLayout,
     pub sbus: Vec<Complex64>,
     assembly: Assembly,
-    values: Vec<f64>,
+    // `self_damped` 的独立步控循环复用本驱动的算子与缓冲区（同 crate 内可见）。
+    pub(crate) values: Vec<f64>,
     // Scratch (allocated once).
-    ibus: Vec<Complex64>,
-    scalc: Vec<Complex64>,
-    r: Vec<f64>,
-    rt: Vec<f64>,
-    b: Vec<f64>, // 求解前[0; −r]，求解后[δ; s]，s = r + Jδ。
-    vt: Vec<Complex64>,
-    n_act: usize,
-    npq: usize,
-    n_state: usize,
+    pub(crate) ibus: Vec<Complex64>,
+    pub(crate) scalc: Vec<Complex64>,
+    pub(crate) r: Vec<f64>,
+    pub(crate) rt: Vec<f64>,
+    pub(crate) b: Vec<f64>, // 求解前[0; −r]，求解后[δ; s]，s = r + Jδ。
+    pub(crate) vt: Vec<Complex64>,
+    pub(crate) n_act: usize,
+    pub(crate) npq: usize,
+    pub(crate) n_state: usize,
     // Profiling (ns), same convention as the other drivers.
     pub prof_fill_ns: u64,
     /// μ对角及右端准备的累计时间。
@@ -299,7 +300,7 @@ impl GnTriuDriver {
 
     /// 填充上三角中的 Jᵀ：原路径读取缓存 Yᵀ，直接算子读取 Ybus。
     /// 两者复用残差计算得到的 scalc，不修改 μ 和 −I。
-    fn fill(&mut self, ybus: &CscMatrix<Complex64>, v: &[Complex64]) {
+    pub(crate) fn fill(&mut self, ybus: &CscMatrix<Complex64>, v: &[Complex64]) {
         let t = std::time::Instant::now();
         match &mut self.assembly {
             Assembly::Direct { inv_vmag } => {

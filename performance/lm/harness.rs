@@ -136,6 +136,21 @@ pub(super) fn run_gn_v(case: &Case, driver: &mut GnTriuDriver, solver: &mut QDLD
     (finish(case, s, &v, r.converged, r.iterations, driver.n_solves, t), v)
 }
 
+/// 自缩放阻尼 LM（γ=‖F‖² 全步走，无步控；见 rustpower::lm::self_damped）。
+pub(super) fn run_sd(case: &Case, driver: &mut GnTriuDriver, solver: &mut QDLDLSolver, s: &[Complex64], v0: &[Complex64]) -> Cell {
+    driver.sbus.clear();
+    driver.sbus.extend_from_slice(s);
+    let mut v = v0.to_vec();
+    let t = Instant::now();
+    // `--sd-maxit N`：SD 是无步控的一阶化方法，病态系统上可能需要远超 300 次迭代，
+    // 加长上限用于区分"慢速收敛"与"真失败"，不影响 NR/GN 两格。
+    let maxit = bench::option("--sd-maxit")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(MAXIT);
+    let r = driver.solve_self_damped(&case.y, solver, &mut v, TOL, maxit);
+    finish(case, s, &v, r.converged, r.iterations, driver.n_solves, t)
+}
+
 /// `--lm-options '<json>'`：LmOptions 的 serde JSON，缺省字段用 Default。
 pub(super) fn lm_options() -> (LmOptions, String) {
     match bench::option("--lm-options") {
