@@ -304,15 +304,76 @@ fn import_case(name: &str, base_line: &str) -> (Case, Vec<f64>) {
 }
 
 // ─── SD→NR 交接扫描（--handoff）──────────────────────────────────────
-// flat 起点先由自缩放阻尼护送 k 步（solve_self_damped maxit=k，返回的状态
-// 即暖启动点），再交生产 NR（KLU）收尾。回答三个问题：
-//   1. 最小交接步数 k*——flat 起点距 NR 吸引域多远（以 SD 分解计价）；
-//   2. 总分解账 k*+NR 迭代 vs TR 全程（6470 上 ~44 次）；
-//   3. 与 dc 启动对照——dc 是 NR 的朋友但不是 LM 的（6470 上 dc+SD 比
-//      flat+SD 更慢），SD 护送可能是 LM 家族自己的起点发生器。
-// k=0 列即 flat+NR 对照。单元格 = NR 收尾迭代数；SD✓ = k 步内 SD 自收敛。
+// flat 起点先由护送算法走 k 步，再交生产 NR（KLU）收尾。两种护送：
+//   SD     = solve_self_damped（maxit=k，一次 QDLDL 分解/步）；
+//   Cauchy = cauchy_escort（dSbus_dV Hermitian 解析梯度 + 精确线搜索，
+//            3 次 Ybus matvec/步，零分解——"免费护送"候选）。
+// 回答：最小交接步数 k*、总分解账、以及**真实耗时**（护送段与 NR 段
+// 分别计时）。k=0 列即 flat+NR 对照；dc 列即 dc+NR 对照。
 
 const K_GRID: &[usize] = &[0, 1, 2, 5, 10, 20, 50, 100, 200];
+const CA_GRID: &[usize] = &[1, 2, 5, 10, 20];
+
+struct EscortCell {
+    k: usize,
+    cauchy: bool,
+    mark: String,
+    converged: bool,
+    solves: u64,
+    escort_ms: f64,
+    nr_ms: f64,
+    nr_iters: usize,
+    sd_self_converged: bool,
+}
+
+impl EscortCell {
+    fn total_ms(&self) -> f64 {
+        self.escort_ms + self.nr_ms
+    }
+}
+
+fn escort_cell(
+    case: &Case,
+    gn: &mut GnTriuDriver,
+    gn_solver: &mut QDLDLSolver,
+    s_dvec: &DVector<Complex64>,
+    s_scaled: &[Complex64],
+    k: usize,
+    cauchy: bool,
+) -> EscortCell {
+    gn.sbus.clear();
+    gn.sbus.extend_from_slice(s_scaled);
+    let mut v = case.v.clone();
+    let t0 = std::time::Instant::now();
+    let solves0 = gn.n_solves;
+    let self_converged = if cauchy {
+        gn.cauchy_escort(&case.y, &mut v, k);
+        false // Cauchy 护送不判收敛，统一交 NR 裁决
+    } else {
+        gn.solve_self_damped(&case.y, gn_solver, &mut v, TOL, k).converged
+    };
+    let escort_ms = t0.elapsed().as_secs_f64() * 1e3;
+    let escort_solves = gn.n_solves - solves0;
+    if self_converged {
+        return EscortCell {
+            k, cauchy,
+            mark: format!("SD✓{escort_solves}"),
+            converged: true,
+            solves: escort_solves,
+            escort_ms, nr_ms: 0.0, nr_iters: 0,
+            sd_self_converged: true,
+        };
+    }
+    let (c, _) = run_nr(case, s_dvec, &v);
+    EscortCell {
+        k, cauchy,
+        mark: if c.converged { format!("✓{}", c.iterations) } else { "✗".into() },
+        converged: c.converged,
+        solves: escort_solves + c.iterations as u64,
+        escort_ms, nr_ms: c.wall_ms, nr_iters: c.iterations,
+        sd_self_converged: false,
+    }
+}
 
 fn run_handoff(case: &Case, p_shift: &[f64], alphas: &[f64]) {
     let n_act = case.npv + case.npq;
@@ -326,62 +387,74 @@ fn run_handoff(case: &Case, p_shift: &[f64], alphas: &[f64]) {
 
     let out_dir = std::env::var("RUSTPOWER_ROBUSTNESS_OUTPUT")
         .expect("main 应设置 RUSTPOWER_ROBUSTNESS_OUTPUT");
-    println!("\n=== {} SD→NR 交接扫描（flat 起点，tol={TOL}）===", case.name);
-    println!("  列: dc+NR 对照 | k=SD护送步数（=SD分解数）；格=NR收尾迭代数 | best=最小总分解 k(总)");
+    println!("\n=== {} SD/Cauchy→NR 交接扫描（flat 起点，tol={TOL}）===", case.name);
+    println!("  k = SD护送步数（1次分解/步）；ca = Cauchy护送（3次matvec/步，零分解）");
+    println!("  格 = NR收尾迭代数；best = 最小总耗时 标签(总分解数, 毫秒)");
     let mut out = Vec::new();
+    let n_cols = 1 + K_GRID.len() + CA_GRID.len();
+    let mut col_ms: Vec<Vec<f64>> = vec![Vec::new(); n_cols];
     for &alpha in alphas {
         let s_scaled: Vec<Complex64> = case.s.iter().map(|s| s * alpha).collect();
         let s_dvec = DVector::from_column_slice(&s_scaled);
-        let dc_mark = match dcpf_initial_v(&mut dc_model, &s_dvec, &v_init, &mut theta_ws, &mut dc_solver) {
-            Ok(v0) => {
-                let (c, _) = run_nr(case, &s_dvec, v0.as_slice());
-                if c.converged { format!("✓{}", c.iterations) } else { "✗".into() }
-            }
-            Err(_) => "✗".into(),
-        };
-        let mut marks = Vec::with_capacity(K_GRID.len());
-        let mut best: Option<(usize, u64)> = None; // (k, total_solves)
-        let mut any_converged = dc_mark.starts_with('✓');
-        for &k in K_GRID {
-            gn.sbus.clear();
-            gn.sbus.extend_from_slice(&s_scaled);
-            let mut v = case.v.clone();
-            let solves0 = gn.n_solves;
-            let r = gn.solve_self_damped(&case.y, &mut gn_solver, &mut v, TOL, k);
-            let sd_solves = gn.n_solves - solves0;
-            let (mark, total) = if r.converged {
-                (format!("SD✓{sd_solves}"), Some(sd_solves))
-            } else {
-                let (c, _) = run_nr(case, &s_dvec, &v);
-                if c.converged {
-                    (format!("✓{}", c.iterations), Some(sd_solves + c.iterations as u64))
-                } else {
-                    ("✗".into(), None)
+        let (dc_mark, dc_ms, dc_conv) =
+            match dcpf_initial_v(&mut dc_model, &s_dvec, &v_init, &mut theta_ws, &mut dc_solver) {
+                Ok(v0) => {
+                    let (c, _) = run_nr(case, &s_dvec, v0.as_slice());
+                    (
+                        if c.converged { format!("✓{}", c.iterations) } else { "✗".into() },
+                        c.wall_ms,
+                        c.converged,
+                    )
                 }
+                Err(_) => ("✗".into(), 0.0, false),
             };
-            if let Some(t) = total {
+        if dc_conv {
+            col_ms[0].push(dc_ms);
+        }
+        out.push(json!({"case": case.name, "alpha": alpha, "kind": "dc", "converged": dc_conv, "total_ms": dc_ms}));
+
+        let mut any_converged = dc_conv;
+        let mut best: Option<(String, u64, f64)> = None; // (label, solves, ms)
+        let mut cells = Vec::with_capacity(K_GRID.len() + CA_GRID.len());
+        for &k in K_GRID {
+            cells.push(escort_cell(case, &mut gn, &mut gn_solver, &s_dvec, &s_scaled, k, false));
+        }
+        for &k in CA_GRID {
+            cells.push(escort_cell(case, &mut gn, &mut gn_solver, &s_dvec, &s_scaled, k, true));
+        }
+        for (ci, cell) in cells.iter().enumerate() {
+            if cell.converged {
                 any_converged = true;
-                if best.map_or(true, |(_, bt)| t < bt) {
-                    best = Some((k, t));
+                col_ms[1 + ci].push(cell.total_ms());
+                if best.as_ref().map_or(true, |b| cell.total_ms() < b.2) {
+                    let label = format!("{}{}", if cell.cauchy { "ca" } else { "k" }, cell.k);
+                    best = Some((label, cell.solves, cell.total_ms()));
                 }
             }
             out.push(json!({
-                "case": case.name, "alpha": alpha, "k": k,
-                "sd_solves": sd_solves, "sd_self_converged": r.converged,
-                "nr_converged": total.is_some(), "total_solves": total,
+                "case": case.name, "alpha": alpha,
+                "kind": if cell.cauchy { "cauchy" } else { "sd" }, "k": cell.k,
+                "converged": cell.converged, "solves": cell.solves,
+                "escort_ms": cell.escort_ms, "nr_ms": cell.nr_ms,
+                "nr_iters": cell.nr_iters, "sd_self_converged": cell.sd_self_converged,
             }));
-            marks.push(mark);
         }
-        let best_str = best.map_or("—".into(), |(k, t)| format!("k={k}({t})"));
-        println!(
-            "  α={alpha:.2} | dc {dc_mark:>4} | {} | best {best_str}",
-            marks.iter().map(|m| format!("{m:>5}")).collect::<Vec<_>>().join(" ")
-        );
+        let sd_marks = cells[..K_GRID.len()]
+            .iter().map(|c| format!("{:>5}", c.mark)).collect::<Vec<_>>().join(" ");
+        let ca_marks = cells[K_GRID.len()..]
+            .iter().map(|c| format!("{:>5}", c.mark)).collect::<Vec<_>>().join(" ");
+        let best_str = best.map_or("—".into(), |(l, s, ms)| format!("{l}({s}, {ms:.2}ms)"));
+        println!("  α={alpha:.2} | dc {dc_mark:>4} | {sd_marks} | ca {ca_marks} | best {best_str}");
         if !any_converged && alpha > 1.05 {
             break; // 全灭即停（含 dc 对照列）
         }
     }
-    println!("  k 列顺序: {}", K_GRID.iter().map(|k| k.to_string()).collect::<Vec<_>>().join(" "));
+    let avg = |v: &Vec<f64>| if v.is_empty() { "—".into() } else { format!("{:.2}", v.iter().sum::<f64>() / v.len() as f64) };
+    let sd_avgs = (1..=K_GRID.len()).map(|i| format!("{:>5}", avg(&col_ms[i]))).collect::<Vec<_>>().join(" ");
+    let ca_avgs = (1 + K_GRID.len()..n_cols).map(|i| format!("{:>5}", avg(&col_ms[i]))).collect::<Vec<_>>().join(" ");
+    println!("  平均总耗时ms | dc {:>4} | {sd_avgs} | ca {ca_avgs}", avg(&col_ms[0]));
+    println!("  k 列顺序: {} | ca 列顺序: {}", K_GRID.iter().map(|k| k.to_string()).collect::<Vec<_>>().join(" "),
+        CA_GRID.iter().map(|k| k.to_string()).collect::<Vec<_>>().join(" "));
     let path = format!("{out_dir}/handoff-{}.jsonl", case.name);
     let body: Vec<String> = out.iter().map(|r| r.to_string()).collect();
     std::fs::write(&path, body.join("\n") + "\n").unwrap();
