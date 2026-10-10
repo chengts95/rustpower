@@ -15,7 +15,7 @@
 //! 输出 JSONL + 每算例四堵墙汇总；更密的网格留作后处理，不在此自适应。
 
 use super::comparison::{Case, load_case};
-use super::harness::{MAXIT, TOL, lm_options, run_gn, run_nr, run_sd, run_ts};
+use super::harness::{MAXIT, TOL, lm_options, run_chord, run_gn, run_nr, run_sd, run_ts};
 use crate::bench;
 use nalgebra::DVector;
 use num_complex::Complex64;
@@ -381,6 +381,8 @@ fn run_handoff(case: &Case, p_shift: &[f64], alphas: &[f64]) {
     let identity: Vec<usize> = (0..case.v.len()).collect();
     let mut dc_model = DcpfModel::from_ybus(&case.y, &v_init, n_act, &identity, p_shift);
     let mut dc_solver = KLUSolver::default();
+    // chord 专用实例：dc_solver 已分解 B′，结构不同，不能混用。
+    let mut chord_solver = KLUSolver::default();
     let mut theta_ws = vec![0.0; n_act];
     let mut gn = GnTriuDriver::build_operator(&case.y, case.npv, case.npq, case.s.clone());
     let mut gn_solver = QDLDLSolver::default();
@@ -389,14 +391,15 @@ fn run_handoff(case: &Case, p_shift: &[f64], alphas: &[f64]) {
         .expect("main 应设置 RUSTPOWER_ROBUSTNESS_OUTPUT");
     println!("\n=== {} SD/Cauchy→NR 交接扫描（flat 起点，tol={TOL}）===", case.name);
     println!("  k = SD护送步数（1次分解/步）；ca = Cauchy护送（3次matvec/步，零分解）");
-    println!("  格 = NR收尾迭代数；best = 最小总耗时 标签(总分解数, 毫秒)");
+    println!("  ch = dc初值+冻结J(dc)纯回代（1次分解+每次回代）；格 = NR收尾迭代数");
+    println!("  best = 最小总耗时 标签(总分解数, 毫秒)");
     let mut out = Vec::new();
-    let n_cols = 1 + K_GRID.len() + CA_GRID.len();
+    let n_cols = 2 + K_GRID.len() + CA_GRID.len();
     let mut col_ms: Vec<Vec<f64>> = vec![Vec::new(); n_cols];
     for &alpha in alphas {
         let s_scaled: Vec<Complex64> = case.s.iter().map(|s| s * alpha).collect();
         let s_dvec = DVector::from_column_slice(&s_scaled);
-        let (dc_mark, dc_ms, dc_conv) =
+        let (dc_mark, dc_ms, dc_conv, dc_v0) =
             match dcpf_initial_v(&mut dc_model, &s_dvec, &v_init, &mut theta_ws, &mut dc_solver) {
                 Ok(v0) => {
                     let (c, _) = run_nr(case, &s_dvec, v0.as_slice());
@@ -404,17 +407,37 @@ fn run_handoff(case: &Case, p_shift: &[f64], alphas: &[f64]) {
                         if c.converged { format!("✓{}", c.iterations) } else { "✗".into() },
                         c.wall_ms,
                         c.converged,
+                        Some(v0),
                     )
                 }
-                Err(_) => ("✗".into(), 0.0, false),
+                Err(_) => ("✗".into(), 0.0, false, None),
             };
         if dc_conv {
             col_ms[0].push(dc_ms);
         }
         out.push(json!({"case": case.name, "alpha": alpha, "kind": "dc", "converged": dc_conv, "total_ms": dc_ms}));
 
-        let mut any_converged = dc_conv;
+        // ch 列：dc 初值 + 冻结 J(dc) 的 chord 迭代（γ=0 极限的三步复合）。
+        let (chord_mark, chord_ms, chord_conv, chord_iters, chord_res) = match &dc_v0 {
+            Some(v0) => {
+                let c = run_chord(case, &s_scaled, v0.as_slice(), &mut chord_solver);
+                let conv = c.converged;
+                (c.mark(), c.wall_ms, conv, c.iterations, c.res_inf)
+            }
+            None => ("—".into(), 0.0, false, 0, f64::NAN),
+        };
+        if chord_conv {
+            col_ms[1].push(chord_ms);
+        }
+        out.push(json!({"case": case.name, "alpha": alpha, "kind": "chord",
+            "converged": chord_conv, "iters": chord_iters, "res_inf": chord_res,
+            "total_ms": chord_ms}));
+
+        let mut any_converged = dc_conv || chord_conv;
         let mut best: Option<(String, u64, f64)> = None; // (label, solves, ms)
+        if chord_conv {
+            best = Some(("ch".into(), 1, chord_ms));
+        }
         let mut cells = Vec::with_capacity(K_GRID.len() + CA_GRID.len());
         for &k in K_GRID {
             cells.push(escort_cell(case, &mut gn, &mut gn_solver, &s_dvec, &s_scaled, k, false));
@@ -425,7 +448,7 @@ fn run_handoff(case: &Case, p_shift: &[f64], alphas: &[f64]) {
         for (ci, cell) in cells.iter().enumerate() {
             if cell.converged {
                 any_converged = true;
-                col_ms[1 + ci].push(cell.total_ms());
+                col_ms[2 + ci].push(cell.total_ms());
                 if best.as_ref().map_or(true, |b| cell.total_ms() < b.2) {
                     let label = format!("{}{}", if cell.cauchy { "ca" } else { "k" }, cell.k);
                     best = Some((label, cell.solves, cell.total_ms()));
@@ -444,15 +467,15 @@ fn run_handoff(case: &Case, p_shift: &[f64], alphas: &[f64]) {
         let ca_marks = cells[K_GRID.len()..]
             .iter().map(|c| format!("{:>5}", c.mark)).collect::<Vec<_>>().join(" ");
         let best_str = best.map_or("—".into(), |(l, s, ms)| format!("{l}({s}, {ms:.2}ms)"));
-        println!("  α={alpha:.2} | dc {dc_mark:>4} | {sd_marks} | ca {ca_marks} | best {best_str}");
+        println!("  α={alpha:.2} | dc {dc_mark:>4} | ch {chord_mark:>5} | {sd_marks} | ca {ca_marks} | best {best_str}");
         if !any_converged && alpha > 1.05 {
             break; // 全灭即停（含 dc 对照列）
         }
     }
     let avg = |v: &Vec<f64>| if v.is_empty() { "—".into() } else { format!("{:.2}", v.iter().sum::<f64>() / v.len() as f64) };
-    let sd_avgs = (1..=K_GRID.len()).map(|i| format!("{:>5}", avg(&col_ms[i]))).collect::<Vec<_>>().join(" ");
-    let ca_avgs = (1 + K_GRID.len()..n_cols).map(|i| format!("{:>5}", avg(&col_ms[i]))).collect::<Vec<_>>().join(" ");
-    println!("  平均总耗时ms | dc {:>4} | {sd_avgs} | ca {ca_avgs}", avg(&col_ms[0]));
+    let sd_avgs = (2..2 + K_GRID.len()).map(|i| format!("{:>5}", avg(&col_ms[i]))).collect::<Vec<_>>().join(" ");
+    let ca_avgs = (2 + K_GRID.len()..n_cols).map(|i| format!("{:>5}", avg(&col_ms[i]))).collect::<Vec<_>>().join(" ");
+    println!("  平均总耗时ms | dc {:>4} | ch {:>5} | {sd_avgs} | ca {ca_avgs}", avg(&col_ms[0]), avg(&col_ms[1]));
     println!("  k 列顺序: {} | ca 列顺序: {}", K_GRID.iter().map(|k| k.to_string()).collect::<Vec<_>>().join(" "),
         CA_GRID.iter().map(|k| k.to_string()).collect::<Vec<_>>().join(" "));
     let path = format!("{out_dir}/handoff-{}.jsonl", case.name);
