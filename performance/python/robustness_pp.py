@@ -41,7 +41,11 @@ MAX_ITER = 300
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--case", action="append", help="pandapower.networks case name; repeatable")
+parser.add_argument("--mpc", type=Path, help="MATPOWER .m file (e.g. case2383wp.m); overrides --case")
 parser.add_argument("--alpha-max", type=float, default=ALPHA_MAX)
+parser.add_argument("--alpha-step", type=float, default=ALPHA_STEP)
+parser.add_argument("--alpha-min", type=float, default=1.0,
+                    help="start alpha; base injections are recovered by linear division")
 parser.add_argument("--output", type=Path,
                     default=Path(__file__).resolve().parents[2] / "target/research/lm_robustness")
 cli = parser.parse_args()
@@ -109,11 +113,35 @@ def run_once(net, init):
     return captured
 
 
-for case in cli.case or DEFAULT_CASES:
-    net0 = getattr(pn, case)()
+def build_net(case):
+    if cli.mpc is not None:
+        # MATPOWER .m → CaseFrames 解析 → from_ppc；np.array 显式拷贝
+        # （matpowercaseframes 返回只读数组，pandapower 内部要原地改索引）。
+        from matpowercaseframes import CaseFrames
+        from pandapower.converter.matpower import from_ppc
+        cf = CaseFrames(str(cli.mpc))
+        ppc = {
+            "version": "2",
+            "baseMVA": float(cf.baseMVA),
+            "bus": np.array(cf.bus.values, dtype=float),
+            "gen": np.array(cf.gen.values, dtype=float),
+            "branch": np.array(cf.branch.values, dtype=float),
+            "gencost": np.array(cf.gencost.values, dtype=float),
+        }
+        return from_ppc(ppc)
+    return getattr(pn, case)()
+
+
+if cli.mpc is not None:
+    cases = [cli.mpc.stem]
+else:
+    cases = cli.case or DEFAULT_CASES
+
+for case in cases:
+    net0 = build_net(case)
     base = None
     lines = []
-    alpha = 1.0
+    alpha = cli.alpha_min
     print(f"=== {case} ===")
     while alpha <= cli.alpha_max + 1e-9:
         row = {"alpha": round(alpha, 4)}
@@ -127,6 +155,10 @@ for case in cli.case or DEFAULT_CASES:
                 base["case"] = case
                 base["v_flat_re"] = cap["v_start_re"]
                 base["v_flat_im"] = cap["v_start_im"]
+                if cli.alpha_min != 1.0:
+                    # 注入随 α 线性缩放，除回 α=1.0 基值（Rust 端按行 α 重新缩放）
+                    base["s_re"] = [x / cli.alpha_min for x in base["s_re"]]
+                    base["s_im"] = [x / cli.alpha_min for x in base["s_im"]]
             if init == "dc":
                 row["dc_start_re"] = cap["v_start_re"]
                 row["dc_start_im"] = cap["v_start_im"]
@@ -137,7 +169,7 @@ for case in cli.case or DEFAULT_CASES:
               f" | dc: {'ok' if d['converged'] else 'XX'} it={d['iterations']:3}")
         if not f["converged"] and not d["converged"] and alpha > 1.05:
             break
-        alpha += ALPHA_STEP
+        alpha += cli.alpha_step
 
     path = cli.output / f"{case}.jsonl"
     with path.open("w") as fh:
