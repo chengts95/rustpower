@@ -127,6 +127,25 @@ impl Solve for KLUSolver {
         }
         Ok(())
     }
+    /// Re-solves with a fresh right-hand side reusing the LU factors from
+    /// the most recent `solve` (chord / frozen-Jacobian iterations).
+    /// Pure triangular substitution; the caller must guarantee the matrix
+    /// values are unchanged since that `solve`.
+    fn resolve(&mut self, b: &mut [f64]) -> Result<(), &'static str> {
+        unsafe {
+            if self.0.numeric.is_null() {
+                return Err("KLU resolve: no factorization to reuse");
+            }
+            let ret = crate::timeit!(klu_probe::SOLVE_NS, {
+                self.0.solve(b.as_mut_ptr(), b.len() as i64, 1)
+            });
+            if ret != 0 {
+                return Err("KLU solve failed in resolve");
+            }
+        }
+        Ok(())
+    }
+
     fn reset(&mut self) {
         self.0.reset();
     }

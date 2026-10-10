@@ -6,7 +6,7 @@ use crate::bench;
 use nalgebra::DVector;
 use num_complex::Complex64;
 use rustpower::basic::newtonpf::newton_pf;
-use rustpower::basic::solver::{KLUSolver, QDLDLSolver};
+use rustpower::basic::solver::{KLUSolver, QDLDLSolver, Solve};
 use rustpower::lm::LmOptions;
 use rustpower::lm::gn_triu::GnTriuDriver;
 use std::time::Instant;
@@ -168,6 +168,105 @@ pub(super) fn run_ts(case: &Case, driver: &mut GnTriuDriver, solver: &mut QDLDLS
     let solves0 = driver.n_solves;
     let r = driver.solve_self_damped_ts(&case.y, solver, &mut v, TOL, maxit);
     finish(case, s, &v, r.converged, r.iterations, driver.n_solves - solves0, t)
+}
+
+/// Chord（冻结 J 分解）NR：v0 处组装一次 J、KLU 分解一次，后续全部
+/// `resolve` 纯回代——"dc 初值 + 三步复合"的 γ=0 极限形态。
+/// `iterations` 记回代次数；分解次数恒为 1（linear_solves=1）。
+pub(super) fn run_chord(case: &Case, s: &[Complex64], v0: &[Complex64], solver: &mut KLUSolver) -> Cell {
+    use rustpower::basic::benchmark_internals::{csc_matvec_and_scalc, fill_jacobian_v4};
+    use rustpower::basic::jacobian_cache::JacobianCache;
+
+    let t = Instant::now();
+    let (npv, npq) = (case.npv, case.npq);
+    let n_act = npv + npq;
+    let n_state = npv + 2 * npq;
+    let n_bus = case.v.len();
+    let pat = JacobianCache::build_from_permuted(case.y.col_offsets(), case.y.row_indices(), npv, npq);
+    let mut j_values = vec![0.0; pat.j_row_indices.len()];
+    let mut ibus = vec![Complex64::new(0.0, 0.0); n_bus];
+    let mut scalc = vec![Complex64::new(0.0, 0.0); n_bus];
+    let mut f = vec![0.0; n_state];
+    let mut v: Vec<Complex64> = v0.to_vec();
+
+    let (ycp, yri, yv) = (case.y.col_offsets(), case.y.row_indices(), case.y.values());
+    // 残差 F 与 ∞-范数（mis = scalc − sbus，与生产 newton_pf 同约定，
+    // matvec 直接复用生产 csc_matvec_and_scalc）；
+    // scalc 同时供冻结点的 fill_jacobian_v4 对角修正使用。
+    let residual = |ibus: &mut [Complex64], scalc: &mut [Complex64], f: &mut [f64], v: &[Complex64]| -> f64 {
+        csc_matvec_and_scalc(ycp, yri, yv, v, ibus, scalc);
+        let mut norm = 0.0f64;
+        for i in 0..n_act {
+            let mis = scalc[i] - s[i];
+            f[i] = mis.re;
+            norm = norm.max(mis.re.abs());
+        }
+        for i in 0..npq {
+            f[n_act + i] = scalc[i].im - s[i].im;
+            norm = norm.max(f[n_act + i].abs());
+        }
+        norm
+    };
+    let apply_step = |v: &mut [Complex64], dx: &[f64]| {
+        let mut v_m: Vec<f64> = v.iter().map(|e| e.norm()).collect();
+        let mut v_a: Vec<f64> = v.iter().map(|e| e.arg()).collect();
+        for k in 0..n_act {
+            v_a[k] -= dx[k];
+        }
+        for k in 0..npq {
+            v_m[k] -= dx[n_act + k];
+        }
+        for k in 0..n_bus {
+            v[k] = Complex64::from_polar(v_m[k], v_a[k]);
+        }
+    };
+
+    let mut iters = 0usize;
+    let mut norm = residual(&mut ibus, &mut scalc, &mut f, &v);
+    let mut failed = false;
+    if norm >= TOL {
+        // 冻结点：J(v0) 组装一次、分解一次。
+        let v_norm: Vec<Complex64> = v
+            .iter()
+            .map(|e| {
+                let m = e.norm();
+                if m > 1e-12 { e / m } else { Complex64::new(1.0, 0.0) }
+            })
+            .collect();
+        fill_jacobian_v4::<false>(
+            &case.y,
+            &v,
+            &v_norm,
+            &scalc,
+            &pat.j_col_ptrs,
+            &pat.pq_ends,
+            &pat.active_ends,
+            &pat.diag_ptrs,
+            npv,
+            npq,
+            &mut j_values,
+        );
+        let mut ap = pat.j_col_ptrs.clone();
+        let mut ai = pat.j_row_indices.clone();
+        if solver.solve(&mut ap, &mut ai, &mut j_values, &mut f, n_state).is_err() {
+            failed = true;
+        } else {
+            apply_step(&mut v, &f);
+            iters += 1;
+            norm = residual(&mut ibus, &mut scalc, &mut f, &v);
+            while norm >= TOL && iters < MAXIT {
+                if solver.resolve(&mut f).is_err() {
+                    failed = true;
+                    break;
+                }
+                apply_step(&mut v, &f);
+                iters += 1;
+                norm = residual(&mut ibus, &mut scalc, &mut f, &v);
+            }
+        }
+    }
+    let converged = !failed && norm < TOL;
+    finish(case, s, &v, converged, iters, u64::from(converged), t)
 }
 
 /// `--lm-options '<json>'`：LmOptions 的 serde JSON，缺省字段用 Default。
