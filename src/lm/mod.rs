@@ -32,6 +32,7 @@ pub mod kernels;
 pub mod normal_eq;
 pub mod pattern;
 pub mod residual;
+pub mod self_damped;
 pub mod step_control;
 
 pub use step_control::{DampingMetric, LmOptions, TrustRegionOptions};
