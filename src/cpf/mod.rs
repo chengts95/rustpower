@@ -414,6 +414,9 @@ impl<S: Solve> CpfSolver<S> {
         }];
         let mut lambda = 1.0;
         let mut tangent = self.tangent(ybus, &mut factorizations)?;
+        // 基准倾角：t̂_λ 的绝对值随系统规模缩小（z=J⁻¹d 的维数效应），
+        // 只有相对自身初值的衰减才是"逼近鼻点"的尺度不变信号。
+        let t_lambda0 = tangent[self.n_state].abs().max(1e-12);
         let mut sigma = opts.step0;
         let mut passed_nose = false;
         let mut stop_reason: &'static str = "max_points reached";
@@ -423,13 +426,16 @@ impl<S: Solve> CpfSolver<S> {
                 break;
             }
             // ── 预测 ──
-            let x = self.state_x();
+            // 步长按相对倾角调制：|t̂_λ|/|t̂_λ0| → 0 即逼近鼻点，自动收细
+            // 步长，保证 refine 用的末三点落在鼻点近旁（下界防爬行）。
             let n_st = self.n_state;
+            let sigma_eff = sigma * (tangent[n_st].abs() / t_lambda0).clamp(0.05, 1.0);
+            let x = self.state_x();
             let mut x_pred = x.clone();
             for i in 0..n_st {
-                x_pred[i] += sigma * tangent[i];
+                x_pred[i] += sigma_eff * tangent[i];
             }
-            let lambda_pred = lambda + sigma * tangent[n_st];
+            let lambda_pred = lambda + sigma_eff * tangent[n_st];
 
             // 预测点写入状态缓冲
             for i in 0..self.n_active {
@@ -607,3 +613,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, any(feature = "klu", feature = "klu_dyn")))]
+mod tests_jsonl;
