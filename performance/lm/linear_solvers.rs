@@ -7,24 +7,29 @@ use super::{
 use crate::basic::solver::{KLUSolver, QDLDLSolver, Solve, klu_probe, qdldl_probe};
 use crate::bench::{self, Report, timeit};
 use crate::lm::{LmOptions, gn_flat::GnDriver};
-use std::{
-    ffi::{CString, c_char, c_int, c_void},
-    sync::atomic::Ordering,
-};
+use std::sync::atomic::Ordering;
+#[cfg(target_os = "linux")]
+use std::ffi::{CString, c_char, c_int, c_void};
 
+#[cfg(target_os = "linux")]
 #[link(name = "dl")]
 unsafe extern "C" {
     fn dlopen(path: *const c_char, flags: c_int) -> *mut c_void;
     fn dlsym(library: *mut c_void, name: *const c_char) -> *mut c_void;
     fn dlclose(library: *mut c_void) -> c_int;
 }
+#[cfg(target_os = "linux")]
 type Analyze =
     unsafe extern "C" fn(usize, *mut usize, *mut usize, *mut f64, c_int, c_int) -> *mut c_void;
+#[cfg(target_os = "linux")]
 type Factorize =
     unsafe extern "C" fn(*mut c_void, usize, *mut usize, *mut usize, *mut f64) -> c_int;
+#[cfg(target_os = "linux")]
 type Backsolve = unsafe extern "C" fn(*mut c_void, usize, *mut f64) -> c_int;
+#[cfg(target_os = "linux")]
 type Free = unsafe extern "C" fn(*mut c_void);
 
+#[cfg(target_os = "linux")]
 struct Cholesky {
     library: *mut c_void,
     handle: *mut c_void,
@@ -40,6 +45,7 @@ struct Cholesky {
     factor_ms: f64,
     backsolve_ms: f64,
 }
+#[cfg(target_os = "linux")]
 impl Cholesky {
     fn new(supernodal: bool, threads: i32) -> Self {
         let path = CString::new(
@@ -78,6 +84,7 @@ impl Cholesky {
         }
     }
 }
+#[cfg(target_os = "linux")]
 impl Solve for Cholesky {
     fn solve(
         &mut self,
@@ -139,6 +146,7 @@ impl Solve for Cholesky {
         self.pattern = None;
     }
 }
+#[cfg(target_os = "linux")]
 impl Drop for Cholesky {
     fn drop(&mut self) {
         self.reset();
@@ -301,6 +309,7 @@ pub fn benchmark_linear_solvers() {
                     || QDLDLSolver::with_dsigns(vec![1; case.npv + 2 * case.npq]),
                     false,
                 ),
+                #[cfg(target_os = "linux")]
                 NormalCholesky | NormalSupernodal => {
                     let (mut solver, backend_build_ms) =
                         timeit!(Cholesky::new(matches!(method, NormalSupernodal), threads));
@@ -312,6 +321,10 @@ pub fn benchmark_linear_solvers() {
                     r["factor_ms"] = solver.factor_ms.into();
                     r["backsolve_ms"] = solver.backsolve_ms.into();
                     (r, v)
+                }
+                #[cfg(not(target_os = "linux"))]
+                NormalCholesky | NormalSupernodal => {
+                    panic!("CHOLMOD 后端仅支持 Linux；Windows 请用 --klu 路径")
                 }
                 NormalKlu => run_with_backend(case, &options, KLUSolver::default, false),
                 FullQdldl => {

@@ -15,7 +15,7 @@ import pandapower.networks as pn
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--phase-scale', type=float, default=1.0)
-parser.add_argument('--output', type=Path, default=Path(__file__).resolve().parents[1] / 'target/research/lm_audit')
+parser.add_argument('--output', type=Path, default=Path(__file__).resolve().parents[2] / 'target/research/lm_audit')
 cli = parser.parse_args()
 out = cli.output
 if cli.phase_scale != 1.0:
