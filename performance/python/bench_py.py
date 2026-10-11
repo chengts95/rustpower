@@ -40,11 +40,12 @@ def run_benchmark(net_name, net, init_mode="flat"):
     for _, row in net.gen.iterrows():
         V_init_compensated[int(row['bus'])] = row['vm_pu']
 
+    # rustpower 纯求解核腿的 v_init：flat 算例用设定幅值平启动，dc 算例用自家 DCPF 角度
+    V_init_core = V_init_compensated
     if use_dc:
         # DC 启动算例（RTE 等）：平启动三家都发散，统一走 DC。
-        # rustpower 纯求解核腿的 v_init 用 rustpower 自家 DCPF 角度（不借 pandapower）。
         _g0 = rustpower.PowerGrid.from_pandapower(net)
-        V_init_compensated = _g0.compute_dcpf_v()
+        V_init_core = _g0.compute_dcpf_v()
         del _g0
 
     # ---------------------------------------------------------
@@ -110,7 +111,7 @@ def run_benchmark(net_name, net, init_mode="flat"):
         Ybus_csr.indices,
         Ybus_csr.data,
         Sbus_pp,
-        V_init_compensated,
+        V_init_core,
         p_vec,
         p_inv,
         len(pv_idx),
@@ -130,7 +131,7 @@ def run_benchmark(net_name, net, init_mode="flat"):
             Ybus_csr.indices,
             Ybus_csr.data,
             Sbus_pp,
-            V_init_compensated,
+            V_init_core,
             p_vec,
             p_inv,
             len(pv_idx),
@@ -186,12 +187,12 @@ def run_benchmark(net_name, net, init_mode="flat"):
     ls2g_hot_iters = ls_model.get_solver().get_nb_iter()
 
     # 3. RustPower NewtonSolver (Pure Numerical Core, cache is always enabled by default)
-    rp_solver.set_v_init(V_init_compensated)
+    rp_solver.set_v_init(V_init_core)
     rp_solver.solve(MAX_ITER, TOL) # Warmup
     times_rp_hot = []
     for _ in range(NUM_TRIALS_HOT):
         start = time.perf_counter()
-        rp_solver.set_v_init(V_init_compensated)
+        rp_solver.set_v_init(V_init_core)
         rp_solver.solve(MAX_ITER, TOL)
         _ = rp_solver.get_scalc()
         times_rp_hot.append(time.perf_counter() - start)
@@ -212,6 +213,10 @@ def run_benchmark(net_name, net, init_mode="flat"):
     times_rp_grid_hot = []
     for _ in range(NUM_TRIALS_HOT):
         start = time.perf_counter()
+        if use_dc:
+            # 强制 vinit 回出厂值——否则 NR 从上一次收敛解热启动，
+            # 迭代数虚低（6→3），对每次都真重算 DC+NR 的对照组不公平
+            rp_grid.v = V_init_compensated
         r = rp_grid.solve(None if use_dc else V_init_flat)
         rp_grid.post_process()
         times_rp_grid_hot.append(time.perf_counter() - start)
