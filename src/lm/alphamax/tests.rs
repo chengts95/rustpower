@@ -28,11 +28,11 @@ fn ieee39_march_brackets_alpha_max() {
     let out = march.run(&mat.y_bus, &opts);
 
     for p in &out.points {
-        println!("α={:.2}  {:?}", p.alpha, p.verdict);
+        println!("α={:.2}  {:?}  ({:.1} ms)", p.alpha, p.verdict, p.wall_ms);
     }
     println!(
-        "bracket={:?}  nr_iters={} lm_iters={}",
-        out.bracket, out.nr_iterations, out.lm_iterations
+        "bracket={:?}  nr_iters={} lm_iters={}  wall={:.1?}",
+        out.bracket, out.nr_iterations, out.lm_iterations, out.wall
     );
 
     // 基态必须可行（dc 启动 + NR）。
@@ -57,8 +57,8 @@ fn ieee39_march_brackets_alpha_max() {
     let eps = bi.eps;
     let res = march.bisect(&mat.y_bus, (lo, hi), out.v_at_lo.clone(), &opts, &bi);
     println!(
-        "α_max ∈ ({:.6}, {:.6})  cert‖F‖∞={:.3e}  二分探点 {} 个  nr_iters={} lm_iters={}",
-        res.lo, res.hi, res.hi_res_inf, res.probes.len(), res.nr_iterations, res.lm_iterations
+        "α_max ∈ ({:.6}, {:.6})  cert‖F‖∞={:.3e}  二分探点 {} 个  nr_iters={} lm_iters={}  wall={:.1?}",
+        res.lo, res.hi, res.hi_res_inf, res.probes.len(), res.nr_iterations, res.lm_iterations, res.wall
     );
     assert!(res.hi - res.lo <= eps, "bracket not shrunk to eps");
     // 不变式：下端可行、上端持证书；宽度 ≈ eps（最后一次对半后 < eps）。
@@ -96,14 +96,15 @@ fn ieee39_march_brackets_alpha_max() {
         println!("  样本 α={:.6}  g={:.4e}", s.alpha, s.g);
     }
     println!(
-        "割线: α_max ∈ ({:.6}, {:.6})  探点 {}（割 {} / 回退 {}）  nr_iters={} lm_iters={}",
+        "割线: α_max ∈ ({:.6}, {:.6})  探点 {}（割 {} / 回退 {}）  nr_iters={} lm_iters={}  wall={:.1?}",
         sec.base.lo,
         sec.base.hi,
         sec.base.probes.len(),
         sec.secant_steps,
         sec.fallback_steps,
         sec.base.nr_iterations,
-        sec.base.lm_iterations
+        sec.base.lm_iterations,
+        sec.base.wall
     );
     assert!(sec.base.hi - sec.base.lo <= eps, "secant bracket not shrunk");
     // 两条路径必须裁定同一个 α_max（区间相交）。
@@ -143,18 +144,19 @@ fn ieee39_march_brackets_alpha_max() {
         .filter(|p| matches!(p.verdict, Verdict::Infeasible { .. }))
         .count();
     println!(
-        "0.618: α_max ∈ ({:.6}, {:.6})  探点 {}（无解 {}）  nr_iters={} lm_iters={}",
+        "0.618: α_max ∈ ({:.6}, {:.6})  探点 {}（无解 {}）  nr_iters={} lm_iters={}  wall={:.1?}",
         gold.lo,
         gold.hi,
         gold.probes.len(),
         gold_inf,
         gold.nr_iterations,
-        gold.lm_iterations
+        gold.lm_iterations,
+        gold.wall
     );
     println!(
-        "对照: 二分探点 {}（无解 {}）  nr_iters={} lm_iters={}",
+        "对照: 二分探点 {}（无解 {}）  nr_iters={} lm_iters={}  wall={:.1?}",
         res.probes.len(),
-        bis_inf, res.nr_iterations, res.lm_iterations
+        bis_inf, res.nr_iterations, res.lm_iterations, res.wall
     );
     assert!(gold.hi - gold.lo <= eps, "golden bracket not shrunk");
     assert!(
