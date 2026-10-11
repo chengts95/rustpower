@@ -443,22 +443,23 @@ are our engineering contribution.
 \begin{table}[h]
 \centering
 \caption{LM variants under factorization accounting
-(outer iterations / factorizations; TS: factorizations\,+\,resolves).
+(outer iterations / factorizations; TS: factorizations\,+\,resolves;
+TS fresh-J: all factorizations, three per outer).
 All RTE rows converge to the dc+NR wall of Table~\ref{tab:rte}.
 TS = residual-scaled; TR = trust region. The tuned-TR column is the best
 fixed initial radius found by hand on case6470rte.}
 \label{tab:variants}
-\begin{tabular}{lcccc}
+\begin{tabular}{lccccc}
 \toprule
-Case & dc+NR & TS (flat) & TR tuned (flat) & TR adaptive (flat) \\
+Case & dc+NR & TS (flat) & TS fresh-J (flat) & TR tuned (flat) & TR adaptive (flat) \\
 \midrule
-case6470rte & 6/6  & 152/152\,+\,304 & 44--48 & \textbf{24/25} \\
-case6495rte & 7/7  & 175/175\,+\,350 & ---    & \textbf{18/19} \\
-case6515rte & 8/8  & 245/245\,+\,490 & ---    & \textbf{22/23} \\
+case6470rte & 6/6  & 152/152\,+\,304 & 150/451 & 44--48 & \textbf{24/25} \\
+case6495rte & 7/7  & 175/175\,+\,350 & 175/525 & ---    & \textbf{18/19} \\
+case6515rte & 8/8  & 245/245\,+\,490 & 242/726 & ---    & \textbf{22/23} \\
 \midrule
-IEEE 39     & 4/4  & 4/4\,+\,8    & ---    & 4/5 \\
-IEEE 118    & 3/3  & 9/9\,+\,18   & ---    & 5/6 \\
-IEEE 300    & 4/4  & 13/13\,+\,26 & ---    & 8/9 \\
+IEEE 39     & 4/4  & 4/4\,+\,8    & 4/12   & ---    & 4/5 \\
+IEEE 118    & 3/3  & 9/9\,+\,18   & 9/27   & ---    & 5/6 \\
+IEEE 300    & 4/4  & 13/13\,+\,26 & 13/39  & ---    & 8/9 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -472,16 +473,19 @@ best hand-tuned radius, because the tuned radius still pays a doubling
 search for $\mu$ at the first iteration and the probe does not. Third, the
 residual-scaled branch converges parameter-free but pays linear rates in
 the filtered subspace: 152--245 true factorizations, still 6--10$\times$
-behind even with its resolves counted as free. Its three-shot composite
-explains why: the amortization works only while the frozen Jacobian models
-the whole composite trajectory. On small healthy systems it does, and TS
-halves the outer count of its single-step sibling (4 vs.\ 7 on IEEE 39,
-9 vs.\ 18 on IEEE 118, 13 vs.\ 26 on IEEE 300); on large stressed systems
-shots two and
-three buy almost no merit reduction and the method degenerates to its
-single-step rate. Re-linearizing each shot would cost a full assembly and
-factorization per shot --- the composite's only advantage evaporates, and
-the scalar $\gamma = \|F\|^2$ would still under-damp the filtered subspace.
+behind even with its resolves counted as free.
+The composite itself is not the problem. A fresh-J variant that
+re-assembles and re-factorizes at every shot --- abandoning the
+amortization entirely --- lands within 2\% of the frozen-J outer count on
+every system tested, healthy or stressed (Table~\ref{tab:variants}): the
+frozen Jacobian is vindicated outright, and the amortization is a genuine
+free lunch, three shots for one factorization along an identical
+trajectory. The bottleneck is the scalar $\gamma = \|F\|^2$ itself: one
+damping knob cannot fit the well-conditioned bulk and the near-singular
+subspace at once, and as the merit falls the knob turns the wrong way for
+exactly the directions that need damping most. Step control needs two
+independent knobs --- a radius for step length and $\mu$ for direction ---
+which is precisely what the trust region provides.
 
 The accounting itself is a result. In one run on case6495rte, the
 single-step residual-scaled variant reports 15 outer iterations while
