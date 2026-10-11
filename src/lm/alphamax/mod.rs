@@ -6,13 +6,17 @@
 //! 做判决；我们用 LMPF 的最小二乘证书（min ‖F‖ > tol）做判决——定量、
 //! 无启发式阈值，且 NR 吸引域失败时 LMPF 可能直接把解救回来。
 //!
-//! v1（本模块）：阶段一，前向固定步进行军。
-//!   - dc 启动（B′ 与 α 无关，模型只建一次，求解器对象复用）；
-//!   - 每个探测点走种子阶梯：暖种子 NR → dc 重播种 NR → LMPF 终审；
-//!   - 暖种子只取自最后一个可行解，从未验证的外推点不接力；
-//!   - 输出可行/无解区间 [α_lo, α_hi]，供阶段二（二分法）收缩。
+//! 已实现：
+//! - 阶段一 [`AlphaMarch::run`]：前向固定步进行军。
+//! - 阶段二 [`AlphaMarch::bisect`]：区间二分收缩（保底路径）。
 //!
-//! 阶段二（二分）与割线加速实验尚未实现，见模块底部 TODO。
+//! 两阶段共用同一探针 [`AlphaMarch::probe`]：暖种子 NR → dc 重播种 NR →
+//! LMPF 终审。暖种子只取自最后一个可行解；B′ 模型与求解器全程复用，
+//! 每个 α 的 dc 播种成本是一次回代。
+//!
+//! TODO（后续实验）：割线加速——在无解侧对 g(α)=min‖F‖ 做割线外推
+//! （鼻点附近 g 对 α 过冲近似线性），残差方向余弦校验模型可信度，
+//! 失败退回本模块的二分保底。
 
 use nalgebra::DVector;
 use nalgebra_sparse::CscMatrix;
@@ -64,6 +68,24 @@ impl Default for MarchOptions {
     }
 }
 
+/// 二分收缩参数。
+#[derive(Clone)]
+pub struct BisectOptions {
+    /// 区间宽度停判（文献 ε2=1e-4）。
+    pub eps: f64,
+    /// 探测点个数上限保险丝。
+    pub max_probes: usize,
+}
+
+impl Default for BisectOptions {
+    fn default() -> Self {
+        Self {
+            eps: 1e-4,
+            max_probes: 32,
+        }
+    }
+}
+
 /// 本探测点实际奏效的种子来源（记账与诊断用）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Seed {
@@ -107,6 +129,19 @@ pub struct MarchOutcome {
     pub lm_iterations: usize,
 }
 
+/// 二分结果。`(lo, hi)`：lo 持可行解，hi 持无解证书，hi-lo < eps。
+pub struct AlphaMaxResult {
+    pub lo: f64,
+    pub hi: f64,
+    /// lo 处的可行解。
+    pub v_at_lo: DVector<Complex64>,
+    /// hi 处的最小二乘证书 ‖F‖∞。
+    pub hi_res_inf: f64,
+    pub probes: Vec<MarchPoint>,
+    pub nr_iterations: usize,
+    pub lm_iterations: usize,
+}
+
 /// dc 播种机：B′ 只与拓扑有关，模型与求解器对象全程复用；
 /// 每个 α 的播种成本是一次回代。
 struct DcSeeder {
@@ -134,7 +169,11 @@ impl DcSeeder {
         }
     }
 
-    fn seed(&mut self, s_alpha: &DVector<Complex64>, v_spec: &DVector<Complex64>) -> Option<DVector<Complex64>> {
+    fn seed(
+        &mut self,
+        s_alpha: &DVector<Complex64>,
+        v_spec: &DVector<Complex64>,
+    ) -> Option<DVector<Complex64>> {
         dcpf_initial_v(
             &mut self.model,
             s_alpha,
@@ -146,8 +185,9 @@ impl DcSeeder {
     }
 }
 
-/// 阶段一行军器。拓扑全程不变：NR 的 Jacobian 符号缓存、LMPF 的增广
-/// KKT 符号与 DCPF 模型全部只建一次，α 变化只触发数值 fill 与分解。
+/// Alpha-max 求解器（阶段一 + 阶段二）。拓扑全程不变：NR 的 Jacobian
+/// 符号缓存、LMPF 的增广 KKT 符号与 DCPF 模型全部只建一次，
+/// α 变化只触发数值 fill 与分解。
 pub struct AlphaMarch<SNR: Solve, SLM: Solve> {
     npv: usize,
     npq: usize,
@@ -158,6 +198,12 @@ pub struct AlphaMarch<SNR: Solve, SLM: Solve> {
     lm: GnTriuDriver,
     lm_solver: SLM,
     dc: Option<DcSeeder>,
+}
+
+struct ProbeOutcome {
+    verdict: Verdict,
+    /// 可行解（Feasible / Rescued 时）。
+    v: Option<DVector<Complex64>>,
 }
 
 impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
@@ -238,7 +284,60 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
         (r.converged, r.iterations, r.res_inf, DVector::from_vec(v))
     }
 
-    /// 执行行军。`ybus` 与构造时同一对象（借用规避自持引用）。
+    /// 种子阶梯探针：暖种子 NR → dc 重播种 NR → LMPF 终审。
+    /// NR 的发散残渣绝不使用；LMPF 一律从 `v_warm`（最后可行解）出发。
+    fn probe(
+        &mut self,
+        ybus: &CscMatrix<Complex64>,
+        alpha: f64,
+        v_warm: &DVector<Complex64>,
+        warm_label: Seed,
+        opts: &MarchOptions,
+        nr_ledger: &mut usize,
+        lm_ledger: &mut usize,
+    ) -> ProbeOutcome {
+        let s_alpha = self.s_base.scale(alpha);
+        // 第一级：暖种子 NR。
+        if let Some((v, it)) = self.nr_probe(ybus, &s_alpha, v_warm, opts) {
+            *nr_ledger += it;
+            return ProbeOutcome {
+                verdict: Verdict::Feasible {
+                    seed: warm_label,
+                    nr_iters: it,
+                },
+                v: Some(v),
+            };
+        }
+        // 第二级：dc 重播种 NR（B′ 回代，~免费）。
+        if let Some(Some(v_dc)) = self.dc.as_mut().map(|d| d.seed(&s_alpha, &self.v_spec)) {
+            if let Some((v, it)) = self.nr_probe(ybus, &s_alpha, &v_dc, opts) {
+                *nr_ledger += it;
+                return ProbeOutcome {
+                    verdict: Verdict::Feasible {
+                        seed: Seed::DcReseed,
+                        nr_iters: it,
+                    },
+                    v: Some(v),
+                };
+            }
+        }
+        // 终审：LMPF。
+        let (ok, it, res_inf, v_lm) = self.lm_verdict(ybus, &s_alpha, v_warm, opts);
+        *lm_ledger += it;
+        if ok {
+            ProbeOutcome {
+                verdict: Verdict::Rescued { lm_iters: it },
+                v: Some(v_lm),
+            }
+        } else {
+            ProbeOutcome {
+                verdict: Verdict::Infeasible { res_inf, lm_iters: it },
+                v: None,
+            }
+        }
+    }
+
+    /// 阶段一：前向固定步进行军。`ybus` 与构造时同一对象（借用规避自持引用）。
     pub fn run(&mut self, ybus: &CscMatrix<Complex64>, opts: &MarchOptions) -> MarchOutcome {
         let mut points = Vec::new();
         let mut nr_iterations = 0;
@@ -255,54 +354,27 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
         let mut first_probe = true;
 
         let bracket = loop {
-            let s_alpha = self.s_base.scale(alpha);
-            // 第一级：暖种子 NR。
-            let warm_seed = if first_probe { Seed::Dc } else { Seed::Warm };
-            let mut verdict = match self.nr_probe(ybus, &s_alpha, &v_warm, opts) {
-                Some((v, it)) => {
-                    nr_iterations += it;
-                    v_warm = v;
-                    Verdict::Feasible { seed: warm_seed, nr_iters: it }
-                }
-                None => {
-                    // 第二级：dc 重播种 NR（B′ 回代，~免费）。
-                    let reseeded = match self.dc.as_mut().map(|d| d.seed(&s_alpha, &self.v_spec)) {
-                        Some(Some(v_dc)) => match self.nr_probe(ybus, &s_alpha, &v_dc, opts) {
-                            Some((v, it)) => {
-                                nr_iterations += it;
-                                v_warm = v;
-                                Some(Verdict::Feasible { seed: Seed::DcReseed, nr_iters: it })
-                            }
-                            None => None,
-                        },
-                        _ => None,
-                    };
-                    match reseeded {
-                        Some(v) => v,
-                        // 终审：LMPF 从最后可行解出发（NR 的发散残渣绝不用）。
-                        None => {
-                            let (ok, it, res_inf, v_lm) =
-                                self.lm_verdict(ybus, &s_alpha, &v_warm, opts);
-                            lm_iterations += it;
-                            if ok {
-                                v_warm = v_lm;
-                                Verdict::Rescued { lm_iters: it }
-                            } else {
-                                Verdict::Infeasible { res_inf, lm_iters: it }
-                            }
-                        }
-                    }
-                }
-            };
-
-            let this_alpha = alpha;
-            points.push(MarchPoint { alpha: this_alpha, verdict });
+            let warm_label = if first_probe { Seed::Dc } else { Seed::Warm };
+            let outcome = self.probe(
+                ybus,
+                alpha,
+                &v_warm,
+                warm_label,
+                opts,
+                &mut nr_iterations,
+                &mut lm_iterations,
+            );
+            if let Some(v) = outcome.v {
+                v_warm = v;
+            }
+            let verdict = outcome.verdict;
+            points.push(MarchPoint { alpha, verdict });
             first_probe = false;
 
-            match points.last().unwrap().verdict {
-                Verdict::Infeasible { .. } => break alpha_lo.map(|lo| (lo, this_alpha)),
+            match verdict {
+                Verdict::Infeasible { .. } => break alpha_lo.map(|lo| (lo, alpha)),
                 _ => {
-                    alpha_lo = Some(this_alpha);
+                    alpha_lo = Some(alpha);
                     alpha += opts.step;
                     if alpha > opts.alpha_cap {
                         break None;
@@ -315,6 +387,64 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
             points,
             bracket,
             v_at_lo: v_warm,
+            nr_iterations,
+            lm_iterations,
+        }
+    }
+
+    /// 阶段二：区间二分收缩（保底路径）。
+    ///
+    /// 不变式：lo 可行（`v_lo` 为其解），hi 持无解证书。中点探针的暖
+    /// 种子永远取 `v_lo`——可行则区间左端右移并接力暖种子，无解则右
+    /// 端左移。hi 处的最后一次证书即最终证书。
+    pub fn bisect(
+        &mut self,
+        ybus: &CscMatrix<Complex64>,
+        bracket: (f64, f64),
+        v_at_lo: DVector<Complex64>,
+        march_opts: &MarchOptions,
+        opts: &BisectOptions,
+    ) -> AlphaMaxResult {
+        let (mut lo, mut hi) = bracket;
+        let mut v_lo = v_at_lo;
+        let mut hi_res_inf = f64::NAN;
+        let mut probes = Vec::new();
+        let mut nr_iterations = 0;
+        let mut lm_iterations = 0;
+
+        while hi - lo > opts.eps && probes.len() < opts.max_probes {
+            let mid = 0.5 * (lo + hi);
+            let outcome = self.probe(
+                ybus,
+                mid,
+                &v_lo,
+                Seed::Warm,
+                march_opts,
+                &mut nr_iterations,
+                &mut lm_iterations,
+            );
+            let verdict = outcome.verdict;
+            probes.push(MarchPoint { alpha: mid, verdict });
+            match verdict {
+                Verdict::Infeasible { res_inf, .. } => {
+                    hi = mid;
+                    hi_res_inf = res_inf;
+                }
+                _ => {
+                    lo = mid;
+                    if let Some(v) = outcome.v {
+                        v_lo = v;
+                    }
+                }
+            }
+        }
+
+        AlphaMaxResult {
+            lo,
+            hi,
+            v_at_lo: v_lo,
+            hi_res_inf,
+            probes,
             nr_iterations,
             lm_iterations,
         }

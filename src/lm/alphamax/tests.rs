@@ -51,4 +51,23 @@ fn ieee39_march_brackets_alpha_max() {
         }
         other => panic!("last point should be infeasible, got {other:?}"),
     }
+
+    // 阶段二：二分收缩到 eps。
+    let bi = BisectOptions::default();
+    let eps = bi.eps;
+    let res = march.bisect(&mat.y_bus, (lo, hi), out.v_at_lo.clone(), &opts, &bi);
+    println!(
+        "α_max ∈ ({:.6}, {:.6})  cert‖F‖∞={:.3e}  二分探点 {} 个  nr_iters={} lm_iters={}",
+        res.lo, res.hi, res.hi_res_inf, res.probes.len(), res.nr_iterations, res.lm_iterations
+    );
+    assert!(res.hi - res.lo <= eps, "bracket not shrunk to eps");
+    // 不变式：下端可行、上端持证书；宽度 ≈ eps（最后一次对半后 < eps）。
+    assert!(res.hi_res_inf > opts.lm_tol);
+    // 保底路径的探点数应≈log2(step/eps)，超 max_probes 即逻辑错误。
+    let expect = (step / eps).log2().ceil() as usize;
+    assert!(
+        res.probes.len() <= expect + 1,
+        "bisection used {} probes, expected ~{expect}",
+        res.probes.len()
+    );
 }
