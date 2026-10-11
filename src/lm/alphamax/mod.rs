@@ -86,6 +86,42 @@ impl Default for BisectOptions {
     }
 }
 
+/// 割线收缩参数（保底仍是二分：任何模型校验失败立即退回对半）。
+#[derive(Clone)]
+pub struct SecantOptions {
+    pub eps: f64,
+    pub max_probes: usize,
+    /// 相邻两个无解样本的残差方向余弦下限：低于此值说明线性模型不可信。
+    pub rho_cos_min: f64,
+    /// 掠射检查：|cos(射线, 残差方向)| 下限。射线近乎相切 fold 曲面时
+    /// g(α) 的线性区极窄，割线禁用（用户指出的几何风险）。
+    pub grazing_min: f64,
+    /// 割线提案距区间两端的最小相对边距，防止贴边停滞。
+    pub interior_margin: f64,
+}
+
+impl Default for SecantOptions {
+    fn default() -> Self {
+        Self {
+            eps: 1e-4,
+            max_probes: 32,
+            rho_cos_min: 0.99,
+            grazing_min: 1e-2,
+            interior_margin: 0.05,
+        }
+    }
+}
+
+/// 无解点的最小二乘采样：在 LMPF 终点外部重算残差（不改动驱动）。
+/// g = ‖r‖₂ 是注入点到可行曲面的垂直距离；ρ = r/‖r‖₂ 在 α→α_c⁺ 时
+/// 收敛到 fold 曲面的法向 n。
+#[derive(Clone, Debug)]
+pub struct LsSample {
+    pub alpha: f64,
+    pub g: f64,
+    pub rho: Vec<f64>,
+}
+
 /// 本探测点实际奏效的种子来源（记账与诊断用）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Seed {
@@ -123,6 +159,8 @@ pub struct MarchOutcome {
     pub bracket: Option<(f64, f64)>,
     /// 区间下端可行解：阶段二的暖种子。
     pub v_at_lo: DVector<Complex64>,
+    /// 区间上端无解点的最小二乘采样：割线阶段的第一发样本。
+    pub hi_sample: Option<LsSample>,
     /// 台账：NR 迭代数（每次迭代一次分解）。
     pub nr_iterations: usize,
     /// 台账：LMPF 外层迭代数（含救援与终审）。
@@ -198,12 +236,22 @@ pub struct AlphaMarch<SNR: Solve, SLM: Solve> {
     lm: GnTriuDriver,
     lm_solver: SLM,
     dc: Option<DcSeeder>,
+    /// 残差评估 scratch（割线采样用，与驱动内部缓冲无关）。
+    ibus: Vec<Complex64>,
+    rbuf: Vec<f64>,
+    /// 加载射线在残差空间的像：ds/dα = [Re s_base (n_act); Im s_base (npq)]。
+    /// 未归一化：ray_vec·ρ 即 g(α) 对 α 的斜率（功率/单位α）。
+    ray_vec: Vec<f64>,
+    /// 归一化射线方向：掠射余弦用。
+    ray_dir: Vec<f64>,
 }
 
 struct ProbeOutcome {
     verdict: Verdict,
     /// 可行解（Feasible / Rescued 时）。
     v: Option<DVector<Complex64>>,
+    /// 无解点的最小二乘采样（Infeasible 时）。
+    ls: Option<LsSample>,
 }
 
 impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
@@ -222,7 +270,24 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
         lm_solver: SLM,
     ) -> Self {
         let lm = GnTriuDriver::build_operator(ybus, npv, npq, s_base.as_slice().to_vec());
-        let dc = DcSeeder::build(ybus, &v_spec, npv + npq, to_perm, p_shift);
+        let n_act = npv + npq;
+        let dc = DcSeeder::build(ybus, &v_spec, n_act, to_perm, p_shift);
+        let n_state = npv + 2 * npq;
+        // 射线在残差空间的像：P 通道取注入实部（全体 active），
+        // Q 通道取注入虚部（PQ 段 0..npq），与 residual() 的方程排序一致。
+        let mut ray_vec = vec![0.0; n_state];
+        for i in 0..n_act {
+            ray_vec[i] = s_base[i].re;
+        }
+        for j in 0..npq {
+            ray_vec[n_act + j] = s_base[j].im;
+        }
+        let ray_norm = ray_vec.iter().map(|x| x * x).sum::<f64>().sqrt();
+        let ray_dir = if ray_norm > 0.0 {
+            ray_vec.iter().map(|x| x / ray_norm).collect()
+        } else {
+            vec![0.0; n_state]
+        };
         Self {
             npv,
             npq,
@@ -233,6 +298,10 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
             lm,
             lm_solver,
             dc: Some(dc),
+            ibus: vec![Complex64::new(0.0, 0.0); ybus.ncols()],
+            rbuf: vec![0.0; n_state],
+            ray_vec,
+            ray_dir,
         }
     }
 
@@ -284,6 +353,32 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
         (r.converged, r.iterations, r.res_inf, DVector::from_vec(v))
     }
 
+    /// 无解点的最小二乘采样：LMPF 终点处外部重算残差（一次评估的价钱）。
+    fn ls_sample(
+        &mut self,
+        ybus: &CscMatrix<Complex64>,
+        s_alpha: &DVector<Complex64>,
+        alpha: f64,
+        v_ls: &[Complex64],
+    ) -> LsSample {
+        let (_, merit) = crate::lm::residual::residual(
+            ybus,
+            s_alpha.as_slice(),
+            &mut self.ibus,
+            self.npv + self.npq,
+            self.npq,
+            v_ls,
+            &mut self.rbuf,
+        );
+        let g = (2.0 * merit).max(0.0).sqrt();
+        let rho = if g > 0.0 {
+            self.rbuf.iter().map(|x| x / g).collect()
+        } else {
+            vec![0.0; self.rbuf.len()]
+        };
+        LsSample { alpha, g, rho }
+    }
+
     /// 种子阶梯探针：暖种子 NR → dc 重播种 NR → LMPF 终审。
     /// NR 的发散残渣绝不使用；LMPF 一律从 `v_warm`（最后可行解）出发。
     fn probe(
@@ -306,6 +401,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
                     nr_iters: it,
                 },
                 v: Some(v),
+                ls: None,
             };
         }
         // 第二级：dc 重播种 NR（B′ 回代，~免费）。
@@ -318,6 +414,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
                         nr_iters: it,
                     },
                     v: Some(v),
+                    ls: None,
                 };
             }
         }
@@ -328,11 +425,14 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
             ProbeOutcome {
                 verdict: Verdict::Rescued { lm_iters: it },
                 v: Some(v_lm),
+                ls: None,
             }
         } else {
+            let ls = self.ls_sample(ybus, &s_alpha, alpha, v_lm.as_slice());
             ProbeOutcome {
                 verdict: Verdict::Infeasible { res_inf, lm_iters: it },
                 v: None,
+                ls: Some(ls),
             }
         }
     }
@@ -352,6 +452,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
         let mut alpha_lo: Option<f64> = None;
         let mut alpha = opts.alpha0;
         let mut first_probe = true;
+        let mut hi_sample: Option<LsSample> = None;
 
         let bracket = loop {
             let warm_label = if first_probe { Seed::Dc } else { Seed::Warm };
@@ -366,6 +467,9 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
             );
             if let Some(v) = outcome.v {
                 v_warm = v;
+            }
+            if outcome.ls.is_some() {
+                hi_sample = outcome.ls;
             }
             let verdict = outcome.verdict;
             points.push(MarchPoint { alpha, verdict });
@@ -387,6 +491,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
             points,
             bracket,
             v_at_lo: v_warm,
+            hi_sample,
             nr_iterations,
             lm_iterations,
         }
@@ -449,6 +554,162 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
             lm_iterations,
         }
     }
+
+    /// 阶段二（加速实验）：割线收缩，二分保底。
+    ///
+    /// 数学依据：鼻点右侧 g(α)=min‖F‖₂ 对 α 过冲近似线性，斜率
+    /// k = d s/dα · n = ray_vec·ρ（ρ 为残差方向，收敛到 fold 法向）。
+    /// 两个无解样本做割线过零外推；单样本时用法向斜率做牛顿步。
+    /// 几何风险（用户指出）：射线近乎相切 fold 曲面时线性区极窄——
+    /// 因此每次提案前校验：ρ 余弦（模型一致）、g 单调（右侧递增）、
+    /// 掠射余弦 |ray_dir·ρ|（不贴面）、提案落区间内部；任一失败退回
+    /// 对半分。最坏情况退化为纯二分，不会更差。
+    pub fn secant_shrink(
+        &mut self,
+        ybus: &CscMatrix<Complex64>,
+        bracket: (f64, f64),
+        v_at_lo: DVector<Complex64>,
+        initial_sample: Option<LsSample>,
+        march_opts: &MarchOptions,
+        opts: &SecantOptions,
+    ) -> SecantResult {
+        let (mut lo, mut hi) = bracket;
+        let mut v_lo = v_at_lo;
+        let mut hi_res_inf = f64::NAN;
+        let mut probes = Vec::new();
+        let mut nr_iterations = 0;
+        let mut lm_iterations = 0;
+        let mut secant_steps = 0;
+        let mut fallback_steps = 0;
+        // 无解样本（行军的上端证书是第一发）。
+        let mut samples: Vec<LsSample> = initial_sample.into_iter().collect();
+
+        while hi - lo > opts.eps && probes.len() < opts.max_probes {
+            let width = hi - lo;
+            let margin = opts.interior_margin * width;
+            // 尝试割线提案。
+            let proposal = self.secant_proposal(&samples, opts).filter(|a| {
+                *a > lo + margin && *a < hi - margin
+            });
+            let (alpha, by_secant) = match proposal {
+                Some(a) => {
+                    secant_steps += 1;
+                    (a, true)
+                }
+                None => {
+                    fallback_steps += 1;
+                    (0.5 * (lo + hi), false)
+                }
+            };
+
+            let outcome = self.probe(
+                ybus,
+                alpha,
+                &v_lo,
+                Seed::Warm,
+                march_opts,
+                &mut nr_iterations,
+                &mut lm_iterations,
+            );
+            let verdict = outcome.verdict;
+            probes.push(MarchPoint { alpha, verdict });
+            match verdict {
+                Verdict::Infeasible { res_inf, .. } => {
+                    hi = alpha;
+                    hi_res_inf = res_inf;
+                    if let Some(s) = outcome.ls {
+                        samples.push(s);
+                        if samples.len() > 4 {
+                            samples.remove(0);
+                        }
+                    }
+                    let _ = by_secant;
+                }
+                _ => {
+                    // 割线打到可行侧：根在左侧，样本斜率被高估——丢弃
+                    // 全部样本（它们属于更右侧的线性区外段），退回保守。
+                    lo = alpha;
+                    if let Some(v) = outcome.v {
+                        v_lo = v;
+                    }
+                    if by_secant {
+                        samples.clear();
+                    }
+                }
+            }
+        }
+
+        SecantResult {
+            base: AlphaMaxResult {
+                lo,
+                hi,
+                v_at_lo: v_lo,
+                hi_res_inf,
+                probes,
+                nr_iterations,
+                lm_iterations,
+            },
+            secant_steps,
+            fallback_steps,
+            samples,
+        }
+    }
+
+    /// 割线/法向提案：两样本取割线根，单样本取法向斜率牛顿步；
+    /// 模型校验（ρ 余弦、g 单调、掠射）不过则 None（调用方退回二分）。
+    fn secant_proposal(&self, samples: &[LsSample], opts: &SecantOptions) -> Option<f64> {
+        let last = samples.last()?;
+        // 掠射检查：射线近乎相切 fold 曲面时线性模型不可信。
+        let grazing: f64 = self
+            .ray_dir
+            .iter()
+            .zip(last.rho.iter())
+            .map(|(a, b)| a * b)
+            .sum::<f64>()
+            .abs();
+        if grazing < opts.grazing_min {
+            return None;
+        }
+        if samples.len() >= 2 {
+            let prev = &samples[samples.len() - 2];
+            // ρ 余弦：法向一致性，线性区内的样本方向应几乎相同。
+            let cos: f64 = prev
+                .rho
+                .iter()
+                .zip(last.rho.iter())
+                .map(|(a, b)| a * b)
+                .sum();
+            // g 单调：右侧 g 应随 α 递增（样本按到达顺序 α 未必有序，
+            // 用 |Δα| 归一化斜率为正代替）。
+            let slope_fd = (last.g - prev.g) / (last.alpha - prev.alpha);
+            if cos < opts.rho_cos_min || !(slope_fd > 0.0) {
+                return None;
+            }
+            Some(last.alpha - last.g * (last.alpha - prev.alpha) / (last.g - prev.g))
+        } else {
+            // 单样本：法向斜率 k = ray_vec·ρ（功率/单位α）做牛顿步。
+            let k: f64 = self
+                .ray_vec
+                .iter()
+                .zip(last.rho.iter())
+                .map(|(a, b)| a * b)
+                .sum::<f64>()
+                .abs();
+            if k <= 0.0 {
+                return None;
+            }
+            Some(last.alpha - last.g / k)
+        }
+    }
+}
+
+/// 割线收缩结果：基础区间与台账之外，记录割线/回退步数与最终样本，
+/// 供与二分基线对账。
+pub struct SecantResult {
+    pub base: AlphaMaxResult,
+    pub secant_steps: usize,
+    pub fallback_steps: usize,
+    pub samples: Vec<LsSample>,
 }
 
 #[cfg(test)]
