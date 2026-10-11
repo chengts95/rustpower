@@ -40,10 +40,16 @@ impl Cell {
         }
     }
 
+    /// 表格标记：✓外层/分解数（linear_solves=0 时只印外层，如未接账的路径）。
     pub(super) fn mark(&self) -> String {
+        let counts = if self.linear_solves > 0 {
+            format!("{}/{}", self.iterations, self.linear_solves)
+        } else {
+            format!("{}", self.iterations)
+        };
         match self.outcome() {
-            "solution" => format!("✓{}", self.iterations),
-            "low_voltage" => format!("⚠{}({:.2})", self.iterations, self.min_vmag_pq),
+            "solution" => format!("✓{}", counts),
+            "low_voltage" => format!("⚠{}({:.2})", counts, self.min_vmag_pq),
             _ => "✗".into(),
         }
     }
@@ -94,9 +100,10 @@ pub(super) fn run_nr(case: &Case, s: &DVector<Complex64>, v0: &[Complex64]) -> (
     let t = Instant::now();
     let mut solver = KLUSolver::default();
     let v0 = DVector::from_column_slice(v0);
+    // NR 每次外层迭代 = 1 次 J 分解，分解数 = 外层数，如实入账。
     let (cell, v) = match newton_pf(&case.y, s, &v0, case.npv, case.npq, Some(TOL), Some(MAXIT), &mut solver, None) {
-        Ok((v, it)) => (finish(case, s.as_slice(), v.as_slice(), true, it, 0, t), v),
-        Err((_, v, it)) => (finish(case, s.as_slice(), v.as_slice(), false, it, 0, t), v),
+        Ok((v, it)) => (finish(case, s.as_slice(), v.as_slice(), true, it, it as u64, t), v),
+        Err((_, v, it)) => (finish(case, s.as_slice(), v.as_slice(), false, it, it as u64, t), v),
     };
     (cell, v.as_slice().to_vec())
 }
