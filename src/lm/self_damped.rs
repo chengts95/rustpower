@@ -324,6 +324,142 @@ impl GnTriuDriver {
         GnTriuResult { iterations: maxit, converged: res_inf < tol, res_inf }
     }
 
+    /// 逐发重线化 TS（对照实验，非文献方法）：与 [`solve_self_damped_ts`]
+    /// 的唯一区别是 shots 2–3 在中间点**重新组装 J 并全新分解**，γ 仍冻结
+    /// 在 x_k 的 2f(x_k) 以隔离"J 冻结"这一个变量。每发 = 一次完整组装 +
+    /// 一次完整分解（n_solves 如实记），复合步的分解摊销被完全放弃。
+    /// 用于裁决：大系统上 TS 退化是"冻结 J 失效"（则此外层数应大降）还是
+    /// "标量 γ 欠阻尼"（则此外层数几乎不变）。
+    ///
+    /// [`solve_self_damped_ts`]: GnTriuDriver::solve_self_damped_ts
+    pub fn solve_self_damped_ts_freshj<S: Solve>(
+        &mut self,
+        ybus: &CscMatrix<Complex64>,
+        solver: &mut S,
+        v: &mut [Complex64],
+        tol: f64,
+        maxit: usize,
+    ) -> GnTriuResult {
+        let n = self.n_state;
+        let mut res_inf;
+        let mut merit = f64::INFINITY;
+        for it in 0..maxit {
+            let f;
+            {
+                let (n_act, npq) = (self.n_act, self.npq);
+                (res_inf, f) = residual_with_power(
+                    ybus,
+                    &self.sbus,
+                    &mut self.ibus,
+                    &mut self.scalc,
+                    n_act,
+                    npq,
+                    v,
+                    &mut self.r,
+                );
+            }
+            if res_inf < tol {
+                return GnTriuResult { iterations: it, converged: true, res_inf };
+            }
+            if (merit - f).abs() <= STAGNATION * f {
+                return GnTriuResult { iterations: it, converged: false, res_inf };
+            }
+            merit = f;
+            self.fill(ybus, v);
+
+            // Shot 1: 与 TS 完全相同（含 γ 递增保护）。
+            let mut gamma = 2.0 * f;
+            let mut stepped = false;
+            for _ in 0..=MAX_RETRIES {
+                for c in 0..n {
+                    self.values[c] = gamma;
+                }
+                self.b[..n].fill(0.0);
+                for i in 0..n {
+                    self.b[n + i] = -self.r[i];
+                }
+                self.n_solves += 1;
+                let ok = solver
+                    .solve(
+                        &mut self.triu.col_offsets,
+                        &mut self.triu.row_indices,
+                        &mut self.values,
+                        &mut self.b,
+                        2 * n,
+                    )
+                    .is_ok()
+                    && self.b.iter().all(|x| x.is_finite());
+                let trial_ok = ok
+                    && polar_trial(v, &self.b[..n], self.n_act, self.npq, true, &mut self.vt)
+                        .is_ok();
+                if trial_ok {
+                    v.copy_from_slice(&self.vt);
+                    stepped = true;
+                    break;
+                }
+                gamma *= 10.0;
+            }
+            if !stepped {
+                return GnTriuResult { iterations: it, converged: false, res_inf };
+            }
+
+            // Shots 2 & 3: 刷新残差、在中间点重新组装 J、μ 槽重置为冻结 γ、
+            // 全新分解（不 resolve）——与 TS 的唯一区别。
+            for _ in 0..2 {
+                {
+                    let (n_act, npq) = (self.n_act, self.npq);
+                    residual_with_power(
+                        ybus,
+                        &self.sbus,
+                        &mut self.ibus,
+                        &mut self.scalc,
+                        n_act,
+                        npq,
+                        v,
+                        &mut self.r,
+                    );
+                }
+                self.fill(ybus, v);
+                for c in 0..n {
+                    self.values[c] = gamma;
+                }
+                self.b[..n].fill(0.0);
+                for i in 0..n {
+                    self.b[n + i] = -self.r[i];
+                }
+                self.n_solves += 1;
+                let ok = solver
+                    .solve(
+                        &mut self.triu.col_offsets,
+                        &mut self.triu.row_indices,
+                        &mut self.values,
+                        &mut self.b,
+                        2 * n,
+                    )
+                    .is_ok();
+                let trial_ok = ok
+                    && self.b.iter().all(|x| x.is_finite())
+                    && polar_trial(
+                        v,
+                        &self.b[..n],
+                        self.n_act,
+                        self.npq,
+                        false,
+                        &mut self.vt,
+                    )
+                    .is_ok();
+                if !trial_ok {
+                    break;
+                }
+                v.copy_from_slice(&self.vt);
+            }
+        }
+        let (n_act, npq) = (self.n_act, self.npq);
+        let (res_inf, _) =
+            crate::lm::residual::residual(ybus, &self.sbus, &mut self.ibus, n_act, npq, v, &mut self.r);
+        GnTriuResult { iterations: maxit, converged: res_inf < tol, res_inf }
+    }
+
     /// Cauchy 护送 steps 步：handoff 实验的**免分解**护送路径。
     /// 每步 = 3 次 Ybus matvec + 逐元素运算，无填充、无分解。
     /// 返回实际走成的步数（某步彻底失败则提前停止）。

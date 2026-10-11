@@ -15,7 +15,7 @@
 //! 输出 JSONL + 每算例四堵墙汇总；更密的网格留作后处理，不在此自适应。
 
 use super::comparison::{Case, load_case};
-use super::harness::{MAXIT, TOL, lm_options, run_chord, run_gn, run_nr, run_sd, run_ts};
+use super::harness::{MAXIT, TOL, lm_options, run_chord, run_gn, run_nr, run_sd, run_tf, run_ts};
 use crate::bench;
 use nalgebra::DVector;
 use num_complex::Complex64;
@@ -504,10 +504,10 @@ fn run_import(name: &str) {
     let (opts, options_note) = lm_options();
 
     let mut out = Vec::new();
-    let mut walls = vec![-1.0f64; 10]; // our flatNR flatGN flatSD flatTS dcNR dcGN dcSD dcTS | pp flat dc
+    let mut walls = vec![-1.0f64; 12]; // our flatNR flatGN flatSD flatTS flatTF dcNR dcGN dcSD dcTS dcTF | pp flat dc
     let wall_labels = [
-        "our flat+NR", "our flat+GN", "our flat+SD", "our flat+TS",
-        "our dc+NR", "our dc+GN", "our dc+SD", "our dc+TS",
+        "our flat+NR", "our flat+GN", "our flat+SD", "our flat+TS", "our flat+TF",
+        "our dc+NR", "our dc+GN", "our dc+SD", "our dc+TS", "our dc+TF",
         "pp flat", "pp dc",
     ];
 
@@ -550,6 +550,10 @@ fn run_import(name: &str) {
         c.start = "flat";
         c.method = "ts";
         cells.push(c);
+        let mut c = run_tf(&case, &mut gn, &mut gn_solver, &s_scaled, &case.v);
+        c.start = "flat";
+        c.method = "tf";
+        cells.push(c);
         if let Some(v0) = &v_dc_ours {
             let (mut c, v) = run_nr(&case, &s_dvec, v0.as_slice());
             c.start = "dc";
@@ -568,6 +572,10 @@ fn run_import(name: &str) {
             c.start = "dc";
             c.method = "ts";
             cells.push(c);
+            let mut c = run_tf(&case, &mut gn, &mut gn_solver, &s_scaled, v0.as_slice());
+            c.start = "dc";
+            c.method = "tf";
+            cells.push(c);
         }
         for (idx, cell) in cells.iter().enumerate() {
             if cell.converged {
@@ -575,10 +583,10 @@ fn run_import(name: &str) {
             }
         }
         if row.flat.converged {
-            walls[8] = alpha;
+            walls[10] = alpha;
         }
         if row.dc.converged {
-            walls[9] = alpha;
+            walls[11] = alpha;
         }
 
         // 电压对照（双方均收敛时）：ours flat+NR vs pp flat，ours dc+NR vs pp dc。
@@ -592,7 +600,7 @@ fn run_import(name: &str) {
             Some(max_dv(&pp_v, ours))
         };
         let dv_flat = if cells[0].converged { dv(&v_flat_nr, &row.flat) } else { None };
-        let dv_dc = if cells.get(4).map(|c| c.converged).unwrap_or(false) {
+        let dv_dc = if cells.get(5).map(|c| c.converged).unwrap_or(false) {
             dv(&v_dc_nr, &row.dc)
         } else {
             None
@@ -613,15 +621,17 @@ fn run_import(name: &str) {
             }
         };
         println!(
-            "  α={alpha:.2} | our flat: NR {:>5} GN {:>5} SD {:>5} TS {:>5} | our dc: NR {:>5} GN {:>5} SD {:>5} TS {:>5} | pp: flat {:>5} dc {:>5} | ΔV flat {} dc {} | Δθstart {}",
+            "  α={alpha:.2} | our flat: NR {:>5} GN {:>5} SD {:>5} TS {:>5} TF {:>5} | our dc: NR {:>5} GN {:>5} SD {:>5} TS {:>5} TF {:>5} | pp: flat {:>5} dc {:>5} | ΔV flat {} dc {} | Δθstart {}",
             show("flat", "nr"),
             show("flat", "gn"),
             show("flat", "sd"),
             show("flat", "ts"),
+            show("flat", "tf"),
             show("dc", "nr"),
             show("dc", "gn"),
             show("dc", "sd"),
             show("dc", "ts"),
+            show("dc", "tf"),
             pp_mark(&row.flat),
             pp_mark(&row.dc),
             dv_flat.map(|x| format!("{x:.1e}")).unwrap_or("—".into()),
