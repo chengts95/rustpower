@@ -68,13 +68,18 @@ impl Default for MarchOptions {
     }
 }
 
-/// 二分收缩参数。
+/// 区间收缩参数。
 #[derive(Clone)]
 pub struct BisectOptions {
     /// 区间宽度停判（文献 ε2=1e-4）。
     pub eps: f64,
     /// 探测点个数上限保险丝。
     pub max_probes: usize,
+    /// 探点位置：probe = lo + ratio·(hi−lo)。0.5 为对称二分；
+    /// 0.382（黄金分割共轭）为非对称——可行（便宜，暖启动 NR 几次迭代）
+    /// 时余下 0.618w，收缩慢但代价低；无解（昂贵，LMPF 十几次外层）时
+    /// 余下 0.382w，昂贵的终审每次买到更多区间收缩。
+    pub ratio: f64,
 }
 
 impl Default for BisectOptions {
@@ -82,6 +87,17 @@ impl Default for BisectOptions {
         Self {
             eps: 1e-4,
             max_probes: 32,
+            ratio: 0.5,
+        }
+    }
+}
+
+impl BisectOptions {
+    /// 黄金分割非对称收缩（0.618 法）。
+    pub fn golden() -> Self {
+        Self {
+            ratio: 1.0 - 1.0 / 1.618_033_988_749_895,
+            ..Self::default()
         }
     }
 }
@@ -518,7 +534,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
         let mut lm_iterations = 0;
 
         while hi - lo > opts.eps && probes.len() < opts.max_probes {
-            let mid = 0.5 * (lo + hi);
+            let mid = lo + opts.ratio * (hi - lo);
             let outcome = self.probe(
                 ybus,
                 mid,
