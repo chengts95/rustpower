@@ -166,6 +166,8 @@ pub enum Verdict {
 pub struct MarchPoint {
     pub alpha: f64,
     pub verdict: Verdict,
+    /// 本探点墙钟（含两级 NR 与 LMPF 终审的全部开销）。
+    pub wall_ms: f64,
 }
 
 /// 行军结果。`bracket = Some((α_lo, α_hi))` 表示 α_lo 可行、α_hi 持
@@ -181,6 +183,8 @@ pub struct MarchOutcome {
     pub nr_iterations: usize,
     /// 台账：LMPF 外层迭代数（含救援与终审）。
     pub lm_iterations: usize,
+    /// 阶段总墙钟。
+    pub wall: std::time::Duration,
 }
 
 /// 二分结果。`(lo, hi)`：lo 持可行解，hi 持无解证书，hi-lo < eps。
@@ -194,6 +198,8 @@ pub struct AlphaMaxResult {
     pub probes: Vec<MarchPoint>,
     pub nr_iterations: usize,
     pub lm_iterations: usize,
+    /// 阶段总墙钟。
+    pub wall: std::time::Duration,
 }
 
 /// dc 播种机：B′ 只与拓扑有关，模型与求解器对象全程复用；
@@ -327,14 +333,16 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
         self
     }
 
+    /// NR 探测：可行则带回解与迭代数；失败（Err）也带回烧掉的迭代数——
+    /// 达到迭代上限的 NR 每次烧满 nr_max_iter，这笔账不许丢。
     fn nr_probe(
         &mut self,
         ybus: &CscMatrix<Complex64>,
         s_alpha: &DVector<Complex64>,
         v0: &DVector<Complex64>,
         opts: &MarchOptions,
-    ) -> Option<(DVector<Complex64>, usize)> {
-        newton_pf(
+    ) -> (Option<(DVector<Complex64>, usize)>, usize) {
+        match newton_pf(
             ybus,
             s_alpha,
             v0,
@@ -344,9 +352,10 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
             Some(opts.nr_max_iter),
             &mut self.nr_solver,
             Some(&mut self.nr_cache),
-        )
-        .ok()
-        .map(|(v, it)| (v, it))
+        ) {
+            Ok((v, it)) => (Some((v, it)), it),
+            Err((_, _, it)) => (None, it),
+        }
     }
 
     fn lm_verdict(
@@ -408,9 +417,10 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
         lm_ledger: &mut usize,
     ) -> ProbeOutcome {
         let s_alpha = self.s_base.scale(alpha);
-        // 第一级：暖种子 NR。
-        if let Some((v, it)) = self.nr_probe(ybus, &s_alpha, v_warm, opts) {
-            *nr_ledger += it;
+        // 第一级：暖种子 NR（失败迭代同样入账）。
+        let (hit, spent) = self.nr_probe(ybus, &s_alpha, v_warm, opts);
+        *nr_ledger += spent;
+        if let Some((v, it)) = hit {
             return ProbeOutcome {
                 verdict: Verdict::Feasible {
                     seed: warm_label,
@@ -420,10 +430,11 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
                 ls: None,
             };
         }
-        // 第二级：dc 重播种 NR（B′ 回代，~免费）。
+        // 第二级：dc 重播种 NR（B′ 回代，~免费；失败迭代同样入账）。
         if let Some(Some(v_dc)) = self.dc.as_mut().map(|d| d.seed(&s_alpha, &self.v_spec)) {
-            if let Some((v, it)) = self.nr_probe(ybus, &s_alpha, &v_dc, opts) {
-                *nr_ledger += it;
+            let (hit, spent) = self.nr_probe(ybus, &s_alpha, &v_dc, opts);
+            *nr_ledger += spent;
+            if let Some((v, it)) = hit {
                 return ProbeOutcome {
                     verdict: Verdict::Feasible {
                         seed: Seed::DcReseed,
@@ -455,6 +466,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
 
     /// 阶段一：前向固定步进行军。`ybus` 与构造时同一对象（借用规避自持引用）。
     pub fn run(&mut self, ybus: &CscMatrix<Complex64>, opts: &MarchOptions) -> MarchOutcome {
+        let stage_t0 = std::time::Instant::now();
         let mut points = Vec::new();
         let mut nr_iterations = 0;
         let mut lm_iterations = 0;
@@ -472,6 +484,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
 
         let bracket = loop {
             let warm_label = if first_probe { Seed::Dc } else { Seed::Warm };
+            let t0 = std::time::Instant::now();
             let outcome = self.probe(
                 ybus,
                 alpha,
@@ -481,6 +494,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
                 &mut nr_iterations,
                 &mut lm_iterations,
             );
+            let wall_ms = t0.elapsed().as_secs_f64() * 1e3;
             if let Some(v) = outcome.v {
                 v_warm = v;
             }
@@ -488,7 +502,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
                 hi_sample = outcome.ls;
             }
             let verdict = outcome.verdict;
-            points.push(MarchPoint { alpha, verdict });
+            points.push(MarchPoint { alpha, verdict, wall_ms });
             first_probe = false;
 
             match verdict {
@@ -510,6 +524,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
             hi_sample,
             nr_iterations,
             lm_iterations,
+            wall: stage_t0.elapsed(),
         }
     }
 
@@ -526,6 +541,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
         march_opts: &MarchOptions,
         opts: &BisectOptions,
     ) -> AlphaMaxResult {
+        let stage_t0 = std::time::Instant::now();
         let (mut lo, mut hi) = bracket;
         let mut v_lo = v_at_lo;
         let mut hi_res_inf = f64::NAN;
@@ -535,6 +551,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
 
         while hi - lo > opts.eps && probes.len() < opts.max_probes {
             let mid = lo + opts.ratio * (hi - lo);
+            let t0 = std::time::Instant::now();
             let outcome = self.probe(
                 ybus,
                 mid,
@@ -544,8 +561,9 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
                 &mut nr_iterations,
                 &mut lm_iterations,
             );
+            let wall_ms = t0.elapsed().as_secs_f64() * 1e3;
             let verdict = outcome.verdict;
-            probes.push(MarchPoint { alpha: mid, verdict });
+            probes.push(MarchPoint { alpha: mid, verdict, wall_ms });
             match verdict {
                 Verdict::Infeasible { res_inf, .. } => {
                     hi = mid;
@@ -568,6 +586,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
             probes,
             nr_iterations,
             lm_iterations,
+            wall: stage_t0.elapsed(),
         }
     }
 
@@ -589,6 +608,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
         march_opts: &MarchOptions,
         opts: &SecantOptions,
     ) -> SecantResult {
+        let stage_t0 = std::time::Instant::now();
         let (mut lo, mut hi) = bracket;
         let mut v_lo = v_at_lo;
         let mut hi_res_inf = f64::NAN;
@@ -618,6 +638,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
                 }
             };
 
+            let t0 = std::time::Instant::now();
             let outcome = self.probe(
                 ybus,
                 alpha,
@@ -627,8 +648,9 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
                 &mut nr_iterations,
                 &mut lm_iterations,
             );
+            let wall_ms = t0.elapsed().as_secs_f64() * 1e3;
             let verdict = outcome.verdict;
-            probes.push(MarchPoint { alpha, verdict });
+            probes.push(MarchPoint { alpha, verdict, wall_ms });
             match verdict {
                 Verdict::Infeasible { res_inf, .. } => {
                     hi = alpha;
@@ -664,6 +686,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
                 probes,
                 nr_iterations,
                 lm_iterations,
+                wall: stage_t0.elapsed(),
             },
             secant_steps,
             fallback_steps,
