@@ -70,4 +70,45 @@ fn ieee39_march_brackets_alpha_max() {
         "bisection used {} probes, expected ~{expect}",
         res.probes.len()
     );
+
+    // 阶段二（加速实验）：割线收缩，与二分基线同区间同精度对账。
+    let mut march2 = AlphaMarch::new(
+        &mat.y_bus,
+        mat.npv,
+        mat.npq,
+        mat.s_bus.clone(),
+        mat.v_bus_init.clone(),
+        &mat.to_perm,
+        &p_shift,
+        KLUSolver::default(),
+        LDLSolver::default(),
+    );
+    let out2 = march2.run(&mat.y_bus, &opts);
+    let sec = march2.secant_shrink(
+        &mat.y_bus,
+        out2.bracket.unwrap(),
+        out2.v_at_lo.clone(),
+        out2.hi_sample.clone(),
+        &opts,
+        &SecantOptions::default(),
+    );
+    for s in &sec.samples {
+        println!("  样本 α={:.6}  g={:.4e}", s.alpha, s.g);
+    }
+    println!(
+        "割线: α_max ∈ ({:.6}, {:.6})  探点 {}（割 {} / 回退 {}）  nr_iters={} lm_iters={}",
+        sec.base.lo,
+        sec.base.hi,
+        sec.base.probes.len(),
+        sec.secant_steps,
+        sec.fallback_steps,
+        sec.base.nr_iterations,
+        sec.base.lm_iterations
+    );
+    assert!(sec.base.hi - sec.base.lo <= eps, "secant bracket not shrunk");
+    // 两条路径必须裁定同一个 α_max（区间相交）。
+    assert!(
+        sec.base.lo < res.hi + 2.0 * eps && res.lo < sec.base.hi + 2.0 * eps,
+        "secant and bisection disagree on α_max"
+    );
 }
