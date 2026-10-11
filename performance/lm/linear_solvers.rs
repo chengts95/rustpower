@@ -156,6 +156,50 @@ impl Drop for Cholesky {
     }
 }
 
+/// 每次调用都全新分解（绝不 refactor）的 KLU，用于检验"refactor 复用旧
+/// 主元顺序在条件数平方后的矩阵上静默退化"的假设：包装器的 fallback 只在
+/// refactor 报告奇异时触发（status != 0），而回收主元位置失配不会报告。
+struct FreshKlu(KLUSolver);
+impl Solve for FreshKlu {
+    fn solve(
+        &mut self,
+        Ap: &mut [usize],
+        Ai: &mut [usize],
+        Ax: &mut [f64],
+        b: &mut [f64],
+        n: usize,
+    ) -> Result<(), &'static str> {
+        unsafe {
+            if self.0 .0.symbolic.is_null() {
+                crate::timeit!(klu_probe::SYM_NS, {
+                    self.0 .0.solve_sym(
+                        Ap.as_mut_ptr() as *mut i64,
+                        Ai.as_mut_ptr() as *mut i64,
+                        n as i64,
+                    );
+                });
+            }
+            let mut ret = crate::timeit!(klu_probe::FACTOR_NS, {
+                self.0 .0.factor(
+                    Ap.as_mut_ptr() as *mut i64,
+                    Ai.as_mut_ptr() as *mut i64,
+                    Ax.as_mut_ptr(),
+                )
+            });
+            ret |= crate::timeit!(klu_probe::SOLVE_NS, {
+                self.0 .0.solve(b.as_mut_ptr(), n as i64, 1)
+            });
+            if ret != 0 {
+                return Err("error occurred when calling KLU routines!");
+            }
+        }
+        Ok(())
+    }
+    fn reset(&mut self) {
+        self.0.reset();
+    }
+}
+
 /// 同一矩阵布局只换后端；每次完整潮流内部复用驱动器和求解器。
 fn run_system<S: Solve>(
     case: &Case,
@@ -240,6 +284,7 @@ enum BackendMethod {
     NormalSupernodal,
     UpperQdldl,
     NormalKlu,
+    NormalKluFresh,
     FullQdldl,
     FullKlu,
 }
@@ -252,6 +297,7 @@ impl BackendMethod {
             NormalSupernodal => "正规方程-超节点Cholesky",
             UpperQdldl => "增广方程-上三角-QDLDL",
             NormalKlu => "正规方程-KLU",
+            NormalKluFresh => "正规方程-KLU-全新分解",
             FullQdldl => "增广方程-完整-QDLDL",
             FullKlu => "增广方程-完整-KLU",
         }
@@ -259,7 +305,7 @@ impl BackendMethod {
     fn backend(self) -> &'static str {
         use BackendMethod::*;
         match self {
-            NormalKlu | FullKlu => "KLU",
+            NormalKlu | NormalKluFresh | FullKlu => "KLU",
             NormalCholesky | NormalSupernodal => "CHOLMOD",
             _ => "QDLDL",
         }
@@ -274,9 +320,9 @@ pub fn benchmark_linear_solvers() {
         .unwrap();
     assert!(threads > 0);
     let out = std::env::var("RUSTPOWER_CHOLESKY_OUTPUT").expect("请指定输出目录");
-    // --klu复用已有五条KLU/QDLDL路径，不要求安装CHOLMOD。
+    // --klu复用已有五条KLU/QDLDL路径加全新分解对照，不要求安装CHOLMOD。
     let methods: &[BackendMethod] = if std::env::args().any(|arg| arg == "--klu") {
-        &[NormalQdldl, UpperQdldl, NormalKlu, FullQdldl, FullKlu]
+        &[NormalQdldl, UpperQdldl, NormalKlu, NormalKluFresh, FullQdldl, FullKlu]
     } else {
         &[
             NormalQdldl,
@@ -327,6 +373,9 @@ pub fn benchmark_linear_solvers() {
                     panic!("CHOLMOD 后端仅支持 Linux；Windows 请用 --klu 路径")
                 }
                 NormalKlu => run_with_backend(case, &options, KLUSolver::default, false),
+                NormalKluFresh => {
+                    run_with_backend(case, &options, || FreshKlu(KLUSolver::default()), false)
+                }
                 FullQdldl => {
                     let n = case.npv + 2 * case.npq;
                     run_with_backend(
@@ -359,11 +408,13 @@ pub fn benchmark_linear_solvers() {
                 row["refactor_count"] = klu_probe::N_REFACTOR.load(Ordering::Relaxed).into();
                 row["factor_fallback_count"] =
                     klu_probe::N_FACTOR_FALLBACK.load(Ordering::Relaxed).into();
-                assert_eq!(
-                    klu_probe::N_FIRST_FACTOR.load(Ordering::Relaxed),
-                    1,
-                    "KLU应复用求解器"
-                );
+                if !matches!(method, NormalKluFresh) {
+                    assert_eq!(
+                        klu_probe::N_FIRST_FACTOR.load(Ordering::Relaxed),
+                        1,
+                        "KLU应复用求解器"
+                    );
+                }
             }
             let iterations = row["iterations"].as_u64().unwrap();
             let solves = row["linear_solves"].as_u64().unwrap();
@@ -402,7 +453,7 @@ pub fn benchmark_linear_solvers() {
             .into();
             row["jacobian_method"] = if matches!(
                 method,
-                NormalQdldl | NormalCholesky | NormalSupernodal | NormalKlu
+                NormalQdldl | NormalCholesky | NormalSupernodal | NormalKlu | NormalKluFresh
             ) {
                 "V4"
             } else {
