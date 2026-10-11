@@ -113,11 +113,25 @@ explained as a different problem).
 %            13/43 节点若找到数据在此补小节
 \subsection{LM Variants under Honest Accounting}
 Residual-scaled damping converges parameter-free but pays linear rates in the filtered
-subspace; trust region with a sound radius is far ahead (44--48 vs 152--504 factorizations).
+subspace (152--504 outer iterations, 456--873 factorizations on the RTE cases).
+A single probe factorization at the first iteration closes the gap parameter-free:
+the merit retention $r=f(x_0{+}d)/f(x_0)$ of the undamped Gauss--Newton step
+classifies the start (healthy $0.003$--$0.14$ vs.\ pathological $200$--$10^4$, a
+five-order-of-magnitude margin), retires the radius outright on healthy starts
+(cost: exactly one extra factorization per solve), and on pathological starts sets
+the initial radius $\|d\|\sqrt{\kappa/r}$ with the damping warm-started at
+$\mu = r$ --- the retention ratio is itself the observable scale of the curvature
+the damping must overcome, so the clamped first step is reached in $O(1)$ solves.
+The adaptive trust region thus converges from flat starts where every
+parameter-free method failed, in 19--25 total factorizations on all three RTE
+cases --- fewer than the best hand-tuned fixed radius (44--48), because no
+factorizations are burned on damping search.
 We exhibit a case where 15 outer iterations hide 1\,214 factorizations: outer-iteration
 reporting is not an acceptable cost metric for this family.
-% TODO 实验: 重做 TR vs SD/TS 对决表（分解数与墙时）；6495 重试风暴表；
-%            chord 列（健康网省时、病态网停滞）作为分解复用边界的量化
+% TODO 实验: TR vs SD/TS 对决表加 "adaptive TR (parameter-free)" 行——6470: 24/25、
+%            6495: 18/19、6515: 22/23（外层/分解，含探针），健康回归 39: 4/5、118: 5/6、
+%            300: 8/9（仅探针税）；复现链 robustness_pp.py + lm-robustness --import，
+%            不留存 jsonl；6495 重试风暴表；chord 列作为分解复用边界的量化
 
 \section{The Role of LMPF}
 \subsection{Least-Squares Semantics}
