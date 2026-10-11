@@ -416,7 +416,114 @@ impl GnTriuDriver {
             self.fill(ybus, v);
 
             let mut accepted = false;
+
+            // Adaptive initial radius (one-shot probe at the first iteration):
+            // undamped GN step, merit retention ratio r = f(x0+d)/f(x0),
+            // radius = ||d|| * sqrt(kappa / r). If the linear model is already
+            // trustworthy (r <= kappa) the probe is accepted as the first step
+            // and the radius never binds; otherwise the radius clamps the
+            // first step to the model-valid region.
+            if it == 0 {
+                if let Some(tro) = options
+                    .trust_region
+                    .as_ref()
+                    .filter(|t| t.adaptive_initial)
+                {
+                    // 探针步取 μ=1e-6：对步长的畸变远小于分类所需精度
+                    // （健康/病态保持率相差 5 个数量级），更小 μ 会让 KKT 分解
+                    // 的 D 块元素量级 ~|J|²/μ 失去数值稳定
+                    let probe_mu = 1e-6;
+                    for c in 0..n {
+                        self.values[c] = probe_mu * damping.weight(v, c, self.n_act);
+                    }
+                    self.b[..n].fill(0.0);
+                    for i in 0..n {
+                        self.b[n + i] = -self.r[i];
+                    }
+                    let ok = solver
+                        .solve(
+                            &mut self.triu.col_offsets,
+                            &mut self.triu.row_indices,
+                            &mut self.values,
+                            &mut self.b,
+                            2 * n,
+                        )
+                        .is_ok();
+                    self.n_solves += 1;
+                    if debug && !(ok && self.b.iter().all(|x| x.is_finite())) {
+                        eprintln!("probe: undamped solve failed, radius stays {:.3e}", region.radius);
+                    }
+                    if ok && self.b.iter().all(|x| x.is_finite()) {
+                        let step_norm2 = {
+                            let delta = &self.b[..n];
+                            damping.step_norm_squared(v, delta, self.n_act)
+                        };
+                        // 探针的试验电压允许负幅值：残差对任意 V 有定义，
+                        // 负幅值本身就是"模型失效"的强信号，不能因此丢样本
+                        let trial_ok = {
+                            let delta = &self.b[..n];
+                            polar_trial(
+                                v,
+                                delta,
+                                self.n_act,
+                                self.npq,
+                                false,
+                                &mut self.vt,
+                            )
+                            .is_ok()
+                        };
+                        if trial_ok {
+                            let (_, f_probe) = {
+                                let (n_act, npq) = (self.n_act, self.npq);
+                                residual(
+                                    ybus,
+                                    &self.sbus,
+                                    &mut self.ibus,
+                                    n_act,
+                                    npq,
+                                    &self.vt,
+                                    &mut self.rt,
+                                )
+                            };
+                            let ratio = if f > 0.0 && f_probe.is_finite() {
+                                f_probe / f
+                            } else {
+                                f64::INFINITY
+                            };
+                            let step_norm = step_norm2.sqrt();
+                            region.radius = (step_norm
+                                * (tro.adaptive_kappa / ratio.max(1e-300)).sqrt())
+                            .clamp(tro.min_radius, tro.max_radius);
+                            if debug {
+                                eprintln!(
+                                    "probe: retention={ratio:.3e} step={step_norm:.3e} radius={:.3e}",
+                                    region.radius
+                                );
+                            }
+                            // The probe only classifies the start; it is never
+                            // accepted as a step. Healthy starts retire the
+                            // radius (rest of the solve is the plain
+                            // damping-only path); pathological starts keep the
+                            // computed radius so the first trial steps stay in
+                            // the model-valid region.
+                            if ratio <= tro.adaptive_kappa {
+                                region.radius = f64::INFINITY;
+                            } else {
+                                // 阻尼热启动：保持率 r 是"阻尼必须压过的坏曲率
+                                // 尺度"的可观代理。从 μ=r 起步，试探循环 O(1)
+                                // 次分解即可把步长收进半径；若从 initial_mu
+                                // 翻倍爬升，仅 μ 搜索就要烧掉约 30 次分解。
+                                mu = mu.max(ratio).min(options.max_mu);
+                            }
+                        }
+                    }
+                }
+            }
+
             for _ in 0..options.max_trials {
+                if accepted {
+                    break;
+                }
                 let t_mu = std::time::Instant::now();
                 // μ slot = the lone entry of δ-column c.
                 for c in 0..n {

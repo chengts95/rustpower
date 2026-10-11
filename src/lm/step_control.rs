@@ -75,6 +75,27 @@ pub struct TrustRegionOptions {
     pub shrink_factor: f64,
     pub grow_factor: f64,
     pub poor_step_threshold: f64,
+    /// Residual-retention adaptive initial radius: probe the nearly undamped
+    /// Gauss-Newton step at the initial point, measure the merit retention
+    /// ratio f(x0+d)/f(x0), and set radius = ||d|| * sqrt(kappa / ratio).
+    /// Well-posed starts (ratio <= kappa) retire the radius outright — the
+    /// iteration is plain damped Newton. Pathological starts (ratio >> kappa)
+    /// clamp the first step so it cannot leave the model-valid region, and
+    /// warm-start the damping at mu = ratio (the retention ratio is the
+    /// observable proxy for the bad-curvature scale the damping must
+    /// overcome) so the trial loop reaches the clamped step in O(1) solves
+    /// instead of walking mu up from initial_mu. One extra factorization
+    /// and one residual evaluation per solve.
+    pub adaptive_initial: bool,
+    /// Merit retention threshold kappa, in units of "tolerated merit
+    /// amplification along the undamped GN direction". Healthy starts
+    /// measured 0.003..0.14; diverging flat starts on stressed cases
+    /// measured 200..1e4, so the classifier is insensitive to kappa over
+    /// several orders of magnitude. kappa = 5 places the clamped first
+    /// step where damping rotation makes the step productive (calibrated
+    /// on the RTE stressed cases; kappa < 1 over-clamps into a region
+    /// the mu-escalation cannot reach within max_trials).
+    pub adaptive_kappa: f64,
 }
 
 impl Default for TrustRegionOptions {
@@ -86,6 +107,8 @@ impl Default for TrustRegionOptions {
             shrink_factor: 0.5,
             grow_factor: 2.0,
             poor_step_threshold: 0.25,
+            adaptive_initial: false,
+            adaptive_kappa: 5.0,
         }
     }
 }
@@ -218,6 +241,9 @@ impl LmOptions {
                     && o.poor_step_threshold < self.good_step_threshold)
             {
                 return Err("invalid trust-region radii, factors or poor-step threshold");
+            }
+            if !(o.adaptive_kappa.is_finite() && o.adaptive_kappa > 0.0) {
+                return Err("require finite 0 < adaptive_kappa");
             }
         }
         Ok(())
