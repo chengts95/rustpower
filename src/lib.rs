@@ -36,6 +36,8 @@ macro_rules! probe_count {
 
 #[allow(non_snake_case)]
 pub mod lm;
+#[allow(non_snake_case)]
+pub mod cpf;
 pub mod bevy_cmdbuffer;
 pub mod io;
 pub mod native;
