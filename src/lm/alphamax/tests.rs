@@ -32,7 +32,7 @@ fn ieee39_march_brackets_alpha_max() {
     }
     println!(
         "bracket={:?}  nr_iters={} lm_iters={}  wall={:.1?}",
-        out.bracket, out.nr_iterations, out.lm_iterations, out.wall
+        out.bracket, out.nr_iterations, out.lm_solves, out.wall
     );
 
     // 基态必须可行（dc 启动 + NR）。
@@ -58,7 +58,7 @@ fn ieee39_march_brackets_alpha_max() {
     let res = march.bisect(&mat.y_bus, (lo, hi), out.v_at_lo.clone(), &opts, &bi);
     println!(
         "α_max ∈ ({:.6}, {:.6})  cert‖F‖∞={:.3e}  二分探点 {} 个  nr_iters={} lm_iters={}  wall={:.1?}",
-        res.lo, res.hi, res.hi_res_inf, res.probes.len(), res.nr_iterations, res.lm_iterations, res.wall
+        res.lo, res.hi, res.hi_res_inf, res.probes.len(), res.nr_iterations, res.lm_solves, res.wall
     );
     assert!(res.hi - res.lo <= eps, "bracket not shrunk to eps");
     // 不变式：下端可行、上端持证书；宽度 ≈ eps（最后一次对半后 < eps）。
@@ -103,7 +103,7 @@ fn ieee39_march_brackets_alpha_max() {
         sec.secant_steps,
         sec.fallback_steps,
         sec.base.nr_iterations,
-        sec.base.lm_iterations,
+        sec.base.lm_solves,
         sec.base.wall
     );
     assert!(sec.base.hi - sec.base.lo <= eps, "secant bracket not shrunk");
@@ -150,17 +150,25 @@ fn ieee39_march_brackets_alpha_max() {
         gold.probes.len(),
         gold_inf,
         gold.nr_iterations,
-        gold.lm_iterations,
+        gold.lm_solves,
         gold.wall
     );
     println!(
         "对照: 二分探点 {}（无解 {}）  nr_iters={} lm_iters={}  wall={:.1?}",
         res.probes.len(),
-        bis_inf, res.nr_iterations, res.lm_iterations, res.wall
+        bis_inf, res.nr_iterations, res.lm_solves, res.wall
     );
     assert!(gold.hi - gold.lo <= eps, "golden bracket not shrunk");
     assert!(
         gold.lo < res.hi + 2.0 * eps && res.lo < gold.hi + 2.0 * eps,
         "golden and bisection disagree on α_max"
+    );
+    // 硬锁：IEEE39 的 α_max 必须落在 NR 验证过的真值窗口——
+    // 防止裁决器退化时三条路径集体错杀还能通过测试。
+    assert!(
+        gold.lo > 2.13 && gold.hi < 2.14,
+        "α_max out of certified window: ({}, {})",
+        gold.lo,
+        gold.hi
     );
 }

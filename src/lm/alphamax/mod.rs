@@ -157,9 +157,11 @@ pub enum Verdict {
     /// NR 收敛。
     Feasible { seed: Seed, nr_iters: usize },
     /// NR 两级失败，LMPF 收敛到零残差：点可行，解由 LMPF 白送。
-    Rescued { lm_iters: usize },
+    Rescued { lm_solves: usize },
+    /// 收缩阶段直判：LMPF 收敛到零残差（不经 ACPF 试探）。
+    LmFeasible { lm_solves: usize },
     /// LMPF 最小二乘证书：min ‖F‖∞ 仍超差，判无解。
-    Infeasible { res_inf: f64, lm_iters: usize },
+    Infeasible { res_inf: f64, lm_solves: usize },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -181,8 +183,8 @@ pub struct MarchOutcome {
     pub hi_sample: Option<LsSample>,
     /// 台账：NR 迭代数（每次迭代一次分解）。
     pub nr_iterations: usize,
-    /// 台账：LMPF 外层迭代数（含救援与终审）。
-    pub lm_iterations: usize,
+    /// 台账：LMPF 分解次数（solve 计数，含信赖域重试——不按外层迭代）。
+    pub lm_solves: usize,
     /// 阶段总墙钟。
     pub wall: std::time::Duration,
 }
@@ -197,7 +199,8 @@ pub struct AlphaMaxResult {
     pub hi_res_inf: f64,
     pub probes: Vec<MarchPoint>,
     pub nr_iterations: usize,
-    pub lm_iterations: usize,
+    /// 台账：LMPF 分解次数（solve 计数，不按外层迭代）。
+    pub lm_solves: usize,
     /// 阶段总墙钟。
     pub wall: std::time::Duration,
 }
@@ -358,6 +361,9 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
         }
     }
 
+    /// LMPF 终审/直判：返回（可行?, 分解次数, ‖F‖∞, 终点电压）。
+    /// 分解次数读驱动器的 n_solves 计数器（每次 solve 调用自增，
+    /// 求解入口清零）——按 solve/组装记账，不按外层迭代。
     fn lm_verdict(
         &mut self,
         ybus: &CscMatrix<Complex64>,
@@ -375,7 +381,12 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
             opts.lm_max_iter,
             &opts.lm_options,
         );
-        (r.converged, r.iterations, r.res_inf, DVector::from_vec(v))
+        (
+            r.converged,
+            self.lm.n_solves as usize,
+            r.res_inf,
+            DVector::from_vec(v),
+        )
     }
 
     /// 无解点的最小二乘采样：LMPF 终点处外部重算残差（一次评估的价钱）。
@@ -404,60 +415,76 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
         LsSample { alpha, g, rho }
     }
 
-    /// 种子阶梯探针：暖种子 NR → dc 重播种 NR → LMPF 终审。
+    /// 种子阶梯探针（行军用）：暖种子 NR → dc 重播种 NR → LMPF 终审。
+    /// `skip_acpf = true`：直接 LMPF 裁决。**实验负结果（IEEE39）**：
+    /// 鼻点附近 LMPF 从陈旧暖种子出发会停滞在 ~5e-4 的残差地板上，
+    /// 把可行点误判为无解（α_max 错杀到 2.0000，真值 2.1357），
+    /// 且每探点烧 ~432 次分解——故收缩阶段同样走阶梯（false），
+    /// 该开关仅保留作对照实验。
     /// NR 的发散残渣绝不使用；LMPF 一律从 `v_warm`（最后可行解）出发。
+    #[allow(clippy::too_many_arguments)]
     fn probe(
         &mut self,
         ybus: &CscMatrix<Complex64>,
         alpha: f64,
         v_warm: &DVector<Complex64>,
         warm_label: Seed,
+        skip_acpf: bool,
         opts: &MarchOptions,
         nr_ledger: &mut usize,
         lm_ledger: &mut usize,
     ) -> ProbeOutcome {
         let s_alpha = self.s_base.scale(alpha);
-        // 第一级：暖种子 NR（失败迭代同样入账）。
-        let (hit, spent) = self.nr_probe(ybus, &s_alpha, v_warm, opts);
-        *nr_ledger += spent;
-        if let Some((v, it)) = hit {
-            return ProbeOutcome {
-                verdict: Verdict::Feasible {
-                    seed: warm_label,
-                    nr_iters: it,
-                },
-                v: Some(v),
-                ls: None,
-            };
-        }
-        // 第二级：dc 重播种 NR（B′ 回代，~免费；失败迭代同样入账）。
-        if let Some(Some(v_dc)) = self.dc.as_mut().map(|d| d.seed(&s_alpha, &self.v_spec)) {
-            let (hit, spent) = self.nr_probe(ybus, &s_alpha, &v_dc, opts);
+        if !skip_acpf {
+            // 第一级：暖种子 NR（失败迭代同样入账）。
+            let (hit, spent) = self.nr_probe(ybus, &s_alpha, v_warm, opts);
             *nr_ledger += spent;
             if let Some((v, it)) = hit {
                 return ProbeOutcome {
                     verdict: Verdict::Feasible {
-                        seed: Seed::DcReseed,
+                        seed: warm_label,
                         nr_iters: it,
                     },
                     v: Some(v),
                     ls: None,
                 };
             }
+            // 第二级：dc 重播种 NR（B′ 回代，~免费；失败迭代同样入账）。
+            if let Some(Some(v_dc)) = self.dc.as_mut().map(|d| d.seed(&s_alpha, &self.v_spec)) {
+                let (hit, spent) = self.nr_probe(ybus, &s_alpha, &v_dc, opts);
+                *nr_ledger += spent;
+                if let Some((v, it)) = hit {
+                    return ProbeOutcome {
+                        verdict: Verdict::Feasible {
+                            seed: Seed::DcReseed,
+                            nr_iters: it,
+                        },
+                        v: Some(v),
+                        ls: None,
+                    };
+                }
+            }
         }
-        // 终审：LMPF。
-        let (ok, it, res_inf, v_lm) = self.lm_verdict(ybus, &s_alpha, v_warm, opts);
-        *lm_ledger += it;
+        // LMPF 裁决。
+        let (ok, solves, res_inf, v_lm) = self.lm_verdict(ybus, &s_alpha, v_warm, opts);
+        *lm_ledger += solves;
         if ok {
             ProbeOutcome {
-                verdict: Verdict::Rescued { lm_iters: it },
+                verdict: if skip_acpf {
+                    Verdict::LmFeasible { lm_solves: solves }
+                } else {
+                    Verdict::Rescued { lm_solves: solves }
+                },
                 v: Some(v_lm),
                 ls: None,
             }
         } else {
             let ls = self.ls_sample(ybus, &s_alpha, alpha, v_lm.as_slice());
             ProbeOutcome {
-                verdict: Verdict::Infeasible { res_inf, lm_iters: it },
+                verdict: Verdict::Infeasible {
+                    res_inf,
+                    lm_solves: solves,
+                },
                 v: None,
                 ls: Some(ls),
             }
@@ -469,7 +496,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
         let stage_t0 = std::time::Instant::now();
         let mut points = Vec::new();
         let mut nr_iterations = 0;
-        let mut lm_iterations = 0;
+        let mut lm_solves = 0;
 
         // α=α0：dc 启动（无 dc 时退化为 spec 平启动）。
         let s0 = self.s_base.scale(opts.alpha0);
@@ -490,9 +517,10 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
                 alpha,
                 &v_warm,
                 warm_label,
+                false,
                 opts,
                 &mut nr_iterations,
-                &mut lm_iterations,
+                &mut lm_solves,
             );
             let wall_ms = t0.elapsed().as_secs_f64() * 1e3;
             if let Some(v) = outcome.v {
@@ -523,7 +551,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
             v_at_lo: v_warm,
             hi_sample,
             nr_iterations,
-            lm_iterations,
+            lm_solves,
             wall: stage_t0.elapsed(),
         }
     }
@@ -547,7 +575,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
         let mut hi_res_inf = f64::NAN;
         let mut probes = Vec::new();
         let mut nr_iterations = 0;
-        let mut lm_iterations = 0;
+        let mut lm_solves = 0;
 
         while hi - lo > opts.eps && probes.len() < opts.max_probes {
             let mid = lo + opts.ratio * (hi - lo);
@@ -557,9 +585,10 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
                 mid,
                 &v_lo,
                 Seed::Warm,
+                false,
                 march_opts,
                 &mut nr_iterations,
-                &mut lm_iterations,
+                &mut lm_solves,
             );
             let wall_ms = t0.elapsed().as_secs_f64() * 1e3;
             let verdict = outcome.verdict;
@@ -585,7 +614,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
             hi_res_inf,
             probes,
             nr_iterations,
-            lm_iterations,
+            lm_solves,
             wall: stage_t0.elapsed(),
         }
     }
@@ -614,7 +643,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
         let mut hi_res_inf = f64::NAN;
         let mut probes = Vec::new();
         let mut nr_iterations = 0;
-        let mut lm_iterations = 0;
+        let mut lm_solves = 0;
         let mut secant_steps = 0;
         let mut fallback_steps = 0;
         // 无解样本（行军的上端证书是第一发）。
@@ -644,9 +673,10 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
                 alpha,
                 &v_lo,
                 Seed::Warm,
+                false,
                 march_opts,
                 &mut nr_iterations,
-                &mut lm_iterations,
+                &mut lm_solves,
             );
             let wall_ms = t0.elapsed().as_secs_f64() * 1e3;
             let verdict = outcome.verdict;
@@ -685,7 +715,7 @@ impl<SNR: Solve, SLM: Solve> AlphaMarch<SNR, SLM> {
                 hi_res_inf,
                 probes,
                 nr_iterations,
-                lm_iterations,
+                lm_solves,
                 wall: stage_t0.elapsed(),
             },
             secant_steps,
