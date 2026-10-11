@@ -72,9 +72,9 @@ Our contributions:
   symmetric QDLDL factorization of the quasi-definite system beats
   general-purpose LU on identical iterates.
 \item \textbf{A parameter-free trust-region realization that wastes no
-  factorizations} (Section~5.5). Adaptive trust-region strategies for
-  power-flow LM have been studied before~\cite{nocedal2006,csee_adaptive_lm};
-  we do not claim the concept. Our contribution is a realization whose
+  factorizations} (Section~5.5). Trust-region damping is classical in
+  optimization~\cite{nocedal2006}; we do not claim the concept. Our
+  contribution is a realization whose
   entire start-up cost is \emph{one} probe factorization: the merit
   retention of the undamped Gauss--Newton step classifies the start across
   a five-order-of-magnitude margin, and doubles as the damping scale,
@@ -129,10 +129,9 @@ rates in the filtered subspace.
 
 \paragraph{Trust-region damping.} The trust-region LM constrains
 $\|\delta\|_D \le \Delta$ and adapts both $\mu$ and the radius $\Delta$ from
-the ratio of actual to predicted reduction~\cite{nocedal2006}. Adaptive
-choices of the initial radius have appeared in the power-flow
-literature~\cite{csee_adaptive_lm}; our realization is described in
-Section~5.5.
+the ratio of actual to predicted reduction~\cite{nocedal2006}. Our
+realization, with the initial radius set adaptively from a single probe
+step, is described in Section~5.5.
 
 \paragraph{Composite steps.} Several right-hand sides can share one
 factorization (chord steps, multi-step corrections). This is where
@@ -435,8 +434,8 @@ amplification reaches the tolerated level --- and the damping is
 warm-started at $\mu = r$: the retention ratio is itself the observable
 scale of the bad curvature the damping must overcome, so the first clamped
 step is reached in $O(1)$ solves rather than after $\sim$30 wasted
-factorizations of doubling search. Adaptive initial radii are not new in
-this literature~\cite{csee_adaptive_lm}; the one-probe realization with
+factorizations of doubling search. We do not claim novelty for adaptive
+initial radii as such; the one-probe realization with
 exact accounting, and the use of the retention ratio as the damping scale,
 are our engineering contribution.
 
@@ -555,8 +554,8 @@ no.~10, pp.~3648--3657, Oct. 1982.
 S.~Y. Derakhshandeh, R.~Pourbagher, and A.~Kargar,
 ``A novel fuzzy logic Levenberg--Marquardt method to solve the
 ill-conditioned power flow problem,''
-\emph{International Journal of Electrical Power \& Energy Systems}, 2018.
-% TODO 引用: 补卷期页码
+\emph{International Journal of Electrical Power \& Energy Systems},
+vol.~99, pp.~299--308, 2018.
 
 \bibitem{levenberg1944}
 K.~Levenberg, ``A method for the solution of certain non-linear problems in
@@ -571,10 +570,6 @@ Mathematics}, vol.~11, no.~2, pp.~431--441, 1963.
 \bibitem{nocedal2006}
 J.~Nocedal and S.~J. Wright, \emph{Numerical Optimization}, 2nd ed.,
 Springer, 2006.
-
-\bibitem{csee_adaptive_lm}
-(Adaptive trust-region Levenberg--Marquardt power flow, \emph{Proceedings
-of the CSEE}.) % TODO 引用: 电机工程学报那篇自适应信赖域潮流，作者/年待补
 
 \bibitem{matpower2011}
 R.~D. Zimmerman, C.~E. Murillo-S\'anchez, and R.~J. Thomas,
