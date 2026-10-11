@@ -477,7 +477,6 @@ impl<S: Solve> CpfSolver<S> {
                     if t_new[self.n_state] < 0.0 {
                         passed_nose = true;
                         stop_reason = "tangent t_lambda turned negative (nose passed)";
-                        tangent = t_new;
                         break;
                     }
                     tangent = t_new;
