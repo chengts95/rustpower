@@ -39,6 +39,8 @@ pub mod opf;
 #[allow(non_snake_case)]
 pub mod lm;
 #[allow(non_snake_case)]
+pub mod cpf;
+#[allow(non_snake_case)]
 pub mod new_opf;
 pub mod new_pf;
 
