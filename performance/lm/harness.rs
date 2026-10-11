@@ -177,6 +177,21 @@ pub(super) fn run_ts(case: &Case, driver: &mut GnTriuDriver, solver: &mut QDLDLS
     finish(case, s, &v, r.converged, r.iterations, driver.n_solves - solves0, t)
 }
 
+/// 逐发重线化 TS（对照实验）：shots 2-3 重新组装 J 并全新分解，γ 冻结。
+/// 分解数 = 外层数 × 3（无回代摊销），用于裁决冻结 J 是否 TS 退化主因。
+pub(super) fn run_tf(case: &Case, driver: &mut GnTriuDriver, solver: &mut QDLDLSolver, s: &[Complex64], v0: &[Complex64]) -> Cell {
+    driver.sbus.clear();
+    driver.sbus.extend_from_slice(s);
+    let mut v = v0.to_vec();
+    let t = Instant::now();
+    let maxit = bench::option("--sd-maxit")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(MAXIT);
+    let solves0 = driver.n_solves;
+    let r = driver.solve_self_damped_ts_freshj(&case.y, solver, &mut v, TOL, maxit);
+    finish(case, s, &v, r.converged, r.iterations, driver.n_solves - solves0, t)
+}
+
 /// Chord（冻结 J 分解）NR：v0 处组装一次 J、KLU 分解一次，后续全部
 /// `resolve` 纯回代——"dc 初值 + 三步复合"的 γ=0 极限形态。
 /// `iterations` 记回代次数；分解次数恒为 1（linear_solves=1）。
