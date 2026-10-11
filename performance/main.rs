@@ -90,7 +90,7 @@ fn main() {
         "lm-shed" => lm_exp::shed::run(),
         "lm-assembly" => lm_exp::comparison::benchmark_cached_normal_equations(),
         "lm-ablation" => lm_exp::comparison::benchmark_coo_ablation(),
-        #[cfg(all(feature = "probe", target_os = "linux"))]
+        #[cfg(feature = "probe")]
         "lm-solvers" => lm_exp::comparison::linear_solvers::benchmark_linear_solvers(),
         "acpf" => acpf::acpf_v3_vs_v4_fill(),
         "jacobian" => jacobian::bench_jacobian_fill(),

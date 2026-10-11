@@ -597,6 +597,6 @@ fn run_assembly_comparison(methods: &[AssemblyMethod]) {
     }
 }
 
-#[cfg(all(feature = "probe", target_os = "linux"))]
+#[cfg(feature = "probe")]
 #[path = "linear_solvers.rs"]
 pub mod linear_solvers;
