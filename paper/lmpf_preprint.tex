@@ -1,7 +1,11 @@
 % !TeX program = pdflatex
 \documentclass[11pt]{article}
-\usepackage{amsmath,amssymb,booktabs,graphicx,hyperref}
+\usepackage{amsmath,amssymb,amsthm,booktabs,graphicx,hyperref}
 \usepackage[margin=1in]{geometry}
+
+\newtheorem{proposition}{Proposition}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
 
 \title{A Symbolic Levenberg--Marquardt Power Flow Engine:\\
 Fast Assembly, Honest Accounting, and the Least-Squares Role of LMPF}
@@ -149,42 +153,117 @@ in whether the first Newton step stays in the basin.
 
 \section{The LMPF Engine}
 
-\subsection{Symbolic Jacobian Operator Reuse}
+The engine is built as a stack of nested decisions, each forced by a
+specific failure of the layer below. We first explain why the damped normal
+equations \eqref{eq:lm} are the wrong object to factorize; we then lift the
+iteration to an augmented system that the production Jacobian operator fills
+block by block; and we prove that this system always belongs to the
+quasi-definite class --- the entry condition that allows a symmetric
+no-pivot LDL$^{\top}$ to replace general-purpose LU. Only on top of this
+solver foundation do the damping strategies of Section~2.2 operate.
 
-The production Newton--Raphson solver assembles the reduced Jacobian by a
-symbolic operator derived from the Ybus structure: the Ybus is pre-sorted,
-and each Jacobian column's nonzero positions are computed symbolically once
-per topology. This operator transfers verbatim to LMPF --- the $J$ in
-\eqref{eq:lm} is the same matrix --- so the entire sparsity analysis of the
-LM iteration is inherited, not rebuilt.
+\subsection{Why Not the Normal Equations}
 
-\subsection{Direct-Offset Fill}
+For $\mu>0$ the matrix $J^{\top}J+\mu D$ is positive definite, so the normal
+equations seem to invite a sparse Cholesky. Three independent defects
+disqualify this path.
 
-Diagonal entries and per-column starting offsets are computed directly from
-the Ybus base addresses; no COO triplet list, no sorting pass, no scatter.
-Assembly is a straight-line pass over the precomputed pattern. A $\mu$ retry
-touches only the diagonal $\mu$ slots and never triggers reassembly.
+\paragraph{Squared conditioning.} Forming $J^{\top}J$ squares the condition
+number. Near a fold the smallest singular value of $J$ tends to zero, and in
+floating point the small eigenvalues of $J^{\top}J$ sink below the rounding
+level $\varepsilon\|J\|^{2}$: the \emph{computed} normal matrix becomes
+numerically singular or indefinite exactly in the regime where a
+robustification method is meant to operate. Symmetric no-pivot
+factorization is then unsafe, and $\mu$ cannot rescue it, because recovering
+the Newton direction near the solution requires $\mu\to 0$, which
+re-exposes the squared conditioning.
 
-\subsection{Normal-Equation Symbolic Analysis and Symmetric Factorization}
+\paragraph{No reliable refactorization under pivoting.} The safe fallback,
+sparse LU with column pivoting such as KLU~\cite{klu2010}, chooses pivots
+from numerical values. Reusing a pivot sequence chosen for stale values
+silently degrades the factorization: on identical LM iterates we observe
+value-only refactorization converge to wrong solutions while reporting
+success, and only a fresh symbolic and numerical factorization per
+iteration restores correctness --- at $5.7\times$ the cost of the symmetric
+path (Section~5.1, Table~\ref{tab:backend}).
 
-We do not form $J^{\top}J$ numerically. The augmented system
+\paragraph{Assembly economy.} Forming $J^{\top}J$ numerically costs one
+sparse matrix product per iteration, while our Jacobian assembly is already
+one to two orders of magnitude faster than the COO/spgemm path
+(contribution~1). We therefore never form $J^{\top}J$.
+
+\subsection{The Augmented Quasi-Definite System}
+
+Eliminating the multiplier block of the augmented system
 \begin{equation}
-  \begin{bmatrix} \mu D & J^{\top} \\ J & -I \end{bmatrix}
+  \underbrace{\begin{bmatrix} \mu D & J^{\top} \\ J & -I \end{bmatrix}}_{K}
   \begin{bmatrix} \delta \\ \lambda \end{bmatrix}
   \;=\;
   \begin{bmatrix} 0 \\ -F \end{bmatrix}
   \label{eq:augmented}
 \end{equation}
-is quasi-definite ($\mu D \succ 0$, $-I \prec 0$), hence a no-pivot
-LDL$^{\top}$ factorization is stable. Its nonzero pattern is built
-symbolically from the Jacobian pattern alone, and the row-oriented fill
-writes only the upper triangle: the transpose $J^{\top}$ is emitted row by
-row in a single pass, with no materialized $J$ block, no transpose scatter,
-and no column copies. LU backends such as KLU~\cite{klu2010} require the
-full matrix and cannot exploit this layout; QDLDL~\cite{qdldl} factorizes
-the upper triangle directly and beats KLU on the identical augmented
-system by up to $3\times$ on 9k-bus systems
+returns exactly \eqref{eq:lm}, but $K$ keeps $J$ un-squared: the condition
+number relevant to the factorization is that of $J$, not its square.
+
+\begin{proposition}[Quasi-definiteness]
+Let $\mu>0$ and let $D$ be a positive diagonal damping metric. Then $K$ in
+\eqref{eq:augmented} is quasi-definite for every Jacobian $J$.
+\end{proposition}
+\begin{proof}
+The $(1,1)$ block $\mu D$ is a positive diagonal matrix, hence
+$\mu D \succ 0$; the $(2,2)$ block satisfies $-I \prec 0$. A symmetric
+matrix $\begin{bmatrix} A & B^{\top} \\ B & -C \end{bmatrix}$ with
+$A \succ 0$ and $C \succeq 0$ is quasi-definite, and every symmetric
+permutation of a quasi-definite matrix admits an LDL$^{\top}$
+factorization with all pivots nonzero~\cite{vanderbei1995}.
+\end{proof}
+
+The proposition is the entry ticket of the whole engine: the symbolic
+analysis is final, no pivot is ever chosen from numerical values, and
+refactorization after a $\mu$ or Jacobian update is a pure value overwrite
+--- there is no stale pivot that could silently degrade. QDLDL~\cite{qdldl}
+factorizes the upper triangle of $K$ directly; LU backends such as
+KLU~\cite{klu2010} require the full matrix, cannot exploit this layout, and
+are beaten by the symmetric path by up to $3\times$ on 9k-bus systems
 (Table~\ref{tab:backend}).
+
+\begin{remark}[The damping floor]
+At $\mu=0$ the $(1,1)$ block is the zero matrix and $K$ leaves the
+quasi-definite class: $n$ pivots are exactly zero and a no-pivot
+LDL$^{\top}$ does not exist. The damping floor $\mu_{\min}>0$ is therefore
+not a heuristic but the membership fee of the quasi-definite class. At
+$\mu \sim 10^{-6}$ the step is numerically indistinguishable from the
+undamped Gauss--Newton step, so the fee is nil.
+\end{remark}
+
+\begin{remark}[Why not $I+\mu D$]
+A permanent identity in the $(1,1)$ block would keep $K$ quasi-definite at
+$\mu=0$, but elimination then gives
+$(J^{\top}J + I + \mu D)\,\delta = -J^{\top}F$: a fixed Tikhonov shift that
+survives $\mu\to 0$, shrinks every near-solution step, and reduces the
+quadratic convergence of the recovered Newton direction to linear. The
+damping block must be allowed to vanish with $\mu$.
+\end{remark}
+
+\subsection{Symbolic Jacobian Operator Reuse}
+
+The production Newton--Raphson solver assembles the reduced Jacobian by a
+symbolic operator derived from the Ybus structure: the Ybus is pre-sorted,
+and each Jacobian column's nonzero positions are computed symbolically once
+per topology. This operator transfers verbatim to LMPF --- the $J$ block of
+\eqref{eq:augmented} is the same matrix --- so the entire sparsity analysis
+of the LM iteration is inherited, not rebuilt.
+
+\subsection{Direct-Offset Fill}
+
+Diagonal entries and per-column starting offsets are computed directly from
+the Ybus base addresses; no COO triplet list, no sorting pass, no scatter.
+Assembly is a straight-line pass over the precomputed pattern. The
+row-oriented fill writes only the upper triangle of $K$: the transpose
+$J^{\top}$ is emitted row by row in a single pass, with no materialized $J$
+block, no transpose scatter, and no column copies; the $\mu$ slots and the
+$-I$ block occupy precomputed diagonal positions. A $\mu$ retry touches only
+the diagonal $\mu$ slots and never triggers reassembly.
 
 \subsection{Factorization Reuse (resolve)}
 
@@ -570,6 +649,11 @@ Mathematics}, vol.~11, no.~2, pp.~431--441, 1963.
 \bibitem{nocedal2006}
 J.~Nocedal and S.~J. Wright, \emph{Numerical Optimization}, 2nd ed.,
 Springer, 2006.
+
+\bibitem{vanderbei1995}
+R.~J. Vanderbei,
+``Symmetric quasi-definite matrices,''
+\emph{SIAM Journal on Optimization}, vol.~5, no.~1, pp.~100--113, 1995.
 
 \bibitem{matpower2011}
 R.~D. Zimmerman, C.~E. Murillo-S\'anchez, and R.~J. Thomas,
