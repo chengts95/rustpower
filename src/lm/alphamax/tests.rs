@@ -111,4 +111,54 @@ fn ieee39_march_brackets_alpha_max() {
         sec.base.lo < res.hi + 2.0 * eps && res.lo < sec.base.hi + 2.0 * eps,
         "secant and bisection disagree on α_max"
     );
+
+    // 阶段二（0.618 法）：非对称收缩，昂贵的无解侧每次买到更多区间。
+    let mut march3 = AlphaMarch::new(
+        &mat.y_bus,
+        mat.npv,
+        mat.npq,
+        mat.s_bus.clone(),
+        mat.v_bus_init.clone(),
+        &mat.to_perm,
+        &p_shift,
+        KLUSolver::default(),
+        LDLSolver::default(),
+    );
+    let out3 = march3.run(&mat.y_bus, &opts);
+    let gold = march3.bisect(
+        &mat.y_bus,
+        out3.bracket.unwrap(),
+        out3.v_at_lo.clone(),
+        &opts,
+        &BisectOptions::golden(),
+    );
+    let gold_inf = gold
+        .probes
+        .iter()
+        .filter(|p| matches!(p.verdict, Verdict::Infeasible { .. }))
+        .count();
+    let bis_inf = res
+        .probes
+        .iter()
+        .filter(|p| matches!(p.verdict, Verdict::Infeasible { .. }))
+        .count();
+    println!(
+        "0.618: α_max ∈ ({:.6}, {:.6})  探点 {}（无解 {}）  nr_iters={} lm_iters={}",
+        gold.lo,
+        gold.hi,
+        gold.probes.len(),
+        gold_inf,
+        gold.nr_iterations,
+        gold.lm_iterations
+    );
+    println!(
+        "对照: 二分探点 {}（无解 {}）  nr_iters={} lm_iters={}",
+        res.probes.len(),
+        bis_inf, res.nr_iterations, res.lm_iterations
+    );
+    assert!(gold.hi - gold.lo <= eps, "golden bracket not shrunk");
+    assert!(
+        gold.lo < res.hi + 2.0 * eps && res.lo < gold.hi + 2.0 * eps,
+        "golden and bisection disagree on α_max"
+    );
 }
