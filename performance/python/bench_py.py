@@ -24,13 +24,14 @@ print("Warming up Pandapower Numba JIT compiler...")
 dummy_net = pn.case39()
 pp.runpp(dummy_net)
 
-def run_benchmark(net_name, net):
+def run_benchmark(net_name, net, init_mode="flat"):
     print(f"\n=========================================================")
-    print(f" BENCHMARKING NETWORK: {net_name} ({len(net.bus)} buses)")
+    print(f" BENCHMARKING NETWORK: {net_name} ({len(net.bus)} buses, init={init_mode})")
     print(f"=========================================================")
     
     num_buses = len(net.bus)
     V_init_flat = np.ones(num_buses, dtype=np.complex128)
+    use_dc = init_mode == "dc"
 
     # Calculate V_init that satisfies PV and Slack bus magnitude setpoints for LS2G pure solver
     V_init_compensated = np.ones(num_buses, dtype=np.complex128)
@@ -38,6 +39,13 @@ def run_benchmark(net_name, net):
         V_init_compensated[int(row['bus'])] = row['vm_pu']
     for _, row in net.gen.iterrows():
         V_init_compensated[int(row['bus'])] = row['vm_pu']
+
+    if use_dc:
+        # DC 启动算例（RTE 等）：平启动三家都发散，统一走 DC。
+        # rustpower 纯求解核腿的 v_init 用 rustpower 自家 DCPF 角度（不借 pandapower）。
+        _g0 = rustpower.PowerGrid.from_pandapower(net)
+        V_init_compensated = _g0.compute_dcpf_v()
+        del _g0
 
     # ---------------------------------------------------------
     # ROUND 1: Cold Start Performance (Includes Symbolic Analysis)
@@ -47,7 +55,7 @@ def run_benchmark(net_name, net):
     times_pp_cold = []
     for _ in range(NUM_TRIALS_COLD):
         start = time.perf_counter()
-        pp.runpp(net, init="flat", recycle=False, tolerance_mva=TOL)
+        pp.runpp(net, init=init_mode, recycle=False, tolerance_mva=TOL, max_iteration=MAX_ITER)
         times_pp_cold.append(time.perf_counter() - start)
     pp_cold_ms = np.mean(times_pp_cold) * 1000
     pp_iters = net._ppc['iterations']
@@ -65,14 +73,18 @@ def run_benchmark(net_name, net):
     pq = ls_model.get_pq_solver()
     ls_solver = KLUSolver()
 
+    def ls_start_v():
+        # DC 算例：每次调用都重算 LS2G 自家 DC（计入对应腿的耗时）
+        return ls_model.dc_pf(V_init_flat, MAX_ITER, TOL) if use_dc else V_init_compensated
+
     # Warmup
-    ls_solver.compute_pf(Ybus, V_init_compensated, Sbus, slack_ids, slack_weights, pv, pq, MAX_ITER, TOL)
+    ls_solver.compute_pf(Ybus, ls_start_v(), Sbus, slack_ids, slack_weights, pv, pq, MAX_ITER, TOL)
     ls2g_iters = ls_solver.get_nb_iter()
 
     times_ls2g_cold = []
     for _ in range(NUM_TRIALS_COLD):
         start = time.perf_counter()
-        ls_solver.compute_pf(Ybus, V_init_compensated, Sbus, slack_ids, slack_weights, pv, pq, MAX_ITER, TOL)
+        ls_solver.compute_pf(Ybus, ls_start_v(), Sbus, slack_ids, slack_weights, pv, pq, MAX_ITER, TOL)
         times_ls2g_cold.append(time.perf_counter() - start)
     ls2g_cold_ms = np.mean(times_ls2g_cold) * 1000
 
@@ -141,14 +153,20 @@ def run_benchmark(net_name, net):
     # ---------------------------------------------------------
     
     # 1. Pandapower (JIT + Recycle)
-    pp.runpp(net, init="flat", recycle=True, tolerance_mva=TOL)
+    pp.runpp(net, init=init_mode, recycle=True, tolerance_mva=TOL, max_iteration=MAX_ITER)
     times_pp_hot = []
     for _ in range(NUM_TRIALS_HOT):
-        # Force flat start in PPC to ensure Newton iterations actually run
-        net._ppc['bus'][:, 7] = 1.0 # vm
-        net._ppc['bus'][:, 8] = 0.0 # va
+        if not use_dc:
+            # Force flat start in PPC to ensure Newton iterations actually run
+            # (DC 算例不能动：recycle 复用的 ppci 会把这个假平启动直接喂给 NR 导致发散)
+            net._ppc['bus'][:, 7] = 1.0 # vm
+            net._ppc['bus'][:, 8] = 0.0 # va
         start = time.perf_counter()
-        pp.runpp(net, init="flat", recycle=dict(ppc=True, Ybus=True, bus_pq=False, trafo=False, gen=False), tolerance_mva=TOL)
+        if use_dc:
+            # recycle 路径不认 init="dc"，DC 算例热循环只能整跑（DC+NR 每次重来）
+            pp.runpp(net, init="dc", recycle=False, tolerance_mva=TOL, max_iteration=MAX_ITER)
+        else:
+            pp.runpp(net, init="flat", recycle=dict(ppc=True, Ybus=True, bus_pq=False, trafo=False, gen=False), tolerance_mva=TOL, max_iteration=MAX_ITER)
         times_pp_hot.append(time.perf_counter() - start)
     pp_hot_ms = np.mean(times_pp_hot) * 1000
     pp_hot_min = np.min(times_pp_hot) * 1000
@@ -157,11 +175,11 @@ def run_benchmark(net_name, net):
     # 2. LightSim2Grid (C++ GridModel: AC Solve + Branch Flows)
     ls_model = init_from_pandapower(net)
     ls_model.change_solver(AlgorithmType.NRSing_KLU)
-    ls_model.ac_pf(V_init_flat, MAX_ITER, TOL) # Warmup
+    ls_model.ac_pf(ls_start_v() if use_dc else V_init_flat, MAX_ITER, TOL) # Warmup
     times_ls2g_hot = []
     for _ in range(NUM_TRIALS_HOT):
         start = time.perf_counter()
-        ls_model.ac_pf(V_init_flat, MAX_ITER, TOL)
+        ls_model.ac_pf(ls_start_v() if use_dc else V_init_flat, MAX_ITER, TOL)
         times_ls2g_hot.append(time.perf_counter() - start)
     ls2g_hot_ms = np.mean(times_ls2g_hot) * 1000
     ls2g_hot_min = np.min(times_ls2g_hot) * 1000
@@ -185,14 +203,16 @@ def run_benchmark(net_name, net):
     # 4. RustPower PowerGrid (Full End-to-End GridModel: AC Solve + Vectorized Post-Processing)
     rp_grid = rustpower.PowerGrid.from_pandapower(net)
     rp_grid.enable_cache(True)
+    if use_dc:
+        rp_grid.enable_dcpf_init(True)  # DC 初值由 rustpower 自家 DCPF 出，计入每次 solve
     # Warmup and explicit post-processing (primes cache, bus_calc, and ECS tables)
-    rp_grid.solve(V_init_flat)
+    rp_grid.solve(None if use_dc else V_init_flat)
     rp_grid.post_process()
 
     times_rp_grid_hot = []
     for _ in range(NUM_TRIALS_HOT):
         start = time.perf_counter()
-        r = rp_grid.solve(V_init_flat)
+        r = rp_grid.solve(None if use_dc else V_init_flat)
         rp_grid.post_process()
         times_rp_grid_hot.append(time.perf_counter() - start)
     pp_hot_max = np.max(times_pp_hot) * 1000
@@ -216,13 +236,16 @@ if __name__ == "__main__":
     print(f"RustPower Active Features: {rustpower.features()}")
     
     cases = {
-        "Case 39": pn.case39,
-        "Case 118": pn.case118,
-        "Case 1354 PEGASE": pn.case1354pegase,
-        "Case 9241 PEGASE": pn.case9241pegase
+        "Case 39": (pn.case39, "flat"),
+        "Case 118": (pn.case118, "flat"),
+        "Case 1354 PEGASE": (pn.case1354pegase, "flat"),
+        "Case 9241 PEGASE": (pn.case9241pegase, "flat"),
+        "Case 6470 RTE": (pn.case6470rte, "dc"),
+        "Case 6495 RTE": (pn.case6495rte, "dc"),
+        "Case 6515 RTE": (pn.case6515rte, "dc"),
     }
     
-    for name, case_fn in cases.items():
+    for name, (case_fn, init_mode) in cases.items():
         net = case_fn()
-        run_benchmark(name, net)
+        run_benchmark(name, net, init_mode)
 
