@@ -680,6 +680,7 @@ fn export_solve_breakdown_csv(path: &str, name: &str, mat: &PowerFlowMat, repeat
 }
 
 #[test]
+#[ignore = "explicit benchmark; run with --release --features klu_dyn -- --ignored --nocapture"]
 fn bench_jacobian_fill() {
     println!(
         "\nJacobian assembly benchmark -- V0 (raw MATPOWER port) vs \

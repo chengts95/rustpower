@@ -87,23 +87,28 @@ pub fn event_update(
 
 pub fn reset_solvers(world: &mut World) {
     use crate::basic::solver::*;
+    world.remove_resource::<super::prepare::CachedNewtonResult>();
 
     if let Some(mut solver) = world.get_resource_mut::<PowerFlowSolver>() {
         solver.solver.reset();
     }
-    if let Some(mut ws) = world.get_resource_mut::<crate::basic::ecs::dcpf::DcpfWorkspace>() {
-        ws.solver.reset();
+    if let Some(mut cache) = world.get_resource_mut::<crate::basic::newtonpf::NewtonCache>() {
+        *cache = Default::default();
     }
+    super::prepare::invalidate_dcpf_model(world);
 }
 /// Re-syncs the full `s_bus` vector in [`PowerFlowMat`] from the `SBusInjPu`
 /// components. Triggered by the coarse [`SBusChangeEvent`] (native writers,
 /// e.g. time series, update the components themselves and fire the event).
 /// Deliberately tick-free: a full O(n) copy is cheap and always correct,
 /// whereas `Changed<T>` semantics depend on observer tick bookkeeping.
-pub fn sbus_pu_update(mut pfmat: ResMut<PowerFlowMat>, sbus: Query<(&BusID, &SBusInjPu)>) {
-    for (bus_id, s) in sbus {
+pub fn sbus_pu_update(
+    mut pfmat: ResMut<PowerFlowMat>,
+    sbus: Query<(&BusID, &SBusInjPu, Option<&super::qlim::QLimited>)>,
+) {
+    for (bus_id, s, bound) in sbus {
         let idx = pfmat.reorder_index(bus_id.0 as usize);
-        pfmat.s_bus[idx] = s.0;
+        pfmat.s_bus[idx] = s.0 + num_complex::Complex64::new(0.0, bound.map_or(0.0, |q| q.q_pu));
     }
 }
 /// Re-syncs the full `v_bus` vector in [`PowerFlowMat`] from the `VBusPu`
@@ -117,32 +122,50 @@ pub fn vbus_pu_update(mut pfmat: ResMut<PowerFlowMat>, vbus: Query<(&BusID, &VBu
 }
 
 pub fn structure_update(world: &mut World) {
-    let flags = world.run_system_cached(event_update).unwrap();
+    let mut flags = world.run_system_cached(event_update).unwrap();
+    flags.full_dirty |= !world.contains_resource::<PowerFlowMat>();
+    let earlier_rebuild = world
+        .get_resource::<super::prepare::SolvePass>()
+        .is_some_and(|pass| pass.continuation)
+        && world.resource::<LastStructureAction>().full_rebuild;
     world.insert_resource(LastStructureAction {
-        full_rebuild: flags.full_dirty,
+        full_rebuild: earlier_rebuild || flags.full_dirty,
     });
 
     // Topology changed: run the single full-rebuild pipeline.
     if flags.full_dirty {
-        let _ = world.try_run_schedule(super::pf_init::PFInit);
-        return;
-    }
-    // Until init has produced the solver matrices there is nothing to patch;
-    // the pending changes are captured by the full rebuild instead.
-    if !world.contains_resource::<PowerFlowMat>() {
+        world.run_schedule(super::pf_init::PFInit);
         return;
     }
     if flags.structure_dirty || flags.admit_dirty {
-        //TODO: this should only update ybus or node structure
         world.run_system_cached(reset_solvers).unwrap();
-        world.run_system_cached(init_states).unwrap();
+        if flags.admit_dirty {
+            world.run_system_cached(init_states).unwrap();
+        } else {
+            world
+                .run_system_cached(super::systems::repartition_states)
+                .unwrap();
+        }
         world.run_system_cached(apply_permutation).unwrap();
+        // Q-limit continuation voltages are in original bus order. Apply the
+        // new permutation explicitly after rebuilding the partition.
+        let continuation = world
+            .get_resource_mut::<super::prepare::SolvePass>()
+            .and_then(|mut pass| pass.voltage.take());
+        if let Some(v) = continuation {
+            let mut mat = world.resource_mut::<PowerFlowMat>();
+            for idx in 0..mat.from_perm.len() {
+                mat.v_bus_init[idx] = v[mat.from_perm[idx]];
+            }
+        }
     } else {
         if flags.injection_dirty {
             world.run_system_cached(sbus_pu_update).unwrap();
         }
         if flags.voltage_dirty {
             world.run_system_cached(vbus_pu_update).unwrap();
+            // The DC right-hand-side contains the slack-angle contribution.
+            super::prepare::invalidate_dcpf_model(world);
         }
     }
 }
@@ -176,14 +199,13 @@ impl Plugin for StructureUpdatePlugin {
         app.init_resource::<LastStructureAction>();
         // The single definition of "full rebuild", runnable on demand.
         app.add_schedule(super::pf_init::build_pf_init_schedule());
-        // The mutation-bus consumer runs as an ordinary system right before
-        // structure_update, so the change events it emits are seen this frame.
+        app.init_resource::<super::prepare::DcpfModelRevision>();
+        app.add_schedule(super::prepare::build_prepare_schedule());
         app.add_systems(
             Update,
-            super::mutation::consume_param_diffs
+            super::prepare::prepare_solver_inputs
                 .after(BeforeSolve)
-                .before(structure_update),
+                .before(Solve),
         );
-        app.add_systems(Update, structure_update.after(BeforeSolve).before(Solve));
     }
 }
