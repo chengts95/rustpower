@@ -303,6 +303,20 @@ pub struct OriginalYBus(pub CscMatrix<Complex64>);
 pub fn init_states(world: &mut World) {
     let (_incidence_matrix, y_bus) = world.run_system_once(create_y_bus).unwrap();
     world.insert_resource(OriginalYBus(y_bus.clone()));
+    insert_bus_states(world, y_bus);
+}
+
+/// Bus-type changes preserve the physical admittance; only its solver ordering changes.
+pub fn repartition_states(world: &mut World) {
+    if let Some(original) = world.get_resource::<OriginalYBus>() {
+        let y_bus = original.0.clone();
+        insert_bus_states(world, y_bus);
+    } else {
+        init_states(world);
+    }
+}
+
+fn insert_bus_states(world: &mut World, y_bus: CscMatrix<Complex64>) {
     let cfg = world.run_system_once(init_bus_status).unwrap();
     let s_bus = cfg.s_bus;
     let v_bus_init = cfg.v_bus_init;
@@ -349,7 +363,7 @@ pub(crate) fn init_bus_status(
     pq: Query<(&BusID, &PQBus)>,
     pv: Query<(&BusID, &PVBus), Without<SlackBus>>,
     ext: Query<(&BusID, &SlackBus)>,
-    sbus: Query<(&BusID, &SBusInjPu)>,
+    sbus: Query<(&BusID, &SBusInjPu, Option<&super::qlim::QLimited>)>,
     vbus: Query<(&BusID, &VBusPu)>,
 ) -> SystemBusStatus {
     let nodes = node_lookup.len();
@@ -360,9 +374,9 @@ pub(crate) fn init_bus_status(
     let mut pv_only: Vec<_> = pv.iter().map(|x| x.0.0).collect();
     let mut exts: Vec<_> = ext.iter().map(|x| x.0.0).collect();
 
-    sbus.iter().for_each(|(bus_id, s)| {
+    sbus.iter().for_each(|(bus_id, s, bound)| {
         let idx = bus_id.0 as usize;
-        s_bus[idx] = s.0;
+        s_bus[idx] = s.0 + Complex64::new(0.0, bound.map_or(0.0, |q| q.q_pu));
     });
     vbus.iter().for_each(|(bus_id, s)| {
         let idx = bus_id.0 as usize;

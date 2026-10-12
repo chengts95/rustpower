@@ -3,15 +3,14 @@ use bevy_ecs::prelude::*;
 
 use crate::basic::{ecs::elements::*, sparse::cast::Cast};
 
-use super::{structure_update::VoltageChangeEvent, systems::PowerFlowResult};
-use crate::prelude::ecs::network::SolverStage::Solve;
+use super::systems::{PowerFlowMat, PowerFlowResult};
 
 pub fn extract_powerflow_results(
     res: Res<PowerFlowResult>,
     buses: Res<NodeLookup>,
     mut q: Query<&mut VBusPu>,
     node_agg: Option<Res<NodeAggRes>>,
-    mut event: MessageWriter<VoltageChangeEvent>,
+    mut mat: ResMut<PowerFlowMat>,
 ) {
     // A diverged voltage vector would poison the warm start of the next solve.
     if !res.converged {
@@ -27,7 +26,11 @@ pub fn extract_powerflow_results(
             bus.0 = v[i];
         }
     }
-    event.write(VoltageChangeEvent);
+    // Result publication is not an input edit. Preserve warm-start state
+    // directly without sending a voltage-change event back into preparation.
+    for idx in 0..mat.from_perm.len() {
+        mat.v_bus_init[idx] = res.v[mat.from_perm[idx]];
+    }
 }
 
 #[derive(Default)]
@@ -35,11 +38,6 @@ pub struct VBusUpdatePlugin;
 
 impl Plugin for VBusUpdatePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            extract_powerflow_results
-                .after(crate::basic::ecs::plugin::PowerFlowSolverSet)
-                .in_set(Solve),
-        );
+        app.add_systems(PostUpdate, extract_powerflow_results);
     }
 }

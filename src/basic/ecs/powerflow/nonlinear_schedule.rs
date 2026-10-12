@@ -52,14 +52,14 @@ pub fn update_convergence(mut res: ResMut<ConvergedResult>, pf_res: Res<PowerFlo
 /// - Executes all labels in `MainScheduleOrder`
 /// - When `NonLinearErrorCheck` is reached:
 ///   - If converged: stop
-///   - If max iterations: panic
-///   - Else: rewind to `PreUpdate` stage and repeat
+///   - If max iterations: retain the failed result and finish the external solve
+///   - Else: repeat `Update`; input hooks in `BeforeSolve` run only on the first pass
 pub fn run_outer_iteration(
     world: &mut World,
     mut run_at_least_once: Local<bool>,
     mut cached_nr_idx: Local<usize>,
 ) {
-    // First-time setup: run all Startup stages and locate `PreUpdate` index
+    // First-time setup: run all Startup stages and locate `Update` index
     if !*run_at_least_once {
         world.resource_scope(|world, order: Mut<MainScheduleOrder>| {
             for &label in &order.startup_labels {
@@ -69,7 +69,7 @@ pub fn run_outer_iteration(
                 .labels
                 .iter()
                 .enumerate()
-                .find(|x| x.1.intern() == PreUpdate.intern())
+                .find(|x| x.1.intern() == Update.intern())
                 .map(|x| x.0)
                 .unwrap();
         });
@@ -94,10 +94,10 @@ pub fn run_outer_iteration(
                         // Exit iteration loop
                     }
                     NonlinearConvType::MaxIter => {
-                        panic!("Max Iteration reached");
+                        // PowerFlowResult reports non-convergence to the caller.
                     }
                     _ => {
-                        // Rewind to `PreUpdate` and continue iteration
+                        // Continue preparation and solving without replaying PreUpdate.
                         index = *cached_nr_idx;
                     }
                 }

@@ -37,6 +37,37 @@ pub struct JacobianPattern2 {
     pub diag_ptrs: Vec<usize>, // length n_active
 }
 
+#[cfg(test)]
+#[derive(Default, Debug, Clone, Copy)]
+pub(crate) struct SymbolicBuildTimings {
+    pub allocate: std::time::Duration,
+    pub angle_columns: std::time::Duration,
+    pub magnitude_columns: std::time::Duration,
+}
+
+/// Skip active-row bisection when the sorted last row already determines
+/// the cut. Only columns touching slack rows need the second partition.
+/// Keep PQ-boundary and diagonal searches independent of that cut.
+#[inline]
+pub(super) fn column_boundaries<const RESTRICTED: bool>(
+    rows: &[usize],
+    k: usize,
+    npq: usize,
+    n_active: usize,
+) -> (usize, usize, Option<usize>) {
+    let pq_end = rows.partition_point(|&r| r < npq);
+    let active_end = if RESTRICTED {
+        if rows.last().is_none_or(|&r| r < n_active) {
+            rows.len()
+        } else {
+            pq_end + rows[pq_end..].partition_point(|&r| r < n_active)
+        }
+    } else {
+        rows.partition_point(|&r| r < n_active)
+    };
+    (pq_end, active_end, rows.binary_search(&k).ok())
+}
+
 impl JacobianPattern2 {
     pub fn build_from_permuted(
         y_col_ptrs: &[usize],
@@ -44,6 +75,53 @@ impl JacobianPattern2 {
         npv: usize,
         npq: usize,
     ) -> Self {
+        Self::build_impl::<true, false>(
+            y_col_ptrs,
+            y_row_indices,
+            npv,
+            npq,
+            #[cfg(test)]
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn build_profiled<const RESTRICTED: bool>(
+        y_col_ptrs: &[usize],
+        y_row_indices: &[usize],
+        npv: usize,
+        npq: usize,
+    ) -> (Self, SymbolicBuildTimings) {
+        let mut timings = SymbolicBuildTimings::default();
+        let pattern = Self::build_impl::<RESTRICTED, true>(
+            y_col_ptrs,
+            y_row_indices,
+            npv,
+            npq,
+            Some(&mut timings),
+        );
+        (pattern, timings)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn build_full_range(
+        y_col_ptrs: &[usize],
+        y_row_indices: &[usize],
+        npv: usize,
+        npq: usize,
+    ) -> Self {
+        Self::build_impl::<false, false>(y_col_ptrs, y_row_indices, npv, npq, None)
+    }
+
+    fn build_impl<const RESTRICTED: bool, const PROFILE: bool>(
+        y_col_ptrs: &[usize],
+        y_row_indices: &[usize],
+        npv: usize,
+        npq: usize,
+        #[cfg(test)] mut timings: Option<&mut SymbolicBuildTimings>,
+    ) -> Self {
+        #[cfg(test)]
+        let mut stage_start = PROFILE.then(std::time::Instant::now);
         let n_active = npv + npq;
         let n_j_cols = n_active + npq;
 
@@ -61,33 +139,36 @@ impl JacobianPattern2 {
 
         let mut current_nnz = 0;
 
+        #[cfg(test)]
+        if PROFILE {
+            timings.as_mut().unwrap().allocate = stage_start.unwrap().elapsed();
+            stage_start = Some(std::time::Instant::now());
+        }
+
         // Phase 1: theta columns -- one per active bus (PQ first, then PV).
         for k in 0..n_active {
             let start = y_col_ptrs[k];
             let row_slice = &y_row_indices[start..y_col_ptrs[k + 1]];
-
-            // Two-cut partition of the sorted row indices.
-            let idx_pq_end = row_slice.partition_point(|&r| r < npq);
-            let idx_active_end = row_slice.partition_point(|&r| r < n_active);
-
+            let (idx_pq_end, idx_active_end, diag_idx) =
+                column_boundaries::<RESTRICTED>(row_slice, k, npq, n_active);
             pq_ends[k] = idx_pq_end;
             active_ends[k] = idx_active_end;
-
-            if let Ok(diag_idx) = row_slice.binary_search(&k) {
+            if let Some(diag_idx) = diag_idx {
                 diag_ptrs[k] = start + diag_idx;
             }
-
-            // J11 (rows = all active rows of col k; J_red row = Ybus row).
             j11_starts[k] = current_nnz;
             j_row_indices.extend_from_slice(&row_slice[..idx_active_end]);
             current_nnz += idx_active_end;
-
-            // J21 (rows = PQ rows of col k; J_red Q-eq row = n_active + Ybus row).
             j21_starts[k] = current_nnz;
             j_row_indices.extend(row_slice[..idx_pq_end].iter().map(|&r| n_active + r));
             current_nnz += idx_pq_end;
-
             j_col_ptrs.push(current_nnz);
+        }
+
+        #[cfg(test)]
+        if PROFILE {
+            timings.as_mut().unwrap().angle_columns = stage_start.unwrap().elapsed();
+            stage_start = Some(std::time::Instant::now());
         }
 
         // Phase 2: |V| columns -- one per PQ bus only.
@@ -108,6 +189,11 @@ impl JacobianPattern2 {
             current_nnz += idx_pq_end;
 
             j_col_ptrs.push(current_nnz);
+        }
+
+        #[cfg(test)]
+        if PROFILE {
+            timings.as_mut().unwrap().magnitude_columns = stage_start.unwrap().elapsed();
         }
 
         Self {
