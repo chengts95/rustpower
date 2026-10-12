@@ -157,6 +157,9 @@ pub fn ecs_run_pf(
     );
 
     let n = mat.v_bus_init.len();
+    if v.is_ok() && cache.is_some() {
+        cmd.insert_resource(super::powerflow::prepare::CachedNewtonResult);
+    }
     match v {
         Ok((v_perm, iterations)) => {
             let mut v_orig =

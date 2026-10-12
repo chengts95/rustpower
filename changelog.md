@@ -1,4 +1,28 @@
 # Changelog
+
+## [0.5.3] - Unreleased
+
+### Changed
+- Use V4 Jacobian assembly in Newton–Raphson and Iwamoto solvers. Derive quadrant starts from column pointers and segment lengths instead of storing four additional lookup tables.
+- For Rust callers accessing `NewtonCache` directly, `j_pattern` now holds `JacobianCache`; use `j_row_indices.len()` for the nonzero count.
+- Reduce symbolic searches using the sorted PQ/PV/slack row ranges; retain earlier assembly implementations for ablation tests.
+- Enable ECS Newton caching by default. Preserve the cache policy across rebuilds and add `PowerGrid.clear_cache()` for explicit invalidation.
+- Share message-driven input preparation between AC solves and standalone DC calls. Reuse the physical Ybus when bus types change, while rebuilding the permutation, Jacobian structure and affected solver caches.
+- Reuse registered post-processing systems and their local buffers across calls.
+
+### Fixed
+- Honor `qlim=True` in `PowerGrid.from_pandapower()`. Aggregate Q limits across in-service generators sharing a bus and exclude slack buses from PV-to-PQ switching.
+- Keep clamped generator Q separate from device injections so subsequent input updates do not count it twice. Limited buses remain PQ across parameter updates; explicit `init_pf()` restores bus classifications from the model.
+- Continue Q-limit outer iterations from the previous AC voltage without repeating DC initialization or input hooks. Publish voltages after the outer loop finishes, and return a failed solve result instead of panicking on nonconvergence.
+- Consume pending input changes exactly once across AC/DC entry points, refresh DC caches when their dependencies change, and retain explicitly applied initial voltages.
+- Use cached Newton results in post-processing only when the current solve produced them.
+- Apply the solver permutation when transferring time-series voltages to the next step; retain the previous initial voltage after a failed or nonfinite result.
+
+### Experimental and validation
+- Add an internal Jacobian block operator for CSC/CSR and transposed layouts, plus a trusted-input CSR-to-CSC permutation helper with explicit safety requirements. The checked conversion remains the default.
+- Add `experimental_fused_scalc` for a shared Ybus traversal during calculated-power and Jacobian assembly; disabled by default.
+- Add regression coverage for symbolic ranges, sparse permutation, Jacobian layouts, cache invalidation, AC/DC preparation, Q-limit continuation and time-series voltage ordering. Keep timing benchmarks separate from routine tests.
+
 ## [0.5.2] - Fix and Improvement 
 - Fix many pandapower model processing bugs, now is accurate in most network cases.
 - Add dcpf to solve some types of networks.

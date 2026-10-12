@@ -19,6 +19,7 @@ use super::handles::*;
 /// Supports three primary workflows:
 /// Dedicated cached state for standalone DCPF calculations (`compute_dcpf_v`, `apply_dcpf_init`).
 struct StandaloneDcpf {
+    revision: u64,
     model: crate::basic::dcpf::DcpfModel,
     workspace: crate::basic::ecs::dcpf::DcpfWorkspace,
 }
@@ -460,6 +461,7 @@ impl PowerGrid {
     ///
     /// case_path: Optional path to a pandapower ZIP case file to load.
     /// qlim: If True, enforces generator reactive power limits by dynamically demoting PV buses to PQ when they saturate.
+    /// Limited buses remain PQ across parameter updates; init_pf() resets their classification.
     /// kwargs: Additional configuration flags (e.g. branch_analysis=True).
     #[new]
     #[pyo3(signature = (case_path=None, qlim=false, **kwargs))]
@@ -561,8 +563,9 @@ impl PowerGrid {
     }
 
     /// Synchronous full rebuild: runs the unified PFInit schedule (the same
-    /// pipeline that FullRebuildEvent triggers inside solve()). Kept public
-    /// for explicit use; normal workflows never need to call it.
+    /// pipeline that FullRebuildEvent triggers inside solve()). Resets bus
+    /// classifications and Q-limit clamps from the current model. Use
+    /// clear_cache() to discard solver caches without resetting those clamps.
     fn init_pf(&mut self) {
         self.standalone_dcpf = None;
         let _ = self
@@ -610,20 +613,8 @@ impl PowerGrid {
 
         let mut sync_full = false;
         if let Some(v) = v_init {
-            // A rebuild pending inside run_pf() would zero VBusPu AFTER we
-            // write the start vector; perform it synchronously first
-            // (init_pf also clears the now-superseded rebuild event).
-            let rebuild_pending = !self.inner.world().contains_resource::<PowerFlowMat>()
-                || self
-                    .inner
-                    .world()
-                    .get_resource::<bevy_ecs::message::Messages<FullRebuildEvent>>()
-                    .map(|m| !m.is_empty())
-                    .unwrap_or(false);
-            if rebuild_pending {
-                self.init_pf();
-                sync_full = true;
-            }
+            crate::basic::ecs::powerflow::prepare::prepare_solver_inputs(self.inner.world_mut());
+            sync_full = self.inner.world().resource::<LastStructureAction>().full_rebuild;
             self.set_v(py, v)?;
         } else if !self.inner.world().contains_resource::<PowerFlowMat>() {
             // First-ever build: nothing has posted a rebuild event yet.
@@ -724,22 +715,12 @@ impl PowerGrid {
                 app.add_plugins(crate::basic::ecs::dcpf::DcpfNewtonPfPlugin);
             }
             let world = self.inner.world_mut();
-            if !world.contains_resource::<crate::basic::dcpf::DcpfModel>() {
-                let model = world
-                    .run_system_once(crate::basic::ecs::dcpf::build_dcpf_model)
-                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
-                world.insert_resource(model);
-            }
-            if !world.contains_resource::<crate::basic::ecs::dcpf::DcpfWorkspace>() {
-                world.insert_resource(crate::basic::ecs::dcpf::DcpfWorkspace::default());
-            }
             world.insert_resource(crate::basic::ecs::dcpf::DcpfSolverActive);
             world.remove_resource::<crate::basic::ecs::plugin::CustomSolverActive>();
         } else {
             let world = self.inner.world_mut();
             world.remove_resource::<crate::basic::ecs::dcpf::DcpfSolverActive>();
             world.remove_resource::<crate::basic::dcpf::DcpfModel>();
-            world.remove_resource::<crate::basic::ecs::dcpf::DcpfWorkspace>();
         }
         Ok(())
     }
@@ -766,12 +747,19 @@ impl PowerGrid {
     /// Solves DCPF and applies the resulting phase angles to the internal initial voltage vector.
     fn apply_dcpf_init(&mut self) -> PyResult<()> {
         let v_perm = self.solve_standalone_dcpf_permuted()?;
-        let mut mat = self
-            .inner
-            .world_mut()
-            .get_resource_mut::<crate::basic::ecs::powerflow::systems::PowerFlowMat>()
-            .unwrap();
-        mat.v_bus_init = v_perm;
+        let world = self.inner.world_mut();
+        // Keep component state consistent so a later parameter edit cannot
+        // restore pre-DC angles when it synchronizes the voltage vector.
+        let mat = world.resource::<PowerFlowMat>();
+        let voltages: Vec<_> = mat.from_perm.iter().enumerate()
+            .map(|(idx, &bus)| (bus, v_perm[idx])).collect();
+        for (bus, v) in voltages {
+            let entity = world.resource::<NodeLookup>().get_entity(bus as i64).unwrap();
+            if let Some(mut value) = world.get_mut::<VBusPu>(entity) {
+                value.0 = v;
+            }
+        }
+        world.resource_mut::<PowerFlowMat>().v_bus_init = v_perm;
         Ok(())
     }
 
@@ -779,21 +767,15 @@ impl PowerGrid {
     /// When enabled, it reuses the symbolic factorization across multiple solves.
     #[pyo3(signature = (enable=true))]
     fn enable_cache(&mut self, enable: bool) {
-        if enable {
-            if !self
-                .inner
-                .world()
-                .contains_resource::<crate::basic::newtonpf::NewtonCache>()
-            {
-                self.inner
-                    .world_mut()
-                    .insert_resource(crate::basic::newtonpf::NewtonCache::default());
-            }
-        } else {
-            self.inner
-                .world_mut()
-                .remove_resource::<crate::basic::newtonpf::NewtonCache>();
-        }
+        let world = self.inner.world_mut();
+        world.insert_resource(crate::basic::ecs::powerflow::prepare::SolverCachePolicy { enabled: enable });
+        crate::basic::ecs::powerflow::prepare::ensure_newton_cache(world);
+    }
+
+    /// Clear numerical solver caches without disabling automatic caching.
+    fn clear_cache(&mut self) {
+        crate::basic::ecs::powerflow::prepare::clear_solver_caches(self.inner.world_mut());
+        self.standalone_dcpf = None;
     }
 
     /// Whether the last power flow solve converged.
@@ -924,14 +906,15 @@ impl PowerGrid {
     ///
     /// The Python pandapower data model is discarded after ingestion.
     #[classmethod]
-    #[pyo3(signature = (net, **kwargs))]
+    #[pyo3(signature = (net, qlim=false, **kwargs))]
     fn from_pandapower(
         _cls: &Bound<'_, pyo3::types::PyType>,
         py: Python<'_>,
         net: Bound<'_, PyAny>,
+        qlim: bool,
         kwargs: Option<Bound<'_, pyo3::types::PyDict>>,
     ) -> PyResult<Py<Self>> {
-        let grid = Self::new(None, false, kwargs)?;
+        let grid = Self::new(None, qlim, kwargs)?;
         let slf = Py::new(py, grid)?;
         Self::from_pp_net(slf.clone_ref(py), py, net)?;
         Ok(slf)
@@ -1273,29 +1256,17 @@ impl PowerGrid {
     fn solve_standalone_dcpf_permuted(
         &mut self,
     ) -> PyResult<nalgebra::DVector<num_complex::Complex64>> {
-        let rebuild_pending = !self
-            .inner
-            .world()
-            .contains_resource::<crate::basic::ecs::powerflow::systems::PowerFlowMat>()
-            || self
-                .inner
-                .world()
-                .get_resource::<bevy_ecs::message::Messages<
-                    crate::basic::ecs::powerflow::structure_update::FullRebuildEvent,
-                >>()
-                .map(|m| !m.is_empty())
-                .unwrap_or(false);
-        if rebuild_pending {
-            self.init_pf();
-        }
-
-        if self.standalone_dcpf.is_none() {
+        use crate::basic::ecs::powerflow::prepare::{prepare_solver_inputs, DcpfModelRevision};
+        prepare_solver_inputs(self.inner.world_mut());
+        let revision = self.inner.world().resource::<DcpfModelRevision>().0;
+        if self.standalone_dcpf.as_ref().is_none_or(|dc| dc.revision != revision) {
             let model = self
                 .inner
                 .world_mut()
                 .run_system_once(crate::basic::ecs::dcpf::build_dcpf_model)
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
             self.standalone_dcpf = Some(StandaloneDcpf {
+                revision,
                 model,
                 workspace: crate::basic::ecs::dcpf::DcpfWorkspace::default(),
             });

@@ -48,7 +48,7 @@ def run_benchmark(net_name, net):
     times_pp_cold = []
     for _ in range(NUM_TRIALS_COLD):
         start = time.perf_counter()
-        pp.runpp(net, numba=True, init="flat", recycle=False, tolerance_mva=TOL)
+        pp.runpp(net, numba=True, lightsim2grid=False, init="flat", recycle=False, tolerance_mva=TOL)
         times_pp_cold.append(time.perf_counter() - start)
     pp_cold_ms = np.mean(times_pp_cold) * 1000
     pp_iters = net._ppc['iterations']
@@ -72,6 +72,7 @@ def run_benchmark(net_name, net):
 
     times_ls2g_cold = []
     for _ in range(NUM_TRIALS_COLD):
+        ls_solver = KLUSolver()
         start = time.perf_counter()
         ls_solver.compute_pf(Ybus, V_init_compensated, Sbus, slack_ids, slack_weights, pv, pq, MAX_ITER, TOL)
         times_ls2g_cold.append(time.perf_counter() - start)
@@ -142,14 +143,14 @@ def run_benchmark(net_name, net):
     # ---------------------------------------------------------
     
     # 1. Pandapower (Numba + Recycle)
-    pp.runpp(net, numba=True, init="flat", recycle=True, tolerance_mva=TOL)
+    pp.runpp(net, numba=True,lightsim2grid=False,  init="flat", recycle=True, tolerance_mva=TOL)
     times_pp_hot = []
     for _ in range(NUM_TRIALS_HOT):
         # Force flat start in PPC to ensure Newton iterations actually run
         net._ppc['bus'][:, 7] = 1.0 # vm
         net._ppc['bus'][:, 8] = 0.0 # va
         start = time.perf_counter()
-        pp.runpp(net, numba=True, init="flat", recycle=dict(ppc=True, Ybus=True, bus_pq=False, trafo=False, gen=False), tolerance_mva=TOL)
+        pp.runpp(net, numba=True, lightsim2grid=False,  init="flat", recycle=dict(ppc=True, Ybus=True, bus_pq=False, trafo=False, gen=False), tolerance_mva=TOL)
         times_pp_hot.append(time.perf_counter() - start)
     pp_hot_ms = np.mean(times_pp_hot) * 1000
     pp_hot_min = np.min(times_pp_hot) * 1000
@@ -160,6 +161,7 @@ def run_benchmark(net_name, net):
     ls_model = init_from_pandapower(net)
     ls_model.change_solver(AlgorithmType.NRSing_KLU)
     ls_model.ac_pf(V_init_flat, MAX_ITER, TOL) # Warmup
+    ls_model.deactivate_result_computation()
     times_ls2g_hot = []
     for _ in range(NUM_TRIALS_HOT):
         start = time.perf_counter()

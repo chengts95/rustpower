@@ -35,7 +35,7 @@ grid = rp.PowerGrid.from_pandapower(net)
 # grid = rp.PowerGrid("cases/IEEE118/data.zip")
 
 # Enable solver optimizations (optional)
-grid.enable_cache(True)       # Reuses symbolic LU factorization
+grid.enable_cache(True)       # Already enabled by default; reuses symbolic caches
 grid.enable_dcpf_init(True)   # Warm-starts voltage angles via DCPF
 
 # Solve power flow
@@ -140,14 +140,16 @@ if converged:
 
 #### Constructors & Ingestion
 - `PowerGrid(case_path=None, qlim=False, f_hz=50.0, sn_mva=100.0)`: Initialize a grid. Can load from a CSV-ZIP case file or start empty.
-- `PowerGrid.from_pandapower(net) -> PowerGrid`: Classmethod to construct a `PowerGrid` directly from a pandapower `net` object.
+- `PowerGrid.from_pandapower(net, qlim=False) -> PowerGrid`: Classmethod to construct a `PowerGrid` directly from a pandapower `net` object. Set `qlim=True` to enforce generator reactive-power limits.
 - `grid.from_pp_net(net)`: Ingest a pandapower `net` into an existing `PowerGrid` instance.
 - `grid.load_network(net)`: Ingest an internal `rustpower.Network` struct.
 
 #### Solvers & Algorithms
-- `solve(max_iter=10, tol=1e-8, v_init=None) -> SolveReport`: Run power flow analysis.
+- `solve(v_init=None, max_iter=None, tol=None) -> SolveReport`: Run power flow analysis.
   - `v_init`: Optional complex array in **bus-id order** for custom warm-start.
-- `enable_cache(enable=True)`: Enable or disable Jacobian pattern and symbolic LU factorization caching across solves.
+- `enable_cache(enable=True)`: Enable or disable Newton workspace/Jacobian caching. Enabled by default; the setting survives model rebuilds. Structural changes invalidate affected solver caches automatically.
+- `clear_cache()`: Clear solver caches while preserving the cache policy, model and current Q-limit clamps. Caches are rebuilt at the next solve when enabled.
+- `init_pf()`: Rebuild the model and restore bus classifications from the current device data. With Q limits enabled, this clears previous PV-to-PQ clamps so the next solve determines them again. Ordinary parameter updates preserve existing clamps.
 - `enable_dcpf_init(enable=True)`: Enable or disable automatic DC power flow angle initialization prior to Newton-Raphson.
 - `compute_dcpf_v() -> np.ndarray`: Compute DCPF voltage vector (complex, bus-id ordered) without running full AC power flow.
 - `apply_dcpf_init()`: Manually solve DCPF and update internal `v_bus_init`.

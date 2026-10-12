@@ -1,5 +1,5 @@
 use bevy_app::App;
-use bevy_ecs::{prelude::*, system::RunSystemOnce};
+use bevy_ecs::prelude::*;
 
 use num_complex::Complex64;
 use serde::{Deserialize, Serialize};
@@ -105,12 +105,13 @@ fn extract_res_bus(
     res: Res<PowerFlowResult>,
     common: Res<PFCommonData>,
     cache: Option<Res<crate::basic::newtonpf::NewtonCache>>,
+    cached_result: Option<Res<super::powerflow::prepare::CachedNewtonResult>>,
 ) {
     let n = res.v.len();
     let s_base = common.sbase;
     let mut s_orig = vec![Complex64::new(0.0, 0.0); n];
 
-    if let Some(c) = cache.as_ref().filter(|c| c.s_calc.len() == n) {
+    if let Some(c) = cache.as_ref().filter(|c| cached_result.is_some() && c.s_calc.len() == n) {
         for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
             s_orig[orig_idx] = -c.s_calc[new_idx] * s_base;
         }
@@ -550,6 +551,7 @@ fn extract_res_branches(
     mat: Res<PowerFlowMat>,
     results: Res<PowerFlowResult>,
     cache: Option<Res<crate::basic::newtonpf::NewtonCache>>,
+    cached_result: Option<Res<super::powerflow::prepare::CachedNewtonResult>>,
     mut bus_calc: Local<Vec<BusPrecalc>>,
     mut init_done: Local<bool>,
 ) {
@@ -591,7 +593,7 @@ fn extract_res_branches(
     // Direct read from solver polar state (NewtonCache) if present, eliminating atan2 & sqrt!
     // Zero branches in the permutation update loop for optimal pipeline throughput.
     if let Some(c) = cache.as_ref().filter(|c| {
-        c.v_m.len() == nodes
+        cached_result.is_some() && c.v_m.len() == nodes
             && c.v_a.len() == nodes
             && mat.from_perm.len() == nodes
             && v_slice.len() >= nodes
@@ -748,34 +750,34 @@ pub trait PostProcessing {
 
 impl PostProcessing for PowerGrid {
     fn print_res_bus(&mut self) {
-        self.world_mut().run_system_once(print_res_bus).unwrap();
+        self.world_mut().run_system_cached(print_res_bus).unwrap();
     }
 
     fn print_res_line(&mut self) {
-        self.world_mut().run_system_once(print_res_line).unwrap();
+        self.world_mut().run_system_cached(print_res_line).unwrap();
     }
 
     fn post_process(&mut self) {
-        self.world_mut().run_system_once(extract_res_bus).unwrap();
+        self.world_mut().run_system_cached(extract_res_bus).unwrap();
         self.world_mut()
-            .run_system_once(extract_res_branches)
+            .run_system_cached(extract_res_branches)
             .unwrap();
     }
 }
 
 impl PostProcessing for App {
     fn print_res_bus(&mut self) {
-        self.world_mut().run_system_once(print_res_bus).unwrap();
+        self.world_mut().run_system_cached(print_res_bus).unwrap();
     }
 
     fn print_res_line(&mut self) {
-        self.world_mut().run_system_once(print_res_line).unwrap();
+        self.world_mut().run_system_cached(print_res_line).unwrap();
     }
 
     fn post_process(&mut self) {
-        self.world_mut().run_system_once(extract_res_bus).unwrap();
+        self.world_mut().run_system_cached(extract_res_bus).unwrap();
         self.world_mut()
-            .run_system_once(extract_res_branches)
+            .run_system_cached(extract_res_branches)
             .unwrap();
     }
 }

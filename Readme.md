@@ -106,7 +106,7 @@ grid = rp.PowerGrid.from_pandapower(net)
 # Or: grid = rp.PowerGrid("cases/IEEE118/data.zip")
 
 # 2. Configure solver options (optional)
-grid.enable_cache(True)       # Enable Jacobian / LU factorization caching
+grid.enable_cache(True)       # Already enabled by default; reuses symbolic caches
 grid.enable_dcpf_init(True)   # Enable DCPF angle initialization for faster convergence
 # grid.enable_iwamoto(True)   # Use Iwamoto optimal multiplier for ill-conditioned cases
 

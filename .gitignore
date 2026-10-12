@@ -16,6 +16,13 @@ Thumbs.db
 # Editor-specific files
 .vscode/
 .idea/
+/.marscode/
+
+# Python bytecode and local test snapshots
+__pycache__/
+*.py[cod]
+/test_system.toml
+/tt.toml
 
 # Build files
 *.rs.bk

@@ -61,15 +61,26 @@ impl Plugin for BasePFPlugin {
             tol: None,
         });
         app.world_mut().insert_resource(PowerFlowSolver::default());
+        app.init_resource::<super::powerflow::prepare::SolverCachePolicy>();
+        app.init_resource::<super::powerflow::prepare::SolvePass>();
+        app.add_systems(First, super::powerflow::prepare::begin_solve);
         app.configure_sets(
             Update,
             (
-                SolverStage::BeforeSolve,
+                SolverStage::BeforeSolve.run_if(
+                    |pass: Res<super::powerflow::prepare::SolvePass>| !pass.continuation,
+                ),
                 SolverStage::Solve,
                 SolverStage::AfterSolve,
             )
                 .into_configs()
                 .chain(),
+        );
+        app.add_systems(
+            Update,
+            super::powerflow::prepare::ensure_newton_cache
+                .in_set(SolverStage::Solve)
+                .before(PowerFlowSolverSet),
         );
         app.add_systems(
             Update,
