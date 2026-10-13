@@ -10,20 +10,6 @@ use serde_json::{Map, Value};
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 
-/// This module is used to parse pandapower network parameters
-/// Deserializes a number from JSON format.
-fn from_number<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let val: serde_json::Value = Deserialize::deserialize(deserializer)?;
-    if let serde_json::Value::Number(n) = val {
-        let res = n.as_f64().unwrap();
-        return Ok(Some(res as i64));
-    }
-    Ok(None)
-}
-
 /// Deserializes a string from JSON format.
 fn from_str<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
@@ -51,8 +37,8 @@ pub struct Bus {
     pub name: Option<String>,
     pub r#type: Option<String>, // Added underscore to avoid conflict with Rust keyword
     pub vn_kv: f64,
-    #[serde(deserialize_with = "from_number")]
-    pub zone: Option<i64>,
+    #[serde(default, deserialize_with = "from_str")]
+    pub zone: Option<String>,
 }
 
 #[cfg(feature = "python")]
@@ -68,7 +54,7 @@ impl Bus {
         name: Option<String>,
         r#type: Option<String>,
         vn_kv: f64,
-        zone: Option<i64>,
+        zone: Option<String>,
     ) -> Self {
         Self {
             index,
@@ -203,6 +189,9 @@ impl Load {
 #[derive(Default, Debug, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 pub struct Line {
+    /// Original table index used by line switches; legacy cases use row order.
+    #[serde(default)]
+    pub index: Option<i64>,
     pub c_nf_per_km: f64,
     pub df: f64,
     pub from_bus: i64,
@@ -225,7 +214,7 @@ pub struct Line {
 #[pymethods]
 impl Line {
     #[new]
-    #[pyo3(signature = (from_bus=0, to_bus=0, length_km=1.0, r_ohm_per_km=0.1, x_ohm_per_km=0.1, c_nf_per_km=0.0, g_us_per_km=0.0, in_service=true, parallel=1, max_i_ka=None, max_loading_percent=None, type_=None, name=None, std_type=None))]
+    #[pyo3(signature = (from_bus=0, to_bus=0, length_km=1.0, r_ohm_per_km=0.1, x_ohm_per_km=0.1, c_nf_per_km=0.0, g_us_per_km=0.0, in_service=true, parallel=1, max_i_ka=None, max_loading_percent=None, type_=None, name=None, std_type=None, index=None))]
     fn new(
         from_bus: i64,
         to_bus: i64,
@@ -241,8 +230,10 @@ impl Line {
         type_: Option<String>,
         name: Option<String>,
         std_type: Option<String>,
+        index: Option<i64>,
     ) -> Self {
         Self {
+            index,
             from_bus,
             to_bus,
             length_km,
@@ -267,10 +258,10 @@ impl Line {
 #[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 pub struct Transformer {
     pub df: f64,
-    pub hv_bus: i32,
+    pub hv_bus: i64,
     pub i0_percent: f64,
     pub in_service: bool,
-    pub lv_bus: i32,
+    pub lv_bus: i64,
     pub max_loading_percent: Option<f64>,
     pub parallel: i32,
     pub pfe_kw: f64,
@@ -298,8 +289,8 @@ impl Transformer {
     #[new]
     #[pyo3(signature = (hv_bus=0, lv_bus=0, sn_mva=1.0, vn_hv_kv=110.0, vn_lv_kv=10.0, vk_percent=10.0, vkr_percent=0.1, pfe_kw=0.0, i0_percent=0.0, shift_degree=0.0, in_service=true, parallel=1, tap_side=None, tap_pos=None, tap_neutral=None, tap_max=None, tap_min=None, tap_step_percent=None, tap_step_degree=None, tap_phase_shifter=false, name=None, std_type=None))]
     fn new(
-        hv_bus: i32,
-        lv_bus: i32,
+        hv_bus: i64,
+        lv_bus: i64,
         sn_mva: f64,
         vn_hv_kv: f64,
         vn_lv_kv: f64,
@@ -808,6 +799,28 @@ pub fn load_pandapower_json_obj(json: &Map<String, Value>) -> Network {
 mod tests {
     use super::*;
     use std::env;
+
+    #[test]
+    fn test_bus_zone_strings_and_legacy_numbers() {
+        for (zone, expected) in [
+            (serde_json::json!("CIGRE_MV"), Some("CIGRE_MV")),
+            (serde_json::json!(7), Some("7")),
+            (serde_json::json!(2.5), Some("2.5")),
+            (serde_json::Value::Null, None),
+        ] {
+            let mut value = serde_json::to_value(Bus::default()).unwrap();
+            value["zone"] = zone;
+            let bus: Bus = serde_json::from_value(value).unwrap();
+            assert_eq!(bus.zone.as_deref(), expected);
+            let bundle: crate::basic::ecs::elements::BusBundle = (&bus).into();
+            assert_eq!(bundle.zone.0, expected.unwrap_or_default());
+            let serialized = serde_json::to_value(&bus).unwrap();
+            assert_eq!(serialized["zone"], serde_json::json!(expected));
+        }
+        let mut value = serde_json::to_value(Bus::default()).unwrap();
+        value.as_object_mut().unwrap().remove("zone");
+        assert_eq!(serde_json::from_value::<Bus>(value).unwrap().zone, None);
+    }
 
     #[test]
     fn test_load_json() -> () {

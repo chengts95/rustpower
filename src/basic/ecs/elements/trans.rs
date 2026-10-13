@@ -61,15 +61,15 @@ impl TransformerDevice {
     pub fn effective_tap_params(&self) -> (f64, f64, f64, f64) {
         let is_lv = self.is_lv_tap();
 
-        let (pos, neutral, step_p, step_d) = self.tap.as_ref().map_or(
-            (0.0, 0.0, 0.0, 0.0),
-            |tap| (
-                tap.pos.unwrap_or(0.0),
-                tap.neutral.unwrap_or(0.0),
-                tap.step_percent.unwrap_or(0.0),
-                tap.step_degree.unwrap_or(0.0),
-            ),
-        );
+        let (pos, neutral, step_p, step_d) =
+            self.tap.as_ref().map_or((0.0, 0.0, 0.0, 0.0), |tap| {
+                (
+                    tap.pos.unwrap_or(0.0),
+                    tap.neutral.unwrap_or(0.0),
+                    tap.step_percent.unwrap_or(0.0),
+                    tap.step_degree.unwrap_or(0.0),
+                )
+            });
         let n_steps = pos - neutral;
         let tap_factor = 1.0 + n_steps * 0.01 * step_p;
 
@@ -80,11 +80,7 @@ impl TransformerDevice {
                 tap_factor * tap_factor,
             )
         } else {
-            (
-                tap_factor,
-                self.shift_degree + n_steps * step_d,
-                1.0,
-            )
+            (tap_factor, self.shift_degree + n_steps * step_d, 1.0)
         };
         (ratio, shift_deg, z_scale, tap_factor)
     }
@@ -304,7 +300,8 @@ pub mod trans_systems {
         // and serve as a seamless drop-in replacement for Pandapower's default behavior, we deliberately
         // mirror Pandapower's purely inductive path (-b_m_pu) here and bypass this physical discrepancy.
         // -----------------------------------------------------------------------------------------
-        let y_m_single_pu = Complex::new(g_m_pu, -b_m_pu) / (if is_lv { tap_factor * tap_factor } else { 1.0 });
+        let y_m_single_pu =
+            Complex::new(g_m_pu, -b_m_pu) / (if is_lv { tap_factor * tap_factor } else { 1.0 });
         let y_m_pu = dev.parallel as f64 * y_m_single_pu;
 
         // 2. T-model: Kron reduction of the internal star node entirely in per-unit
@@ -314,7 +311,10 @@ pub mod trans_systems {
         let r_ratio = 0.5;
         let x_ratio = 0.5;
         let d1 = Complex::new(z_series_pu.re * r_ratio, z_series_pu.im * x_ratio);
-        let d2 = Complex::new(z_series_pu.re * (1.0 - r_ratio), z_series_pu.im * (1.0 - x_ratio));
+        let d2 = Complex::new(
+            z_series_pu.re * (1.0 - r_ratio),
+            z_series_pu.im * (1.0 - x_ratio),
+        );
         let y1 = Complex::new(1.0, 0.0) / d1;
         let y2 = Complex::new(1.0, 0.0) / d2;
         let g = Complex::new(1.0, 0.0) / (y_m_pu + y1 + y2);

@@ -32,7 +32,18 @@ pub struct TimeSeriesData {
 ///
 /// This enables iterative solvers to reuse the previous converged solution as a warm start.
 pub fn state_transfer(mut data: ResMut<PowerFlowMat>, pf_result: Res<PowerFlowResult>) {
-    data.v_bus_init.clone_from(&pf_result.v);
+    if !pf_result.converged
+        || pf_result
+            .v
+            .iter()
+            .any(|v| !v.re.is_finite() || !v.im.is_finite())
+    {
+        return;
+    }
+    // Results are in original bus order; the next solve uses solver order.
+    for i in 0..data.from_perm.len() {
+        data.v_bus_init[i] = pf_result.v[data.from_perm[i]];
+    }
 }
 /// Appends the current voltage vector and simulation time to the [`TimeSeriesData`] archive.
 ///

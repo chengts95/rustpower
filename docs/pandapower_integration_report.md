@@ -2,6 +2,10 @@
 
 This document outlines the integration methodology and provides an accurate, code-level performance breakdown comparing native `pandapower` (Python + SciPy) and `rustpower` used as a highly optimized solver backend via the `ppci` internal structure.
 
+The seamless integration described here is **numerical solver replacement through the Python `NewtonSolver` interface**. Pandapower constructs the electrical model and supplies `ppc`/`ppci` matrices and vectors; RustPower replaces the numerical Newton-Raphson solve. Pandapower retains responsibility for model conversion and the surrounding workflow.
+
+This is separate from `PowerGrid.from_pandapower()`, which converts supported basic elements into RustPower's native ECS model. The benchmarks below use pandapower-generated numerical data and assess the solver interface. They do not establish that RustPower's network importer supports all pandapower models, parameters, options, or analysis features. See the [integration scope](python_api.md#pandapower-integration-scope).
+
 ## 1. Integration Methodology: The Stateful Context
 
 Integrating a high-performance Rust solver with Python's SciPy ecosystem presents a significant challenge: **Data Transfer and Matrix Format Overhead**. 
@@ -9,6 +13,14 @@ Integrating a high-performance Rust solver with Python's SciPy ecosystem present
 * `rustpower` requires CSC (Compressed Sparse Column) format, strictly ordered as `[PQ | PV | Slack]` to achieve its branch-free assembly optimizations.
 
 To prevent the integration from becoming an $I/O$ bottleneck, we designed a **Stateful Solver Context** (`NewtonSolver`).
+
+### Direct NumPy Array I/O
+
+The Python solver binding borrows contiguous `complex128` NumPy input buffers directly. For output, `extract_results()` borrows writable, pre-allocated NumPy arrays and writes voltages and electrical quantities directly into their storage in original bus order. No temporary result arrays or extra transfer buffers are needed. After a solve, cached power injections are also extracted without heap allocations.
+
+Integer indices follow a separate path. Rust array indexing and this solver's sparse matrix representation use `usize`, a pointer-sized unsigned integer (64 bits on 64-bit platforms). NumPy/SciPy commonly provide signed `int32` or `int64` index arrays, which the binding converts into owned `usize` buffers during setup. These signed inputs require conversion to the solver's index type; the zero-copy numerical-buffer claim does not include index arrays.
+
+This is the zero-copy array access and zero-allocation output path behind the solver interface's low-overhead integration. Allocate output arrays once and reuse them with the stateful context across repeated solves. Zero-copy describes NumPy buffer access at the Python interface; it does not mean that the solver performs no allocations. The solver allocates its internal matrices, vectors, and workspaces. Context setup copies and reorders input data into that storage; convenience result getters allocate new arrays.
 
 ### The $O(NNZ)$ Direct Permutation
 Instead of relying on slow Python-side slicing or generic sparse matrix multiplication, we implemented a custom $O(NNZ)$ CSR-to-CSC permutation operator in Rust (`permute_csr_to_csc_sort_free`). 

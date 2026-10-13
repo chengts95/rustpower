@@ -8,7 +8,7 @@ use num_complex::Complex64;
 
 use crate::basic::ecs::powerflow::systems::{PowerFlowMat, PowerFlowResult};
 use crate::basic::newton_pf;
-use crate::basic::newtonpf::{csc_matvec_and_scalc, NewtonCache};
+use crate::basic::newtonpf::{NewtonCache, csc_matvec_and_scalc};
 use crate::basic::solver::{DefaultSolver, Solve};
 use crate::basic::sparse::utils::permute_csr_to_csc_sort_free;
 
@@ -90,9 +90,8 @@ impl NewtonSolver {
     ) {
         // Use the ultra-fast O(NNZ) sort-free permutation utility
         // permute_csr_to_csc_sort_free expects p_vec (from_perm: new -> old) and p_inv (to_perm: old -> new)
-        let y_perm_csc = permute_csr_to_csc_sort_free(
-            n, indptr, indices, data, &from_perm, &to_perm,
-        );
+        let y_perm_csc =
+            permute_csr_to_csc_sort_free(n, indptr, indices, data, &from_perm, &to_perm);
 
         let mut s_perm = DVector::from_element(n, Complex64::new(0.0, 0.0));
         let mut v_perm = DVector::from_element(n, Complex64::new(0.0, 0.0));
@@ -154,22 +153,15 @@ impl NewtonSolver {
         let mut to_perm = vec![0usize; n_total];
         for (new_idx, &old_idx) in from_perm.iter().enumerate() {
             if old_idx >= n_total {
-                return Err(format!("Bus index {old_idx} out of bounds for grid size {n_total}"));
+                return Err(format!(
+                    "Bus index {old_idx} out of bounds for grid size {n_total}"
+                ));
             }
             to_perm[old_idx] = new_idx;
         }
 
         self.setup_internal(
-            n,
-            indptr,
-            indices,
-            data,
-            s_bus,
-            v_init,
-            to_perm,
-            from_perm,
-            npv,
-            npq,
+            n, indptr, indices, data, s_bus, v_init, to_perm, from_perm, npv, npq,
         );
 
         Ok(())
@@ -199,16 +191,7 @@ impl NewtonSolver {
             ));
         }
         self.setup_internal(
-            n,
-            indptr,
-            indices,
-            data,
-            s_bus,
-            v_init,
-            to_perm,
-            from_perm,
-            npv,
-            npq,
+            n, indptr, indices, data, s_bus, v_init, to_perm, from_perm, npv, npq,
         );
         Ok(())
     }
@@ -238,7 +221,11 @@ impl NewtonSolver {
     }
 
     /// Batch update initial voltage for specified bus indices.
-    pub fn update_v_init_batch(&mut self, buses: &[usize], values: &[Complex64]) -> Result<(), &'static str> {
+    pub fn update_v_init_batch(
+        &mut self,
+        buses: &[usize],
+        values: &[Complex64],
+    ) -> Result<(), &'static str> {
         if buses.len() != values.len() {
             return Err("Length mismatch between buses and values");
         }
@@ -290,7 +277,11 @@ impl NewtonSolver {
     }
 
     /// Batch update Sbus injections for specified bus indices.
-    pub fn update_s_bus_batch(&mut self, buses: &[usize], values: &[Complex64]) -> Result<(), &'static str> {
+    pub fn update_s_bus_batch(
+        &mut self,
+        buses: &[usize],
+        values: &[Complex64],
+    ) -> Result<(), &'static str> {
         if buses.len() != values.len() {
             return Err("Length mismatch between buses and values");
         }
@@ -394,7 +385,11 @@ impl NewtonSolver {
 
         // Compute residual norm directly from cache.F
         let residual = if self.cache.F.len() > 0 {
-            self.cache.F.as_slice().iter().fold(0.0f64, |acc, &x| acc.max(x.abs()))
+            self.cache
+                .F
+                .as_slice()
+                .iter()
+                .fold(0.0f64, |acc, &x| acc.max(x.abs()))
         } else {
             0.0
         };
@@ -468,7 +463,11 @@ impl NewtonSolver {
         let res = self.result()?;
         let n = res.v.len();
         let mut va = vec![0.0f64; n];
-        let factor = if deg { 180.0 / std::f64::consts::PI } else { 1.0 };
+        let factor = if deg {
+            180.0 / std::f64::consts::PI
+        } else {
+            1.0
+        };
         for (perm_idx, &old_idx) in mat.from_perm.iter().enumerate() {
             va[old_idx] = res.v[perm_idx].im.atan2(res.v[perm_idx].re) * factor;
         }
