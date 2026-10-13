@@ -35,7 +35,16 @@ impl DcpfWorkspace {
 pub fn build_dcpf_model(
     common: Res<PFCommonData>,
     mat: Res<PowerFlowMat>,
-    trafos: Query<(&Port4MatPatch, &TransformerDevice, &FromBus, &ToBus), Without<OutOfService>>,
+    agg: Option<Res<NodeAggRes>>,
+    trafos: Query<
+        (
+            &Port4MatPatch,
+            &TransformerDevice,
+            &FromBusMatrixIndex,
+            &ToBusMatrixIndex,
+        ),
+        Without<OutOfService>,
+    >,
 ) -> DcpfModel {
     let mut p_shift_orig = vec![0.0; mat.v_bus_init.len()];
     for (patch, dev, from, to) in trafos.iter() {
@@ -44,12 +53,12 @@ pub fn build_dcpf_model(
             let vn = dev.vn_lv_kv;
             let b = patch.0[(0, 1)].norm() * (vn * vn) / common.sbase;
             let p_inj = b * (-shift_deg.to_radians());
-            if from.0 >= 0 && (from.0 as usize) < p_shift_orig.len() {
-                p_shift_orig[from.0 as usize] += p_inj;
-            }
-            if to.0 >= 0 && (to.0 as usize) < p_shift_orig.len() {
-                p_shift_orig[to.0 as usize] -= p_inj;
-            }
+            let f = agg
+                .as_ref()
+                .map_or(from.0, |a| a.original_to_merged[from.0]);
+            let t = agg.as_ref().map_or(to.0, |a| a.original_to_merged[to.0]);
+            p_shift_orig[f] += p_inj;
+            p_shift_orig[t] -= p_inj;
         }
     }
 
@@ -142,10 +151,19 @@ pub fn ensure_dcpf_model(
     model: Option<Res<DcpfModel>>,
     common: Res<PFCommonData>,
     mat: Res<PowerFlowMat>,
-    trafos: Query<(&Port4MatPatch, &TransformerDevice, &FromBus, &ToBus), Without<OutOfService>>,
+    agg: Option<Res<NodeAggRes>>,
+    trafos: Query<
+        (
+            &Port4MatPatch,
+            &TransformerDevice,
+            &FromBusMatrixIndex,
+            &ToBusMatrixIndex,
+        ),
+        Without<OutOfService>,
+    >,
 ) {
     if model.is_none() {
-        cmd.insert_resource(build_dcpf_model(common, mat, trafos));
+        cmd.insert_resource(build_dcpf_model(common, mat, agg, trafos));
     }
 }
 

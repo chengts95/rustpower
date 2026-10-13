@@ -7,7 +7,7 @@ element properties take the incremental path with warm starts.
 """
 import numpy as np
 import pandas as pd
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Literal, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Element proxies (live views over ECS entities; hold no data themselves)
@@ -17,6 +17,11 @@ class BusHandle:
     """Bus proxy. Result properties are valid after solve()."""
     @property
     def id(self) -> int: ...
+    @property
+    def pp_id(self) -> Optional[int]: ...
+    @property
+    def matrix_index(self) -> Optional[int]: ...
+    zone: str
     @property
     def vn_kv(self) -> float: ...
     @property
@@ -117,7 +122,7 @@ class GridEditor:
 
     def add_bus(self, vn_kv: float, name: Optional[str] = None,
                 vm_min: float = 0.9, vm_max: float = 1.1,
-                zone: int = 0) -> Tuple[int, BusHandle]: ...
+                zone: str = "") -> Tuple[int, BusHandle]: ...
     def add_line(self, from_bus: int, to_bus: int, length_km: float,
                  std_type: Optional[str] = None, r_ohm_per_km: float = 0.1,
                  x_ohm_per_km: float = 0.1, c_nf_per_km: float = 0.0,
@@ -144,8 +149,9 @@ class GridEditor:
                   vn_kv: float = 110.0, step: int = 1,
                   name: Optional[str] = None) -> ShuntHandle: ...
     def remove(self, element: Any) -> None:
-        """Remove an element by handle. Removing a bus removes attached
-        elements. Phase 1: not rolled back by abort."""
+        """Defer deletion until commit; abort preserves removals.
+        Connected elements must be removed with their referenced bus.
+        Handles must belong to this grid."""
         ...
     def commit(self) -> None: ...
     def abort(self) -> None: ...
@@ -163,17 +169,21 @@ class PowerGrid:
     C. Topology:   with grid.edit() as e: ...; grid.solve()  # auto rebuild
     """
     def __init__(self, case_path: Optional[str] = None, qlim: bool = False,
+                 *, switch_model: Optional[Literal["merge", "admittance"]] = None,
                  **kwargs: Any):
         """qlim=True enforces generator reactive limits (PV buses are demoted
         to PQ when their Q output saturates, with an outer iteration loop)."""
         ...
     @classmethod
-    def from_pandapower(cls, net: Any) -> "PowerGrid":
+    def from_pandapower(cls, net: Any, qlim: bool = False, *,
+                        switch_model: Optional[Literal["merge", "admittance"]] = None,
+                        **kwargs: Any) -> "PowerGrid":
         """Build a PowerGrid directly from a live Python `pandapowerNet` object (from the Python `pandapower` library).
         
         The Python pandapower data model is discarded after ingestion."""
         ...
-    def load_network(self, net: "Network") -> None:
+    def from_pp_net(self, net: Any, *, switch_model: Optional[Literal["merge", "admittance"]] = None) -> None: ...
+    def load_network(self, net: "Network", *, switch_model: Optional[Literal["merge", "admittance"]] = None) -> None:
         """Load a `rustpower.Network` object (the Rust-native parsed grid representation) into the grid.
         
         This clears all existing entities, re-ingests the network components,
@@ -197,7 +207,7 @@ class PowerGrid:
     def solve(self, v_init: Optional[np.ndarray] = None) -> SolveReport:
         """Run the power flow. Raises RuntimeError only on validation errors
         (empty grid, no slack); divergence is reported via a falsy report.
-        v_init: Optional initial voltage guess (p.u. complex) for all buses."""
+        v_init: Optional voltage guess in dense matrix_index order."""
         ...
     def reset_state(self) -> None:
         """Reset the power flow solver state, clearing result vectors and resetting bus injections."""
@@ -241,7 +251,7 @@ class PowerGrid:
     def get_parquet_results(self) -> bytes:
         """Serialize solved results (voltages, branch loading) to a ZIP archive of Parquet files (returns raw bytes)."""
         ...
-    def load_parquet_case(self, zip_bytes: bytes) -> None:
+    def load_parquet_case(self, zip_bytes: bytes, *, switch_model: Optional[Literal["merge", "admittance"]] = None) -> None:
         """Load a case-file ECS state from a ZIP archive of Parquet files (restores topology and parameters)."""
         ...
 
@@ -250,6 +260,13 @@ class PowerGrid:
 # ---------------------------------------------------------------------------
 
 class Network: ...
+
+class Bus:
+    zone: Optional[str]
+    def __init__(self, index: int = 0, in_service: bool = True,
+                 max_vm_pu: Optional[float] = None, min_vm_pu: Optional[float] = None,
+                 name: Optional[str] = None, type: Optional[str] = None,
+                 vn_kv: float = 110.0, zone: Optional[str] = None) -> None: ...
 
 def load_csv_zip(path: str) -> Network: ...
 def version() -> str: ...

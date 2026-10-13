@@ -176,6 +176,7 @@ fn qlim_reorders_and_continues_ac_then_publishes_final_voltage() {
         TargetVmPu(1.03),
         PQLim::new(-100.0, 100.0, 0.0, 0.0),
     ));
+    crate::basic::ecs::elements::topology::prepare_topology(app.world_mut()).unwrap();
     app.update();
     let world = app.world();
     assert_eq!(world.resource::<Passes>().0, 2);
@@ -210,6 +211,7 @@ fn qlim_parameter_updates_preserve_bound_and_symbolic_cache() {
         TargetVmPu(1.03),
         PQLim::new(-100.0, 100.0, -100.0, 1.0),
     ));
+    crate::basic::ecs::elements::topology::prepare_topology(app.world_mut()).unwrap();
     app.update();
     let world = app.world_mut();
     assert!(world.resource::<PowerFlowResult>().converged);
@@ -338,4 +340,53 @@ fn clearing_and_full_rebuild_preserve_cache_policy() {
     app.update();
     assert!(!app.world().contains_resource::<NewtonCache>());
     assert!(app.world().resource::<PowerFlowResult>().converged);
+}
+
+#[test]
+fn relabeling_native_buses_preserves_ac_dc_results_and_publication() {
+    let mut app = three_bus();
+    app.update();
+    assert!(app.world().resource::<PowerFlowResult>().converged);
+    let mut expected: Vec<_> = app
+        .world_mut()
+        .query::<(Entity, &VBusPu)>()
+        .iter(app.world())
+        .map(|(e, v)| (e, v.0))
+        .collect();
+    expected.sort_by_key(|(e, _)| *e);
+    let world = app.world_mut();
+    for (old, label) in [(0, 1_000_000_000_000), (1, 42), (2, 10)] {
+        let entity = world.resource::<NodeLookup>().get_entity(old).unwrap();
+        world.get_mut::<BusID>(entity).unwrap().0 = label;
+    }
+    world.run_system_once(init_states).unwrap();
+    world.run_system_once(apply_permutation).unwrap();
+    app.update();
+    assert!(app.world().resource::<PowerFlowResult>().converged);
+    for (e, v) in expected {
+        assert!((app.world().get::<VBusPu>(e).unwrap().0 - v).norm() < 1e-9);
+    }
+    assert_eq!(app.world().resource::<PowerFlowMat>().y_bus.nrows(), 3);
+    app.add_plugins(DcpfNewtonPfPlugin);
+    app.update();
+    assert!(app.world().resource::<PowerFlowResult>().converged);
+}
+
+#[test]
+fn warm_numeric_edits_do_not_rebuild_entity_or_index_caches() {
+    let mut app = three_bus();
+    app.update();
+    let revision = app.world().resource::<NodeLookup>().revision;
+    let bus = app.world().resource::<NodeLookup>().get_entity(0).unwrap();
+    for dp in [-1.0, 1.0, -1.0] {
+        app.world_mut().write_message(ParamDiff::InjectionEntity {
+            bus,
+            dp_mw: dp,
+            dq_mvar: 0.0,
+        });
+        app.update();
+        assert!(app.world().resource::<PowerFlowResult>().converged);
+        assert_eq!(app.world().resource::<NodeLookup>().revision, revision);
+        assert_eq!(app.world().get::<BusMatrixIndex>(bus).unwrap().0, 0);
+    }
 }

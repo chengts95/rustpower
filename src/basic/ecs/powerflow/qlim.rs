@@ -3,12 +3,9 @@ use bevy_ecs::{prelude::*, system::SystemParam};
 use nalgebra::DVector;
 
 use crate::{
-    basic::{
-        ecs::{
-            elements::*,
-            powerflow::init::{PQBus, PVBus, SlackBus},
-        },
-        sparse::cast::Cast,
+    basic::ecs::{
+        elements::*,
+        powerflow::init::{PQBus, PVBus, SlackBus},
     },
     prelude::ecs::network::SolverStage::*,
 };
@@ -32,10 +29,11 @@ pub struct QLimEnv<'w, 's> {
     generators: Query<
         'w,
         's,
-        (&'static TargetBus, Option<&'static PQLim>),
+        (&'static TargetBusMatrixIndex, Option<&'static PQLim>),
         (With<TargetPMW>, With<TargetVmPu>, Without<OutOfService>),
     >,
-    pf_bus: Query<'w, 's, &'static SBusInjPu, (With<PVBus>, Without<SlackBus>)>,
+    pf_bus: Query<'w, 's, (&'static BusMatrixIndex, &'static SBusInjPu)>,
+    roles: Query<'w, 's, (Option<&'static PVBus>, Option<&'static SlackBus>)>,
 }
 
 /// Solver constraint state; the device injection remains unchanged.
@@ -88,6 +86,7 @@ fn modify_qlim_system(
         cached_result,
         generators,
         pf_bus,
+        roles,
     } = env;
 
     if !res.converged {
@@ -114,33 +113,38 @@ fn modify_qlim_system(
         }
     }
 
-    let sbus_res = match &node_agg {
-        Some(node_agg) => &node_agg.expand_mat.cast() * &sbus_res,
-        None => sbus_res,
-    };
-    limits.resize(sbus_res.len(), None);
+    // Constraints belong to the electrical node, so combine all generators
+    // and fixed injections in each ideal-switch group before checking Q.
+    let merged_index = |i: usize| node_agg.as_ref().map_or(i, |a| a.original_to_merged[i]);
+    limits.resize(n, None);
     limits.fill(None);
     for (bus, lim) in &generators {
-        let Some(entry) = limits.get_mut(bus.0 as usize) else {
-            continue;
-        };
+        let entry = &mut limits[merged_index(bus.0)];
         let (min, max) = lim.map_or((f64::NEG_INFINITY, f64::INFINITY), |l| (l.q.min, l.q.max));
         let total = entry.get_or_insert(BusQLimits { min: 0.0, max: 0.0 });
         total.min += min;
         total.max += max;
+    }
+    let mut injections = vec![0.0; n];
+    for (index, s) in &pf_bus {
+        injections[merged_index(index.0)] += s.0.im;
     }
     let mut structure_change = false;
     for (bus, limit) in limits.iter().enumerate() {
         let Some(limit) = limit else {
             continue;
         };
-        let Some(entity) = buses.get_entity(bus as i64) else {
+        let original = node_agg.as_ref().map_or(bus, |a| a.representatives[bus]);
+        let Some(entity) = buses.get_by_index(original) else {
             continue;
         };
-        let Ok(injection) = pf_bus.get(entity) else {
+        let Ok((pv, slack)) = roles.get(entity) else {
             continue;
         };
-        let q_mvar = (sbus_res[bus].im - injection.0.im) * common.sbase;
+        if pv.is_none() || slack.is_some() {
+            continue;
+        }
+        let q_mvar = (sbus_res[bus].im - injections[bus]) * common.sbase;
         let bound = if q_mvar < limit.min {
             Some(limit.min)
         } else if q_mvar > limit.max {
@@ -150,6 +154,15 @@ fn modify_qlim_system(
         };
         if let Some(q_mvar) = bound {
             // Keep the clamp separate so injection updates do not count it twice.
+            if let Some(a) = &node_agg {
+                for (i, &group) in a.original_to_merged.iter().enumerate() {
+                    if group == bus {
+                        cmd.entity(buses.get_by_index(i).unwrap())
+                            .remove::<PVBus>()
+                            .insert(PQBus);
+                    }
+                }
+            }
             cmd.entity(entity).remove::<PVBus>().insert((
                 PQBus,
                 QLimited {
