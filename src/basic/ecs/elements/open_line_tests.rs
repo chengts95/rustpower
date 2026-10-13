@@ -282,3 +282,38 @@ fn startup_prepares_switches_after_line_setup_before_assembly() {
     solve(&mut app);
     assert_eq!(app.world().resource::<OriginalYBus>().0, expected);
 }
+
+#[test]
+fn deleting_bus_disables_connected_lines_and_their_switches() {
+    let (mut app, line, from, to, load) = fixture(true);
+    solve(&mut app);
+    let w = app.world_mut();
+    let bus = w.resource::<NodeLookup>().get_entity(20).unwrap();
+    let removed = std::collections::HashSet::from([bus]);
+    let disabled = topology::connected_elements_for_removal(w, &removed);
+    assert!(disabled.contains(&line));
+    assert!(disabled.contains(&from)); // Switch on the surviving end of this line.
+    assert!(disabled.contains(&to));
+    assert!(disabled.contains(&load));
+    topology::validate_topology_with_disabled(w, &removed, &disabled).unwrap();
+    for e in disabled {
+        w.entity_mut(e).insert(OutOfService);
+    }
+    w.despawn(bus);
+    w.write_message(FullRebuildEvent);
+    solve(&mut app);
+    assert!(app.world().get::<LineParams>(line).is_some());
+    assert!(app.world().get::<FromBusMatrixIndex>(line).is_none());
+    assert_eq!(
+        app.world().get::<LineResultData>(line).unwrap().i_from_ka,
+        0.0
+    );
+    assert!(app.world().get::<Switch>(from).is_some());
+    assert!(topology::validate_activation(app.world_mut(), line).is_err());
+    solve(&mut app);
+    assert!(
+        !app.world()
+            .resource::<crate::basic::ecs::powerflow::structure_update::LastStructureAction>()
+            .full_rebuild
+    );
+}

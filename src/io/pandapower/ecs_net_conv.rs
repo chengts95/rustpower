@@ -22,16 +22,16 @@ pub fn pandapower_bus_mapping(net: &Network) -> Result<HashMap<i64, i64>, String
             .map(|_| ())
             .ok_or_else(|| format!("{field} references missing pandapower bus {id}"))
     };
-    for line in net.line.iter().flatten() {
+    for line in net.line.iter().flatten().filter(|e| e.in_service) {
         check(line.from_bus, "line.from_bus")?;
         check(line.to_bus, "line.to_bus")?;
     }
-    for trafo in net.trafo.iter().flatten() {
+    for trafo in net.trafo.iter().flatten().filter(|e| e.in_service) {
         check(trafo.hv_bus, "trafo.hv_bus")?;
         check(trafo.lv_bus, "trafo.lv_bus")?;
     }
     macro_rules! check_targets {
-        ($($field:ident),*) => { $(for element in net.$field.iter().flatten() {
+        ($($field:ident),*) => { $(for element in net.$field.iter().flatten().filter(|e| e.in_service) {
             check(element.bus, concat!(stringify!($field), ".bus"))?;
         })* };
     }
@@ -41,6 +41,25 @@ pub fn pandapower_bus_mapping(net: &Network) -> Result<HashMap<i64, i64>, String
         if matches!(switch.et, SwitchType::SwitchTwoBuses) {
             check(switch.element, "switch.element (bus-bus)")?;
         }
+    }
+    let mut references = Vec::new();
+    for line in net.line.iter().flatten() {
+        references.extend([line.from_bus, line.to_bus]);
+    }
+    for trafo in net.trafo.iter().flatten() {
+        references.extend([trafo.hv_bus, trafo.lv_bus]);
+    }
+    macro_rules! collect_targets {
+        ($($field:ident),*) => { $(for element in net.$field.iter().flatten() { references.push(element.bus); })* };
+    }
+    collect_targets!(load, r#gen, ext_grid, shunt, sgen);
+    let mut missing = -2; // -1 remains reserved for ground.
+    for label in references {
+        ids.entry(label).or_insert_with(|| {
+            let id = missing;
+            missing -= 1;
+            id
+        });
     }
     Ok(ids)
 }
@@ -256,6 +275,7 @@ mod tests {
         }];
         net.load = Some(vec![Load {
             bus: 99,
+            in_service: true,
             ..Default::default()
         }]);
         let mut world = World::new();

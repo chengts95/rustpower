@@ -265,7 +265,8 @@ pub(crate) fn prepare_switches(world: &mut World) {
     prepare_open_lines(world);
     if let Some(model) = world.get_resource::<SwitchModel>().copied() {
         prepare_switch_model(world, model);
-    } else if world.contains_resource::<OpenLinePolicy>() {
+    }
+    if world.contains_resource::<OpenLinePolicy>() {
         let states: Vec<_> = world
             .query::<(Entity, &Switch, &SwitchState, Has<OutOfService>)>()
             .iter(world)

@@ -26,7 +26,7 @@ Public voltage arrays (`v`, `v_init`, `compute_dcpf_v()`) retain dense physical 
 
 ### Bus identifiers during conversion
 
-The importer assigns internal `BusID` values `0..n-1` in bus-table row order and preserves the original `net.bus.index` labels as `PPBusID`. It translates bus references in lines, transformers, loads, generators, external grids, shunts, static generators, and switches. For bus-bus switches, both endpoints are translated; for line/transformer switches, `element` remains the device label. Duplicate bus labels and references to missing buses raise `ValueError` before replacing the existing Python grid.
+The importer assigns internal `BusID` values `0..n-1` in bus-table row order and preserves the original `net.bus.index` labels as `PPBusID`. It translates bus references in lines, transformers, loads, generators, external grids, shunts, static generators, and switches. For bus-bus switches, both endpoints are translated; for line/transformer switches, `element` remains the device label. Duplicate bus labels and active elements referencing missing buses raise `ValueError` before replacing the existing Python grid. Disabled elements may retain missing connections; these get separate negative internal labels during conversion.
 
 Python handles, editor arguments, branch endpoint columns, and `bus_id` use internal IDs. `BusHandle.pp_id` and the `pp_bus_id` bus-table column expose the original pandapower label (absent for native buses). These labels are preserved in case and result snapshots. `BusID` remains stable when buses are removed; gaps are valid. `BusHandle.matrix_index` and the `matrix_index` bus-table column expose the current dense physical matrix offset, which can change on a topology rebuild. To align imported results with pandapower:
 
@@ -38,7 +38,7 @@ This normalization applies to network ingestion, including CSV cases and `load_n
 
 ### Core connectivity and numerical caches
 
-Native callers can obtain a validated connection with `NodeLookup::connection(bus_entity)` and construct reference components directly; preparation generates the label metadata for archives. Runtime connections use world-local Entity references (`FromBusRef`, `ToBusRef`, `TargetBusRef`, and resolved switch bus references). Label components remain the API/archive representation; topology preparation resolves new or deliberately changed labels and preserves established Entity identity. Deleting a bus and reusing its label cannot reconnect an existing reference.
+Native callers can obtain a validated connection with `NodeLookup::connection(bus_entity)` and construct reference components directly; preparation generates the label metadata for archives. Runtime connections use world-local Entity references (`FromBusRef`, `ToBusRef`, `TargetBusRef`, and resolved switch bus references). Label components remain the API/archive representation; topology preparation resolves new or deliberately changed labels and preserves established Entity identity. Deleting a bus and reusing its label cannot reconnect an existing Entity reference. Disabled elements may retain unresolved references, but get no matrix indices until their connections are valid.
 
 The core assigns `BusMatrixIndex` and compact `FromBusMatrixIndex`, `ToBusMatrixIndex`, and `TargetBusMatrixIndex` components during preparation. Matrix assembly, injections, AC/DC state updates, Q limits, and SIMD result extraction use these caches directly. Newton iterations continue to operate on numerical arrays. `NodeLookup` provides label-to-Entity, Entity-to-matrix-index, and matrix-index-to-Entity access at boundaries. Solver permutation is separate from the physical matrix offset.
 
@@ -233,6 +233,17 @@ if solver.solve(max_iter=15, tol=1e-8):
 - `grid.iterations -> int`: Number of iterations taken.
 - `grid.post_process()`: Manually trigger result extraction (normally executed lazily).
 
+#### Optional connection check
+
+`grid.validate() -> list[str]` lists missing or invalid bus/line references, including out-of-service elements. It checks the current grid and changes nothing. An empty list means no reference issues were found; this does not test power-flow convergence or every electrical parameter. Saving does not run this check automatically.
+
+```python
+for problem in grid.validate():
+    print(problem)
+```
+
+Archives store connection labels. After loading, a connection may attach to a replacement bus with the same ID. This can be intentional: reconnecting retained elements to a replacement bus is a valid use case. `validate()` reports missing or invalid references; it cannot decide whether a valid connection is the one you intended. Existing runtime Entity references still keep their original identity.
+
 #### Persistence (Apache Arrow / Parquet)
 - `grid.get_parquet_case() -> bytes`: Export grid topology and parameters to an in-memory ZIP of Parquet files.
 - `grid.get_parquet_results() -> bytes`: Export simulation results to an in-memory ZIP of Parquet files.
@@ -251,7 +262,7 @@ Pandapower line switches (`et="l"`) are honored when a switch model is explicitl
 - `add_ext_grid(bus, vm_pu=1.0, va_degree=0.0, name=None) -> ExtGridHandle`
 - `add_trafo(hv_bus, lv_bus, sn_mva=100.0, vn_hv_kv=110.0, vn_lv_kv=10.0, vk_percent=10.0, vkr_percent=1.0, pfe_kw=0.0, i0_percent=0.0, shift_degree=0.0, tap_pos=0.0, tap_neutral=0.0, tap_step_percent=1.0, tap_min=-10.0, tap_max=10.0, in_service=True, name=None) -> TrafoHandle`
 - `add_shunt(bus, q_mvar=0.0, p_mw=0.0, vn_kv=110.0, step=1, max_step=1, in_service=True, name=None) -> ShuntHandle`
-- `remove(handle)`: Defer deletion until commit. Removing a referenced bus requires removing its connected elements in the same transaction. Foreign-grid and stale handles are rejected; abort preserves queued removals.
+- `remove(handle)`: Defer deletion until commit. Deleting a bus keeps its connected elements and puts them out of service. Reconnect them before enabling them again. Foreign-grid and stale handles are rejected; abort preserves queued removals.
 
 ---
 

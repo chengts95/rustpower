@@ -310,5 +310,5 @@ Python 层    PowerGrid(Facade) ── 元素 Proxy ── GridEditor(UnitOfWork
 ### Phase 1 已知妥协（Phase 2/3 偿还）
 
 - 属性 setter 暂时复用现有"增量 + 事件"实现（网关就位后改为立即命令，删除增量算术）。
-- `GridEditor.remove()` 现在延迟到 commit；abort 保留被删除对象。删除有连接的 bus 时，必须在同一个事务中删除相关元件；跨 grid 的 handle 会被拒绝。
+- `GridEditor.remove()` 现在延迟到 commit；abort 保留被删除对象。删除 bus 时保留连接元件，并将它们设为停运；重新投运前必须连接到有效 bus；跨 grid 的 handle 会被拒绝。
 - `SolveReport.rebuild` 暂只区分 "full" / "incremental"（五级梯子在 Phase 2）。

@@ -328,8 +328,7 @@ impl GridEditor {
         Ok(ShuntHandle::new(entity, self.parent.clone_ref(py)))
     }
 
-    /// Defer element removal until commit. Referenced buses can only be removed
-    /// when their connected elements are removed in the same transaction.
+    /// Delete on commit. Deleting a bus keeps its connected elements out of service.
     fn remove(&mut self, py: Python<'_>, element: Bound<'_, PyAny>) -> PyResult<()> {
         let entity = extract_handle_entity(&element, &self.parent)?;
         let parent = self.parent.borrow(py);
@@ -350,9 +349,14 @@ impl GridEditor {
             buffer.apply(inner.world_mut());
         }
         let excluded: std::collections::HashSet<_> = self.removed.iter().copied().collect();
-        if let Err(error) = crate::basic::ecs::elements::topology::validate_topology(
+        let disabled = crate::basic::ecs::elements::topology::connected_elements_for_removal(
+            parent.inner.world(),
+            &excluded,
+        );
+        if let Err(error) = crate::basic::ecs::elements::topology::validate_topology_with_disabled(
             parent.inner.world_mut(),
             &excluded,
+            &disabled,
         ) {
             for bits in self.created.drain(..) {
                 parent.inner.world_mut().despawn(Entity::from_bits(bits));
@@ -360,6 +364,13 @@ impl GridEditor {
             parent.next_bus_id = self.start_next_bus_id;
             self.removed.clear();
             return Err(pyo3::exceptions::PyValueError::new_err(error));
+        }
+        for entity in disabled {
+            parent
+                .inner
+                .world_mut()
+                .entity_mut(entity)
+                .insert(OutOfService);
         }
         for entity in self.removed.drain(..) {
             parent.inner.world_mut().despawn(entity);
@@ -542,7 +553,7 @@ impl PowerGrid {
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{}", e)))?;
             crate::io::pandapower::ecs_net_conv::pandapower_bus_mapping(&net)
                 .map_err(pyo3::exceptions::PyValueError::new_err)?;
-            grid.validate_network_switches(&net, model)?;
+            grid.validate_network(&net, model)?;
             grid.inner.world_mut().insert_resource(PPNetwork(net));
             grid.init_pf()?;
         } else {
@@ -565,7 +576,7 @@ impl PowerGrid {
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
         let mut grid_py = slf.borrow_mut(py);
         let model = grid_py.resolve_switch_model(switch_model)?;
-        grid_py.validate_network_switches(&rust_net, model)?;
+        grid_py.validate_network(&rust_net, model)?;
         grid_py.enable_switch_model(model);
         // Loading a network replaces the grid: clear any previously spawned
         // entities so buses/branches are not duplicated. Existing handles
@@ -592,7 +603,7 @@ impl PowerGrid {
         crate::io::pandapower::ecs_net_conv::pandapower_bus_mapping(&net)
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
         let model = self.resolve_switch_model(switch_model)?;
-        self.validate_network_switches(&net, model)?;
+        self.validate_network(&net, model)?;
         self.enable_switch_model(model);
         self.clear_grid_entities();
         self.inner.world_mut().insert_resource(PPNetwork(net));
@@ -1222,6 +1233,12 @@ impl PowerGrid {
         self.ensure_post_processed();
     }
 
+    /// List invalid connections, including disabled elements. An empty list
+    /// means no reference issues were found. Does not change the grid.
+    fn validate(&mut self) -> Vec<String> {
+        crate::basic::ecs::elements::topology::validate_references(self.inner.world_mut())
+    }
+
     /// Serialize the case-file ECS state (grid topology, parameters) to an
     /// in-memory ZIP archive of Parquet files.  Returns raw `bytes` that can
     /// be opened with `zipfile.ZipFile(io.BytesIO(data))` or fed to DuckDB
@@ -1378,7 +1395,7 @@ impl PowerGrid {
         Ok(())
     }
 
-    fn validate_network_switches(
+    fn validate_network(
         &self,
         net: &crate::io::pandapower::Network,
         model: Option<switch::SwitchModel>,
@@ -1423,6 +1440,17 @@ impl PowerGrid {
                 }
             }
         }
+        // Resolve the complete candidate graph before changing the live grid.
+        // In particular, a switch can expose a missing endpoint on an offline
+        // line that the table-level bus checks intentionally allow.
+        let mut staged = World::new();
+        crate::io::pandapower::ecs_net_conv::LoadPandapowerNet::try_load_pandapower_net(
+            &mut staged,
+            net,
+        )
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        crate::basic::ecs::elements::topology::prepare_topology(&mut staged)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
         Ok(())
     }
 
@@ -1451,16 +1479,25 @@ impl PowerGrid {
                 &Switch,
                 &SwitchState,
                 Option<&OutOfService>,
-                &SwitchBusRef,
+                Option<&SwitchBusRef>,
                 Option<&SwitchOtherBusRef>,
             )>()
             .iter(world)
-            .map(|(s, state, off, a, b)| (s.clone(), state.0, off.is_some(), a.0, b.map(|b| b.0)))
+            .map(|(s, state, off, a, b)| {
+                (
+                    s.clone(),
+                    state.0,
+                    off.is_some(),
+                    a.map(|a| a.0),
+                    b.map(|b| b.0),
+                )
+            })
             .collect();
         Self::require_switch_model(!switches.is_empty(), model)?;
         for (s, closed, off, a, b) in switches {
             match s.et {
                 SwitchType::SwitchTwoBuses if closed && !off => {
+                    let a = a.unwrap();
                     let b = b.unwrap();
                     Self::validate_switch_impedance(
                         s.z_ohm,
