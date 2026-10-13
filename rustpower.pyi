@@ -150,7 +150,8 @@ class GridEditor:
                   name: Optional[str] = None) -> ShuntHandle: ...
     def remove(self, element: Any) -> None:
         """Defer deletion until commit; abort preserves removals.
-        Connected elements must be removed with their referenced bus.
+        Deleting a bus keeps connected elements out of service.
+        They need valid connections before being enabled again.
         Handles must belong to this grid."""
         ...
     def commit(self) -> None: ...
@@ -244,6 +245,9 @@ class PowerGrid:
     def display_case_loads(self) -> pd.DataFrame: ...
     def post_process(self) -> None:
         """Explicitly run post-processing system to populate result components (usually done lazily)."""
+        ...
+    def validate(self) -> List[str]:
+        """List invalid connections, including disabled elements. Does not change the grid."""
         ...
     def get_parquet_case(self) -> bytes:
         """Serialize case topology/parameters to a ZIP archive of Parquet files (returns raw bytes)."""

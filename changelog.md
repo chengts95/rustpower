@@ -3,34 +3,34 @@
 ## [0.5.3] - Unreleased
 
 ### Changed
-- Require explicit Python `switch_model="merge"` (Type A) or `"admittance"` (Type B) for networks with switches; reuse configured selections for conversion and archive loading, reject unsupported switch types, and keep public voltage/DC arrays in physical bus order.
-- Move open-line behavior out of normal line setup into optional `LineSwitchPlugin`, before core Ybus assembly. Resolve switch-to-line Entity references, cache terminal state only on affected lines, support charging-preserving and whole-branch disabling policies, and reconstruct open line-side voltages in post-processing. Python requires an explicit switch model; native Type A/B include the line plugin.
-- Separate bus labels from dense matrix offsets. Resolve runtime connectivity to world-local Entity references and cache native `usize` indices on bus/element components; retain global lookup and label-based archives. Expose `matrix_index` for Python numerical arrays.
-- Store bus zones as string labels in Rust and Python. `GridEditor.add_bus()` now accepts `zone=""`; `BusHandle.zone` exposes the label.
-- Use V4 Jacobian assembly in Newton–Raphson and Iwamoto solvers. Derive quadrant starts from column pointers and segment lengths instead of storing four additional lookup tables.
-- For Rust callers accessing `NewtonCache` directly, `j_pattern` now holds `JacobianCache`; use `j_row_indices.len()` for the nonzero count.
-- Reduce symbolic searches using the sorted PQ/PV/slack row ranges; retain earlier assembly implementations for ablation tests.
-- Enable ECS Newton caching by default. Preserve the cache policy across rebuilds and add `PowerGrid.clear_cache()` for explicit invalidation.
-- Share message-driven input preparation between AC solves and standalone DC calls. Reuse the physical Ybus when bus types change, while rebuilding the permutation, Jacobian structure and affected solver caches.
-- Reuse registered post-processing systems and their local buffers across calls.
+
+- Python networks with switches need `switch_model="merge"` (Type A) or `"admittance"` (Type B). The grid remembers your choice. Unsupported switch types raise an error.
+- Add optional `LineSwitchPlugin` for open line switches. Both Type A and Type B include it.
+- Use Entity references for connections and cached `usize` indices for matrix access. Bus IDs stay separate from matrix indices.
+- Store bus zones as strings in Rust and Python.
+- Add `grid.validate()` to list invalid connections, including disabled elements. Run it when you want to check; saving stays unchanged. Reconnecting to a replacement bus after loading may be intentional.
+- **Removal API change:** `remove()` queues a deletion. When the edit is committed, the bus is deleted and its connected elements are kept but marked out of service. Until then, nothing is deleted or disabled. Canceling the edit cancels both changes. Reconnect those elements before enabling them again.
+- Use V4 Jacobian assembly with fewer lookup tables and searches.
+- Enable Newton caching by default. Use `PowerGrid.clear_cache()` to clear it.
+- **Rust API change:** `NewtonCache.j_pattern` now uses `JacobianCache`. Use `j_row_indices.len()` for the nonzero count.
 
 ### Fixed
-- Repair native bus-bus switch plugins across startup and later rebuilds: resolve transitive merges, use deterministic Slack/PV/PQ priority, aggregate warm injections and Q limits, map DC phase shifts, and publish voltages/branch results for all original buses. Clear finite-switch stamps when opened and use inverse impedance. Prepare dense mappings and reduce Ybus directly outside the Newton loop.
-- Support gaps in native bus IDs after editing; reject stale/foreign references and invalid topology commits. Defer removals until commit and preserve them on abort. Refresh bus-scale caches on same-size replacement and recreate archived branch result buffers. Handle scalar DC systems without rsparse AMD underflow.
-- Normalize imported pandapower bus labels to contiguous internal IDs and translate all supported bus references (#15). Preserve original labels as `PPBusID`, `BusHandle.pp_id`, and `pp_bus_id` in bus tables and snapshots; reject duplicate or missing bus references before Python grid replacement.
-- Honor open pandapower line switches at either terminal, preserving charging at the connected end. Preserve line table labels for switch targets and serialize switch types as text in Parquet snapshots (#14).
-- Accept string, numeric, and missing pandapower bus zones, including CIGRE network labels (#13). Preserve numeric zones as text when loading JSON/CSV cases.
-- Honor `qlim=True` in `PowerGrid.from_pandapower()`. Aggregate Q limits across in-service generators sharing a bus and exclude slack buses from PV-to-PQ switching.
-- Keep clamped generator Q separate from device injections so subsequent input updates do not count it twice. Limited buses remain PQ across parameter updates; explicit `init_pf()` restores bus classifications from the model.
-- Continue Q-limit outer iterations from the previous AC voltage without repeating DC initialization or input hooks. Publish voltages after the outer loop finishes, and return a failed solve result instead of panicking on nonconvergence.
-- Consume pending input changes exactly once across AC/DC entry points, refresh DC caches when their dependencies change, and retain explicitly applied initial voltages.
-- Use cached Newton results in post-processing only when the current solve produced them.
-- Apply the solver permutation when transferring time-series voltages to the next step; retain the previous initial voltage after a failed or nonfinite result.
 
-### Experimental and validation
-- Add an internal Jacobian block operator for CSC/CSR and transposed layouts, plus a trusted-input CSR-to-CSC permutation helper with explicit safety requirements. The checked conversion remains the default.
-- Add `experimental_fused_scalc` for a shared Ybus traversal during calculated-power and Jacobian assembly; disabled by default.
-- Add regression coverage for symbolic ranges, sparse permutation, Jacobian layouts, cache invalidation, AC/DC preparation, Q-limit continuation and time-series voltage ordering. Keep timing benchmarks separate from routine tests.
+- Fix pandapower bus IDs that have gaps or do not start at zero (#15). Keep the original IDs as `PPBusID`.
+- Handle open line switches at either end. Keep charging at the connected end (#14).
+- Accept text, numbers, and missing values in pandapower bus zones (#13).
+- Fix bus-bus switch merging, finite switch impedance, and switch updates. Return results for every original bus.
+- Reject invalid connections only for elements that are in service.
+- Check network connections before replacing the current grid. A failed check keeps the old grid and its handles.
+- Fix bus and branch state after grid replacement or archive loading. Fix DC solves with one unknown.
+- Honor `qlim=True`. Combine generator Q limits at each bus, avoid counting clamped Q twice, and keep limited buses as PQ until `init_pf()`.
+- Fix AC/DC cache updates and voltage starts. Q-limit retries keep the previous voltage; failed solves return failure without panicking.
+- Fix stale results and voltage ordering in time-series runs.
+
+### Experimental
+
+- Add `experimental_fused_scalc` to calculate power and the Jacobian in one Ybus pass. Off by default.
+- Add sparse matrix helpers and regression tests for bus IDs, switches, caches, Q limits, and AC/DC solves.
 
 ## [0.5.2] - Fix and Improvement 
 - Fix many pandapower model processing bugs, now is accurate in most network cases.
