@@ -49,7 +49,8 @@ pub fn clear_node_type_tags(
     q: Query<Entity, Or<(With<PQBus>, With<PVBus>, With<SlackBus>)>>,
 ) {
     for e in &q {
-        cmd.entity(e).remove::<(PQBus, PVBus, SlackBus)>();
+        cmd.entity(e)
+            .remove::<(PQBus, PVBus, SlackBus, super::qlim::QLimited)>();
     }
 }
 

@@ -216,13 +216,18 @@ impl NewtonSolver {
     ) -> PyResult<()> {
         let buses = extract_indices(bus_indices)?;
         with_complex_slice(v_values, |values| {
-            self.inner.update_v_init_batch(&buses, values).map_err(to_py_err)
+            self.inner
+                .update_v_init_batch(&buses, values)
+                .map_err(to_py_err)
         })
     }
 
     /// Initial voltage vector in original bus order.
     #[getter]
-    fn v_init<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
+    fn v_init<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
         let v = self.inner.v_init().map_err(to_py_err)?;
         Ok(v.into_pyarray(py))
     }
@@ -253,13 +258,18 @@ impl NewtonSolver {
     ) -> PyResult<()> {
         let buses = extract_indices(bus_indices)?;
         with_complex_slice(s_values, |values| {
-            self.inner.update_s_bus_batch(&buses, values).map_err(to_py_err)
+            self.inner
+                .update_s_bus_batch(&buses, values)
+                .map_err(to_py_err)
         })
     }
 
     /// Bus power injection vector Sbus in original bus order.
     #[getter]
-    fn s_bus<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
+    fn s_bus<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
         let s = self.inner.s_bus().map_err(to_py_err)?;
         Ok(s.into_pyarray(py))
     }
@@ -336,11 +346,7 @@ impl NewtonSolver {
     /// - `.residual_norm` (float, maximum power mismatch ||F||_inf)
     /// - `.iterations` (int)
     #[pyo3(signature = (max_iter=10, tol=1e-6))]
-    fn solve(
-        &mut self,
-        max_iter: usize,
-        tol: f64,
-    ) -> PyResult<bool> {
+    fn solve(&mut self, max_iter: usize, tol: f64) -> PyResult<bool> {
         let (converged, _residual) = self.inner.solve(max_iter, tol).map_err(to_py_err)?;
         Ok(converged)
     }
@@ -378,13 +384,19 @@ impl NewtonSolver {
     // ========================================================================
 
     /// Get the final complex bus voltages in original order.
-    fn get_voltage<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
+    fn get_voltage<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
         let v = self.inner.voltage().map_err(to_py_err)?;
         Ok(v.into_pyarray(py))
     }
 
     /// Get the final voltage magnitudes (p.u.) in original bus order.
-    fn get_voltage_magnitude<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+    fn get_voltage_magnitude<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
         let vm = self.inner.vm().map_err(to_py_err)?;
         Ok(vm.into_pyarray(py))
     }
@@ -397,7 +409,11 @@ impl NewtonSolver {
 
     /// Get the final voltage angles in original bus order.
     #[pyo3(signature = (deg=false))]
-    fn get_voltage_angle<'py>(&self, py: Python<'py>, deg: bool) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+    fn get_voltage_angle<'py>(
+        &self,
+        py: Python<'py>,
+        deg: bool,
+    ) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
         let va = self.inner.va(deg).map_err(to_py_err)?;
         Ok(va.into_pyarray(py))
     }
@@ -415,14 +431,20 @@ impl NewtonSolver {
     }
 
     /// Get the calculated bus power injection vector (S_calc = V * (Ybus * V)^*) in original bus order.
-    fn get_scalc<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
+    fn get_scalc<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
         let s = self.inner.scalc().map_err(to_py_err)?;
         Ok(s.into_pyarray(py))
     }
 
     /// Calculated complex bus power injections S_calc in original bus order.
     #[getter(scalc)]
-    fn py_scalc<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
+    fn py_scalc<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, numpy::PyArray1<num_complex::Complex64>>> {
         self.get_scalc(py)
     }
 

@@ -2,7 +2,7 @@
 [![Crates.io](https://img.shields.io/crates/v/rustpower.svg)](https://crates.io/crates/rustpower)
 [![Docs.rs](https://docs.rs/rustpower/badge.svg)](https://docs.rs/rustpower)
 [![CI](https://github.com/chengts95/rustpower/actions/workflows/rust.yml/badge.svg)](https://github.com/chengts95/rustpower/actions)
-RustPower is an ECS-based power flow calculation library written in Rust, specifically designed for high-performance steady-state analysis of electrical power systems. It provides a transactional Python binding and direct solver interfaces for Python libraries such as pandapower.
+RustPower is an ECS-based power flow calculation library designed primarily for native Rust applications and high-performance steady-state analysis of electrical power systems. Its Python bindings provide a transactional grid API and a numerical solver interface for seamless replacement of the Newton-Raphson solver using pandapower's `ppc`/`ppci` matrices and vectors.
 
 ## **Key Features**
 - **High-Performance Newton-Raphson Engine**: Optimized single-pass $O(\text{nnz})$ `dSbus_dV` evaluation and branch-free symbolic Jacobian filling (`fill_jacobian_ultimate`).
@@ -11,9 +11,21 @@ RustPower is an ECS-based power flow calculation library written in Rust, specif
 - **Standard 2-Port Branch Modeling**: Rigorous $\Pi$-equivalent model for lines and transformers with complex tap ratios and phase shifts.
 - **Stateful Jacobian & Solver Caching (`NewtonCache`)**: Reuses symbolic LU factorization and sparsity patterns across consecutive iterations.
 - **Modular ECS Architecture**: Built on Bevy ECS for data-oriented composability, custom plugins, and zero heap allocation during hot iteration loops.
-- **Seamless Pandapower Interoperability**: Direct zero-copy data ingestion from `pandapower` networks in Python, plus CSV-ZIP and JSON formats.
+- **Seamless Pandapower Solver Integration**: Use the Python `NewtonSolver` interface to replace the numerical Newton-Raphson solve using matrices and vectors prepared by pandapower through `ppc`/`ppci`. Pandapower retains model preparation and the surrounding workflow.
+- **Zero-Copy NumPy Interface & Zero-Allocation Result Extraction**: The Python interface accesses contiguous `complex128` input buffers directly and writes results into pre-allocated NumPy output arrays with `extract_results()`, avoiding intermediate array copies at this interface. The solver still allocates and owns its internal matrices, vectors, and workspaces.
+- **Basic Network Data Conversion**: Import supported basic elements from live pandapower networks, CSV-ZIP files, and JSON into RustPower's native ECS model.
 - **Multiple High-Performance Solvers**: Supports RSparse, Faer, and SuiteSparse KLU backends.
 - **Apache Arrow & Parquet Archiving**: High-performance state persistence powered by `bevy_archive 0.5.0`.
+
+### Pandapower Integration Scope
+
+The Python solver interface and the network importer serve different purposes. `NewtonSolver` operates on externally prepared numerical data, allowing pandapower workflows to use RustPower for the numerical solve. See the [solver integration report](docs/pandapower_integration_report.md) for this interface and its benchmarks.
+
+Rust array indexing and this solver's sparse matrix indices use `usize`, a pointer-sized unsigned integer (64 bits on 64-bit platforms). NumPy/SciPy commonly supply signed `int32` or `int64` indices, so setup converts those index arrays into owned `usize` buffers. The zero-copy interface claim applies to compatible numerical buffers, not these integer index arrays.
+
+For repeated solves, reuse the solver context and NumPy output arrays. `extract_results()` provides direct, zero-allocation output into caller-owned buffers after a solve, including voltages and cached power injections. These claims describe array access and result extraction at the Python interface, not an allocation-free solver. Context setup converts and copies data into solver-owned storage, and internal workspaces are allocated as needed.
+
+`PowerGrid.from_pandapower()` converts supported basic network elements into RustPower's own ECS model. Its AC power-flow results have been validated against pandapower on selected IEEE benchmark systems. This conversion does not provide full compatibility with every pandapower element model, parameter, option, controller, or analysis feature. Networks with switches require an explicit `switch_model="merge"` (Type A) or `"admittance"` (Type B); no model is chosen automatically. RustPower's primary focus is native Rust modeling and simulation; see the [Python API guide](docs/python_api.md#pandapower-integration-scope) for the distinction and current switch limitations.
 
 ---
 
@@ -47,7 +59,7 @@ RustPower achieves native C++-grade performance with sub-millisecond execution o
 
 * **Low Memory Footprint**: For the 9,241-bus PEGASE system, RustPower peaks at only ~34 MB of RAM (a **15× reduction** compared to the 500+ MB footprint of pandapower frameworks). This allows thousands of parallel grid simulations (e.g., N-1 screening, Monte Carlo, RL environments) to run concurrently on standard hardware or resource-constrained cloud containers without thrashing memory bandwidth.
 * **Memory Safety & Zero Allocation**: Leveraging Rust's compile-time ownership guarantees, RustPower eliminates segmentation faults, data races, and memory leaks by design. Combined with our ECS architecture, the core power flow iteration loop operates with zero heap allocations.
-* **Seamless Ecosystem Interoperability**: Delivers pure-native performance while remaining drop-in compatible with established Python workflows. It provides zero-cost data ingestion directly from standard formats like `pandapower`, eliminating migration friction for existing pipelines.
+* **Seamless Numerical Solver Replacement & Direct Array I/O**: The Python `NewtonSolver` interface lets existing pandapower workflows replace the numerical Newton-Raphson stage using `ppc`/`ppci` data while retaining pandapower's model conversion and workflow control. Zero-copy access to compatible NumPy buffers and zero-allocation extraction into pre-allocated arrays avoid intermediate array creation in the result transfer path. Importing a network into RustPower's ECS model is a separate path with a defined subset of supported elements and parameters.
 
 ---
 
@@ -57,7 +69,7 @@ RustPower leverages the **Bevy Plugin System**, allowing users to extend the sol
 - **`DcpfNewtonPfPlugin`**: Solves DC power flow to initialize bus voltage angles prior to AC power flow.
 - **`IwamotoPlugin`**: Implements Iwamoto's optimal step-size multiplier method for robust convergence under extreme load conditions.
 - **`QLimPlugin`**: Automatically enforces generator reactive power limits by dynamically switching PV buses to PQ during the iteration process.
-- **`SwitchPluginTypeA` / `SwitchPluginTypeB`**: Optional modeling for switch elements (node-merging or admittance-based).
+- **`SwitchPluginTypeA` / `SwitchPluginTypeB`**: Optional bus-bus switch modeling (exact node merging or admittance approximation). Both include **`LineSwitchPlugin`**, which also works independently for line-terminal switching.
 - **`TimeSeriesDefaultPlugins`**: Quasi-static time-series simulations with scheduled events.
 - **`ArchivePlugin`**: High-performance ECS state persistence system.
 
@@ -106,7 +118,7 @@ grid = rp.PowerGrid.from_pandapower(net)
 # Or: grid = rp.PowerGrid("cases/IEEE118/data.zip")
 
 # 2. Configure solver options (optional)
-grid.enable_cache(True)       # Enable Jacobian / LU factorization caching
+grid.enable_cache(True)       # Already enabled by default; reuses symbolic caches
 grid.enable_dcpf_init(True)   # Enable DCPF angle initialization for faster convergence
 # grid.enable_iwamoto(True)   # Use Iwamoto optimal multiplier for ill-conditioned cases
 
@@ -230,4 +242,3 @@ Special thanks to:
 [T. Cheng, T. Duan, and V. Dinavahi, "ECS-Grid: Data-Oriented Real-Time Simulation Platform for Cyber-Physical Power Systems," IEEE Transactions on Industrial Informatics, vol. 19, no. 11, pp. 11128-11138, 2023.](https://era.library.ualberta.ca/items/5e45c2ff-9b92-41c7-b685-020110b77239)
 
 Although ECS-Grid is a more complex electromagnetic transient (EMT) simulation system, its design philosophy and methodologies greatly influenced the development of this steady-state power flow solver.
-

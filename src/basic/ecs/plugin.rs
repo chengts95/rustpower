@@ -3,7 +3,7 @@ use bevy_ecs::prelude::*;
 
 use crate::io::pandapower::ecs_net_conv::pandapower_init_system;
 
-use super::{elements::*, network::*, powerflow::prelude::*};
+use super::{network::*, powerflow::prelude::*};
 
 #[derive(Debug, SystemSet, Hash, Eq, PartialEq, Clone)]
 pub struct BeforePFInitStage;
@@ -33,10 +33,38 @@ pub struct SwitchPluginTypeA;
 /// Plugin for initializing switch handling using Type B logic.
 ///
 /// SwitchPluginTypeB does not involve node merging and instead focuses on directly processing
-/// switch admittance without the need for complex aggregation operations. This is used when
-/// performance optimization is required, as node merging and matrix operations are not necessary.
+/// switch admittance. Ideal switches are approximated with high conductance;
+/// this can worsen numerical conditioning compared with exact merging.
 #[derive(Default)]
 pub struct SwitchPluginTypeB;
+
+/// Optional line-terminal switching. Defaults to preserving open-end charging.
+#[derive(Default)]
+pub struct LineSwitchPlugin;
+impl Plugin for LineSwitchPlugin {
+    fn build(&self, app: &mut App) {
+        use super::powerflow::{
+            prepare::PFPrepare, result_extract::VBusUpdatePlugin,
+            structure_update::StructureUpdatePlugin,
+        };
+        if !app.is_plugin_added::<StructureUpdatePlugin>() {
+            app.add_plugins(StructureUpdatePlugin);
+        }
+        if !app.is_plugin_added::<VBusUpdatePlugin>() {
+            app.add_plugins(VBusUpdatePlugin);
+        }
+        app.init_resource::<super::elements::switch::OpenLinePolicy>();
+        app.add_systems(
+            PFPrepare,
+            super::elements::switch::detect_switch_changes
+                .before(super::powerflow::structure_update::structure_update),
+        );
+        if app.world().contains_resource::<PowerFlowMat>() {
+            app.world_mut()
+                .write_message(super::powerflow::structure_update::FullRebuildEvent);
+        }
+    }
+}
 
 /// System set for the default solver system.
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
@@ -61,15 +89,25 @@ impl Plugin for BasePFPlugin {
             tol: None,
         });
         app.world_mut().insert_resource(PowerFlowSolver::default());
+        app.init_resource::<super::powerflow::prepare::SolverCachePolicy>();
+        app.init_resource::<super::powerflow::prepare::SolvePass>();
+        app.add_systems(First, super::powerflow::prepare::begin_solve);
         app.configure_sets(
             Update,
             (
-                SolverStage::BeforeSolve,
+                SolverStage::BeforeSolve
+                    .run_if(|pass: Res<super::powerflow::prepare::SolvePass>| !pass.continuation),
                 SolverStage::Solve,
                 SolverStage::AfterSolve,
             )
                 .into_configs()
                 .chain(),
+        );
+        app.add_systems(
+            Update,
+            super::powerflow::prepare::ensure_newton_cache
+                .in_set(SolverStage::Solve)
+                .before(PowerFlowSolverSet),
         );
         app.add_systems(
             Update,
@@ -81,42 +119,38 @@ impl Plugin for BasePFPlugin {
     }
 }
 
-impl Plugin for SwitchPluginTypeA {
-    /// Builds the plugin for handling switches using Type A logic.
-    ///
-    /// Sets up the systems for processing switch states, aggregating nodes, and handling node merges.
-    /// This plugin is suitable for scenarios where node merging and matrix operations are necessary.
-    fn build(&self, app: &mut bevy_app::App) {
-        app.add_systems(
-            Startup,
-            (process_switch_state)
-                .chain()
-                .before(init_states)
-                .in_set(PFInitStage),
-        );
-        app.add_systems(
-            Startup,
-            (node_aggregation_system.pipe(handle_node_merge))
-                .chain()
-                .after(init_states)
-                .before(apply_permutation)
-                .in_set(AfterPFInitStage),
-        );
+fn install_switch_model(app: &mut App, model: super::elements::switch::SwitchModel) {
+    use super::powerflow::{
+        result_extract::VBusUpdatePlugin, structure_update::StructureUpdatePlugin,
+    };
+    assert!(
+        !app.world()
+            .contains_resource::<super::elements::switch::SwitchModel>(),
+        "choose one switch plugin"
+    );
+    if !app.is_plugin_added::<StructureUpdatePlugin>() {
+        app.add_plugins(StructureUpdatePlugin);
+    }
+    if !app.is_plugin_added::<VBusUpdatePlugin>() {
+        app.add_plugins(VBusUpdatePlugin);
+    }
+    app.insert_resource(model);
+    if !app.is_plugin_added::<LineSwitchPlugin>() {
+        app.add_plugins(LineSwitchPlugin);
+    }
+    if app.world().contains_resource::<PowerFlowMat>() {
+        app.world_mut()
+            .write_message(super::powerflow::structure_update::FullRebuildEvent);
     }
 }
-
+impl Plugin for SwitchPluginTypeA {
+    fn build(&self, app: &mut App) {
+        install_switch_model(app, super::elements::switch::SwitchModel::Merge);
+    }
+}
 impl Plugin for SwitchPluginTypeB {
-    /// Builds the plugin for handling switches using Type B logic.
-    ///
-    /// Sets up the systems for processing switch states without node aggregation. This approach is more
-    /// performant for networks where node merging is not necessary, as it avoids complex matrix operations.
-    fn build(&self, app: &mut bevy_app::App) {
-        app.add_systems(
-            Startup,
-            (process_switch_state_admit)
-                .before(init_states)
-                .in_set(PFInitStage),
-        );
+    fn build(&self, app: &mut App) {
+        install_switch_model(app, super::elements::switch::SwitchModel::Admittance);
     }
 }
 
@@ -230,6 +264,7 @@ mod test {
         pf_net.add_plugins(SwitchPluginTypeA);
         pf_net.world_mut().insert_resource(PPNetwork(net));
         pf_net.update();
+        assert!(pf_net.world().resource::<PowerFlowResult>().converged);
 
         pf_net.post_process();
         pf_net.print_res_bus();
@@ -256,6 +291,7 @@ mod test {
         pf_net.add_plugins(SwitchPluginTypeB);
         pf_net.world_mut().insert_resource(PPNetwork(net));
         pf_net.update();
+        assert!(pf_net.world().resource::<PowerFlowResult>().converged);
 
         pf_net.post_process();
     }

@@ -6,6 +6,7 @@ pub mod load;
 pub mod sgen;
 pub mod shunt;
 pub mod switch;
+pub mod topology;
 pub mod trans;
 pub mod units;
 use crate::io::pandapower;
@@ -74,12 +75,56 @@ pub struct PPNetwork(pub pandapower::Network);
 /// Resource that maps node indices (i64) to ECS entities.
 ///
 /// `NodeLookup` helps in quickly finding the ECS entity corresponding to a node in the power flow network.
-#[derive(Default, Debug, Resource, Clone)]
+#[derive(Debug, Resource, Clone)]
 pub struct NodeLookup {
-    /// bus_id → entity 映射
-    pub forward: Vec<Option<Entity>>,
-    count: usize,
+    pub forward: std::collections::HashMap<i64, Entity>,
+    reverse: std::collections::HashMap<Entity, i64>,
+    dense: Vec<Entity>,
+    indices: std::collections::HashMap<Entity, usize>,
+    pub revision: u64,
+    pub(crate) world_id: u64,
 }
+
+/// Physical matrix offset; independent of the API label and solver permutation.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct BusMatrixIndex(pub usize);
+
+/// A resolved reference and its cached physical matrix offset.
+/// Not serialized: archives store labels and resolve references in the new world.
+#[derive(Debug, Clone, Copy)]
+pub struct BusConnection {
+    pub entity: Entity,
+    pub index: usize,
+    pub label: i64,
+    pub(crate) world_id: u64,
+}
+macro_rules! bus_reference {
+    ($($name:ident),*) => { $(
+        #[derive(Component, Debug, Clone, Copy)]
+        pub struct $name(pub BusConnection);
+    )* };
+}
+bus_reference!(
+    FromBusRef,
+    ToBusRef,
+    TargetBusRef,
+    SwitchBusRef,
+    SwitchOtherBusRef
+);
+
+/// Compact numerical caches: hot loops stream usize offsets without Entity payloads.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct FromBusMatrixIndex(pub usize);
+#[derive(Component, Debug, Clone, Copy)]
+pub struct ToBusMatrixIndex(pub usize);
+#[derive(Component, Debug, Clone, Copy)]
+pub struct TargetBusMatrixIndex(pub usize);
+#[derive(Component, Debug, Clone, Copy)]
+pub struct Port2MatrixIndex(pub [Option<usize>; 2]);
+
+/// Ground is explicit in prepared ports, never encoded as a matrix offset.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct Port2Ref(pub [Option<BusConnection>; 2]);
 
 /// Component representing an auxiliary node in the network.
 ///
@@ -117,65 +162,87 @@ pub struct PFCommonData {
     pub sbase: f64, // Base power (typically in MVA).
 }
 
+impl Default for NodeLookup {
+    fn default() -> Self {
+        static NEXT_WORLD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self {
+            forward: Default::default(),
+            reverse: Default::default(),
+            dense: Vec::new(),
+            indices: Default::default(),
+            revision: 0,
+            world_id: NEXT_WORLD.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        }
+    }
+}
+
 impl NodeLookup {
     pub fn len(&self) -> usize {
-        self.count
+        self.dense.len()
     }
     pub fn is_empty(&self) -> bool {
-        self.count == 0
+        self.dense.is_empty()
     }
     pub fn iter(&self) -> impl Iterator<Item = (i64, Entity)> + '_ {
-        self.forward
-            .iter()
-            .enumerate()
-            .filter_map(|(i, v)| v.map(|e| (i as i64, e)))
+        self.dense.iter().map(|&e| (self.reverse[&e], e))
+    }
+    pub fn dense_iter(&self) -> impl Iterator<Item = (usize, Entity)> + '_ {
+        self.dense.iter().copied().enumerate()
+    }
+    pub fn get_by_index(&self, index: usize) -> Option<Entity> {
+        self.dense.get(index).copied()
+    }
+    /// Bind a world-local bus Entity for native construction of connectivity.
+    pub fn connection(&self, entity: Entity) -> Option<BusConnection> {
+        Some(BusConnection {
+            entity,
+            label: self.get_id(entity)?,
+            index: self.matrix_index(entity)?,
+            world_id: self.world_id,
+        })
+    }
+    pub fn matrix_index(&self, entity: Entity) -> Option<usize> {
+        self.indices.get(&entity).copied()
     }
     pub fn insert(&mut self, bus_id: i64, entity: Entity) {
-        let idx = bus_id as usize;
-        if self.forward.len() <= idx {
-            self.forward.resize_with(idx + 1, || None);
+        if let Some(existing) = self.forward.get(&bus_id) {
+            assert_eq!(*existing, entity, "duplicate BusID {bus_id}");
+            return;
         }
-        if self.forward[idx].is_none() {
-            self.count += 1;
-        }
-        self.forward[idx] = Some(entity);
+        assert!(
+            !self.reverse.contains_key(&entity),
+            "entity already has a bus label"
+        );
+        self.forward.insert(bus_id, entity);
+        self.reverse.insert(entity, bus_id);
+        self.indices.insert(entity, self.dense.len());
+        self.dense.push(entity);
     }
     pub fn remove_entity(&mut self, entity: Entity) {
-        for slot in self.forward.iter_mut() {
-            if *slot == Some(entity) {
-                *slot = None;
-                self.count = self.count.saturating_sub(1);
+        if let Some(id) = self.reverse.remove(&entity) {
+            self.forward.remove(&id);
+            self.dense.retain(|&e| e != entity);
+            self.indices.clear();
+            for (i, &e) in self.dense.iter().enumerate() {
+                self.indices.insert(e, i);
             }
         }
     }
-
     pub fn remove_id(&mut self, bus_id: i64) {
-        if let Some(slot) = self.forward.get_mut(bus_id as usize) {
-            if slot.is_some() {
-                *slot = None;
-                self.count = self.count.saturating_sub(1);
-            }
+        if let Some(entity) = self.get_entity(bus_id) {
+            self.remove_entity(entity);
         }
     }
-
     pub fn get_entity(&self, bus_id: i64) -> Option<Entity> {
-        self.forward.get(bus_id as usize).and_then(|x| *x)
+        self.forward.get(&bus_id).copied()
     }
-
     pub fn get_id(&self, entity: Entity) -> Option<i64> {
-        self.forward
-            .iter()
-            .position(|&x| x == Some(entity))
-            .map(|idx| idx as i64)
+        self.reverse.get(&entity).copied()
     }
-
     pub fn contains_id(&self, bus_id: i64) -> bool {
-        self.forward
-            .get(bus_id as usize)
-            .is_some_and(|e| e.is_some())
+        self.forward.contains_key(&bus_id)
     }
-
     pub fn contains_entity(&self, entity: Entity) -> bool {
-        self.forward.iter().any(|&e| e == Some(entity))
+        self.reverse.contains_key(&entity)
     }
 }

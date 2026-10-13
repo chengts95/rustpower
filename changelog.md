@@ -1,4 +1,37 @@
 # Changelog
+
+## [0.5.3] - Unreleased
+
+### Changed
+
+- Python networks with switches need `switch_model="merge"` (Type A) or `"admittance"` (Type B). The grid remembers your choice. Unsupported switch types raise an error.
+- Add optional `LineSwitchPlugin` for open line switches. Both Type A and Type B include it.
+- Use Entity references for connections and cached `usize` indices for matrix access. Bus IDs stay separate from matrix indices.
+- Store bus zones as strings in Rust and Python.
+- Add `grid.validate()` to list invalid connections, including disabled elements. Run it when you want to check; saving stays unchanged. Reconnecting to a replacement bus after loading may be intentional.
+- **Removal API change:** `remove()` queues a deletion. When the edit is committed, the bus is deleted and its connected elements are kept but marked out of service. Until then, nothing is deleted or disabled. Canceling the edit cancels both changes. Reconnect those elements before enabling them again.
+- Use V4 Jacobian assembly with fewer lookup tables and searches.
+- Enable Newton caching by default. Use `PowerGrid.clear_cache()` to clear it.
+- **Rust API change:** `NewtonCache.j_pattern` now uses `JacobianCache`. Use `j_row_indices.len()` for the nonzero count.
+
+### Fixed
+
+- Fix pandapower bus IDs that have gaps or do not start at zero (#15). Keep the original IDs as `PPBusID`.
+- Handle open line switches at either end. Keep charging at the connected end (#14).
+- Accept text, numbers, and missing values in pandapower bus zones (#13).
+- Fix bus-bus switch merging, finite switch impedance, and switch updates. Return results for every original bus.
+- Reject invalid connections only for elements that are in service.
+- Check network connections before replacing the current grid. A failed check keeps the old grid and its handles.
+- Fix bus and branch state after grid replacement or archive loading. Fix DC solves with one unknown.
+- Honor `qlim=True`. Combine generator Q limits at each bus, avoid counting clamped Q twice, and keep limited buses as PQ until `init_pf()`.
+- Fix AC/DC cache updates and voltage starts. Q-limit retries keep the previous voltage; failed solves return failure without panicking.
+- Fix stale results and voltage ordering in time-series runs.
+
+### Experimental
+
+- Add `experimental_fused_scalc` to calculate power and the Jacobian in one Ybus pass. Off by default.
+- Add sparse matrix helpers and regression tests for bus IDs, switches, caches, Q limits, and AC/DC solves.
+
 ## [0.5.2] - Fix and Improvement 
 - Fix many pandapower model processing bugs, now is accurate in most network cases.
 - Add dcpf to solve some types of networks.

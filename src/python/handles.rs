@@ -15,14 +15,22 @@ use crate::basic::ecs::powerflow::mutation;
 /// Toggle the OutOfService marker on an element entity and post a
 /// FullRebuildEvent: in_service changes are Topology-class, consumed by
 /// structure_update at the next solve.
-fn set_entity_in_service(grid_py: &mut PowerGrid, entity: Entity, on: bool) {
+fn set_entity_in_service(grid_py: &mut PowerGrid, entity: Entity, on: bool) -> PyResult<()> {
     let world = grid_py.inner.world_mut();
+    if world.get_entity(entity).is_err() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "element no longer exists",
+        ));
+    }
     if on {
+        crate::basic::ecs::elements::topology::validate_activation(world, entity)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
         world.entity_mut(entity).remove::<OutOfService>();
     } else {
         world.entity_mut(entity).insert(OutOfService);
     }
     let _ = world.write_message(crate::basic::ecs::powerflow::structure_update::FullRebuildEvent);
+    Ok(())
 }
 
 macro_rules! define_handle {
@@ -72,7 +80,7 @@ impl BusHandle {
         format!("BusHandle({})", self.entity)
     }
 
-    /// Bus ID (from the case data).
+    /// Internal bus ID.
     #[getter]
     fn id(&self, py: Python<'_>) -> PyResult<i64> {
         let grid_py = self.grid.borrow(py);
@@ -82,6 +90,51 @@ impl BusHandle {
             .get::<BusID>(self.entity())
             .map(|b| b.0)
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Not a bus entity"))
+    }
+
+    /// Current physical matrix offset, refreshed at topology preparation.
+    #[getter]
+    fn matrix_index(&self, py: Python<'_>) -> Option<usize> {
+        self.grid
+            .borrow(py)
+            .inner
+            .world()
+            .get::<BusMatrixIndex>(self.entity())
+            .map(|i| i.0)
+    }
+
+    /// Original pandapower bus index, absent on natively created buses.
+    #[getter]
+    fn pp_id(&self, py: Python<'_>) -> Option<i64> {
+        self.grid
+            .borrow(py)
+            .inner
+            .world()
+            .get::<PPBusID>(self.entity())
+            .map(|id| id.0)
+    }
+
+    /// Administrative or geographical zone label.
+    #[getter]
+    fn zone(&self, py: Python<'_>) -> PyResult<String> {
+        let grid = self.grid.borrow(py);
+        grid.inner
+            .world()
+            .get::<Zone>(self.entity())
+            .map(|zone| zone.0.clone())
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Not a bus entity"))
+    }
+
+    #[setter]
+    fn set_zone(&self, py: Python<'_>, value: String) -> PyResult<()> {
+        let mut grid = self.grid.borrow_mut(py);
+        let mut zone = grid
+            .inner
+            .world_mut()
+            .get_mut::<Zone>(self.entity())
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Not a bus entity"))?;
+        zone.0 = value;
+        Ok(())
     }
 
     /// Nominal voltage in kV.
@@ -299,9 +352,9 @@ impl LoadHandle {
 
     /// Topology-class change: triggers a full rebuild at the next solve.
     #[setter]
-    fn set_in_service(&self, py: Python<'_>, on: bool) {
+    fn set_in_service(&self, py: Python<'_>, on: bool) -> PyResult<()> {
         let mut grid_py = self.grid.borrow_mut(py);
-        set_entity_in_service(&mut grid_py, self.entity(), on);
+        set_entity_in_service(&mut grid_py, self.entity(), on)
     }
 
     /// Set the active power consumption (MW).
@@ -404,9 +457,9 @@ impl GenHandle {
 
     /// Topology-class change: triggers a full rebuild at the next solve.
     #[setter]
-    fn set_in_service(&self, py: Python<'_>, on: bool) {
+    fn set_in_service(&self, py: Python<'_>, on: bool) -> PyResult<()> {
         let mut grid_py = self.grid.borrow_mut(py);
-        set_entity_in_service(&mut grid_py, self.entity(), on);
+        set_entity_in_service(&mut grid_py, self.entity(), on)
     }
 
     /// Set the active power production (MW).
@@ -477,9 +530,9 @@ impl LineHandle {
 
     /// Topology-class change: triggers a full rebuild at the next solve.
     #[setter]
-    fn set_in_service(&self, py: Python<'_>, on: bool) {
+    fn set_in_service(&self, py: Python<'_>, on: bool) -> PyResult<()> {
         let mut grid_py = self.grid.borrow_mut(py);
-        set_entity_in_service(&mut grid_py, self.entity(), on);
+        set_entity_in_service(&mut grid_py, self.entity(), on)
     }
 
     /// Active power flow at the from-side (MW), from the last solve.

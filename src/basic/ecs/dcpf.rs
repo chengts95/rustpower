@@ -2,10 +2,11 @@ use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 use nalgebra::DVector;
 
-use crate::basic::dcpf::{newton_pf_dcpf_serial, DcpfModel};
+use crate::basic::dcpf::{DcpfModel, newton_pf_dcpf_serial};
 use crate::basic::ecs::elements::*;
 use crate::basic::ecs::network::{PowerFlowSolver, SolverStage};
 use crate::basic::ecs::plugin::{CustomSolverActive, DefaultSolverSet, PowerFlowSolverSet};
+use crate::basic::ecs::powerflow::prepare::SolvePass;
 use crate::basic::ecs::powerflow::systems::{PowerFlowConfig, PowerFlowMat, PowerFlowResult};
 use crate::basic::newtonpf::NewtonCache;
 use crate::basic::solver::DefaultSolver;
@@ -34,7 +35,16 @@ impl DcpfWorkspace {
 pub fn build_dcpf_model(
     common: Res<PFCommonData>,
     mat: Res<PowerFlowMat>,
-    trafos: Query<(&Port4MatPatch, &TransformerDevice, &FromBus, &ToBus), Without<OutOfService>>,
+    agg: Option<Res<NodeAggRes>>,
+    trafos: Query<
+        (
+            &Port4MatPatch,
+            &TransformerDevice,
+            &FromBusMatrixIndex,
+            &ToBusMatrixIndex,
+        ),
+        Without<OutOfService>,
+    >,
 ) -> DcpfModel {
     let mut p_shift_orig = vec![0.0; mat.v_bus_init.len()];
     for (patch, dev, from, to) in trafos.iter() {
@@ -43,12 +53,12 @@ pub fn build_dcpf_model(
             let vn = dev.vn_lv_kv;
             let b = patch.0[(0, 1)].norm() * (vn * vn) / common.sbase;
             let p_inj = b * (-shift_deg.to_radians());
-            if from.0 >= 0 && (from.0 as usize) < p_shift_orig.len() {
-                p_shift_orig[from.0 as usize] += p_inj;
-            }
-            if to.0 >= 0 && (to.0 as usize) < p_shift_orig.len() {
-                p_shift_orig[to.0 as usize] -= p_inj;
-            }
+            let f = agg
+                .as_ref()
+                .map_or(from.0, |a| a.original_to_merged[from.0]);
+            let t = agg.as_ref().map_or(to.0, |a| a.original_to_merged[to.0]);
+            p_shift_orig[f] += p_inj;
+            p_shift_orig[t] -= p_inj;
         }
     }
 
@@ -66,10 +76,11 @@ pub fn ecs_run_dcpf_pf(
     mut cmd: Commands,
     mat: Res<PowerFlowMat>,
     cfg: Res<PowerFlowConfig>,
-    mut dcpf_model: ResMut<DcpfModel>,
+    dcpf_model: Option<ResMut<DcpfModel>>,
     mut workspace: ResMut<DcpfWorkspace>,
     mut solver_res: ResMut<PowerFlowSolver>,
     mut cache: Option<ResMut<NewtonCache>>,
+    pass: Res<SolvePass>,
 ) {
     if mat.npv + mat.npq >= mat.v_bus_init.len() {
         cmd.insert_resource(PowerFlowResult {
@@ -80,31 +91,49 @@ pub fn ecs_run_dcpf_pf(
         return;
     }
 
-    let n_active = dcpf_model.n_active;
-    let ws = &mut *workspace;
-    ws.ensure_capacity(n_active);
-
-    let res = newton_pf_dcpf_serial(
-        &mat.y_bus,
-        &mat.s_bus,
-        &mat.v_bus_init,
-        &mut dcpf_model,
-        &mut ws.buffer[..n_active],
-        mat.npv,
-        mat.npq,
-        cfg.tol,
-        cfg.max_it,
-        &mut solver_res.solver,
-        &mut ws.solver,
-        cache.as_deref_mut(),
-    );
+    let res = if pass.continuation {
+        crate::basic::newtonpf::newton_pf(
+            &mat.y_bus,
+            &mat.s_bus,
+            &mat.v_bus_init,
+            mat.npv,
+            mat.npq,
+            cfg.tol,
+            cfg.max_it,
+            &mut solver_res.solver,
+            cache.as_deref_mut(),
+        )
+    } else {
+        let mut dcpf_model = dcpf_model.expect("DC model must be prepared before initialization");
+        let n_active = dcpf_model.n_active;
+        let ws = &mut *workspace;
+        ws.ensure_capacity(n_active);
+        newton_pf_dcpf_serial(
+            &mat.y_bus,
+            &mat.s_bus,
+            &mat.v_bus_init,
+            &mut dcpf_model,
+            &mut ws.buffer[..n_active],
+            mat.npv,
+            mat.npq,
+            cfg.tol,
+            cfg.max_it,
+            &mut solver_res.solver,
+            &mut ws.solver,
+            cache.as_deref_mut(),
+        )
+    };
 
     let (v_perm, iterations, converged) = match res {
         Ok((v, iters)) => (v, iters, true),
         Err((_, v, iters)) => (v, iters, false),
     };
+    if converged && cache.is_some() {
+        cmd.insert_resource(crate::basic::ecs::powerflow::prepare::CachedNewtonResult);
+    }
 
-    let mut v_orig = DVector::from_element(mat.v_bus_init.len(), num_complex::Complex64::new(0.0, 0.0));
+    let mut v_orig =
+        DVector::from_element(mat.v_bus_init.len(), num_complex::Complex64::new(0.0, 0.0));
     for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
         v_orig[orig_idx] = v_perm[new_idx];
     }
@@ -122,10 +151,19 @@ pub fn ensure_dcpf_model(
     model: Option<Res<DcpfModel>>,
     common: Res<PFCommonData>,
     mat: Res<PowerFlowMat>,
-    trafos: Query<(&Port4MatPatch, &TransformerDevice, &FromBus, &ToBus), Without<OutOfService>>,
+    agg: Option<Res<NodeAggRes>>,
+    trafos: Query<
+        (
+            &Port4MatPatch,
+            &TransformerDevice,
+            &FromBusMatrixIndex,
+            &ToBusMatrixIndex,
+        ),
+        Without<OutOfService>,
+    >,
 ) {
     if model.is_none() {
-        cmd.insert_resource(build_dcpf_model(common, mat, trafos));
+        cmd.insert_resource(build_dcpf_model(common, mat, agg, trafos));
     }
 }
 
@@ -150,12 +188,10 @@ impl Plugin for DcpfNewtonPfPlugin {
             (
                 ensure_dcpf_model.run_if(
                     resource_exists::<DcpfSolverActive>
-                        .and_then(not(resource_exists::<DcpfModel>)),
+                        .and_then(not(resource_exists::<DcpfModel>))
+                        .and_then(|pass: Res<SolvePass>| !pass.continuation),
                 ),
-                ecs_run_dcpf_pf.run_if(
-                    resource_exists::<DcpfSolverActive>
-                        .and_then(resource_exists::<DcpfModel>),
-                ),
+                ecs_run_dcpf_pf.run_if(resource_exists::<DcpfSolverActive>),
             )
                 .chain()
                 .in_set(SolverStage::Solve)

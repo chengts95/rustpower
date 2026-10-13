@@ -40,6 +40,7 @@ pub struct DefaultSnapShotReg;
 impl SnaptShotRegGroup for DefaultSnapShotReg {
     /// Registers the snapshot serializers for all supported element types.
     fn register_snap_shot(registry: &mut SnapshotRegistry) {
+        registry.register::<super::OutOfService>();
         BusSnapShotReg::register_snap_shot(registry);
         TransSnapShotReg::register_snap_shot(registry);
         GenSnapShotReg::register_snap_shot(registry);

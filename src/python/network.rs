@@ -53,6 +53,32 @@ impl Network {
             self.sn_mva = sn_mva.extract()?;
         }
 
+        // Switch.element refers to a line table label, not a row position.
+        let lines: std::collections::HashMap<_, _> = self
+            .line
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+            .map(|(row, line)| (line.index.unwrap_or(row as i64), line))
+            .collect();
+        for switch in self.switch.as_deref().unwrap_or_default() {
+            if switch.et != SwitchType::SwitchBusLine {
+                continue;
+            }
+            let line = lines.get(&switch.element).ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "Line switch references missing line {}",
+                    switch.element
+                ))
+            })?;
+            if switch.bus != line.from_bus && switch.bus != line.to_bus {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Line switch bus {} is not an endpoint of line {}",
+                    switch.bus, switch.element
+                )));
+            }
+        }
         Ok(())
     }
 }
@@ -148,12 +174,18 @@ impl Network {
             vec![None; index.len()]
         };
 
-        let zones_f = if df.hasattr("zone")? {
-            Self::get_opt_float_vec(py, &df, "zone")?
+        let zones: Vec<Option<String>> = if df.hasattr("zone")? {
+            let values = df.getattr("zone")?;
+            // Normalize pandas numeric/object/string dtypes without losing literal
+            // labels such as "nan" or "None". Only actual missing values stay None.
+            values
+                .call_method1("astype", ("str",))?
+                .call_method1("where", (values.call_method0("notna")?, py.None()))?
+                .call_method0("tolist")?
+                .extract()?
         } else {
             vec![None; index.len()]
         };
-        let zones: Vec<Option<i64>> = zones_f.into_iter().map(|z| z.map(|v| v as i64)).collect();
 
         let min_vm = if df.hasattr("min_vm_pu")? {
             Self::get_opt_float_vec(py, &df, "min_vm_pu")?
@@ -173,7 +205,7 @@ impl Network {
                 in_service: in_service[i],
                 name: names[i].clone(),
                 r#type: types[i].clone(),
-                zone: zones[i],
+                zone: zones[i].clone(),
                 min_vm_pu: min_vm[i],
                 max_vm_pu: max_vm[i],
             })
@@ -181,6 +213,7 @@ impl Network {
     }
 
     fn extract_lines(&self, py: Python<'_>, df: Bound<'_, PyAny>) -> PyResult<Vec<Line>> {
+        let index = Self::get_int_vec(&df, "index")?;
         let from_bus = Self::get_int_vec(&df, "from_bus")?;
         let to_bus = Self::get_int_vec(&df, "to_bus")?;
         let length_km = Self::get_float_vec(&df, "length_km")?;
@@ -204,6 +237,7 @@ impl Network {
 
         Ok((0..from_bus.len())
             .map(|i| Line {
+                index: Some(index[i]),
                 from_bus: from_bus[i],
                 to_bus: to_bus[i],
                 length_km: length_km[i],
@@ -224,8 +258,8 @@ impl Network {
     }
 
     fn extract_trafos(&self, py: Python<'_>, df: Bound<'_, PyAny>) -> PyResult<Vec<Transformer>> {
-        let hv_bus = Self::get_int32_vec(&df, "hv_bus")?;
-        let lv_bus = Self::get_int32_vec(&df, "lv_bus")?;
+        let hv_bus = Self::get_int_vec(&df, "hv_bus")?;
+        let lv_bus = Self::get_int_vec(&df, "lv_bus")?;
         let sn_mva = Self::get_float_vec(&df, "sn_mva")?;
         let vn_hv = Self::get_float_vec(&df, "vn_hv_kv")?;
         let vn_lv = Self::get_float_vec(&df, "vn_lv_kv")?;
@@ -464,6 +498,16 @@ impl Network {
         let bus = Self::get_int_vec(&df, "bus")?;
         let element = Self::get_int_vec(&df, "element")?;
         let closed = Self::get_bool_vec(&df, "closed")?;
+        // Preserve NaN/invalid impedance for explicit validation; do not fill it
+        // with zero and silently turn a malformed switch into an ideal one.
+        let z_ohm: Vec<f64> = if df.hasattr("z_ohm")? {
+            df.getattr("z_ohm")?
+                .call_method1("astype", ("float64",))?
+                .call_method0("tolist")?
+                .extract()?
+        } else {
+            vec![0.0; bus.len()]
+        };
         let et = if df.hasattr("et")? {
             Self::get_opt_str_vec(py, &df, "et")?
         } else {
@@ -478,7 +522,7 @@ impl Network {
                 et: SwitchType::from(et[i].as_deref().unwrap_or("b")),
                 name: None,
                 type_: None,
-                z_ohm: 0.0,
+                z_ohm: z_ohm[i],
             })
             .collect())
     }
