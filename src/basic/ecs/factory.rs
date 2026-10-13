@@ -97,7 +97,7 @@ pub trait GridFactory {
         name: Option<String>,
         vm_min: f64,
         vm_max: f64,
-        zone: i64,
+        zone: String,
     ) -> Entity;
     fn add_line(
         &mut self,
@@ -221,7 +221,7 @@ impl GridFactory for PowerGrid {
         name: Option<String>,
         vm_min: f64,
         vm_max: f64,
-        zone: i64,
+        zone: String,
     ) -> Entity {
         let world = self.world_mut();
         let entity = world.spawn_empty().id();

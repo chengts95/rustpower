@@ -13,6 +13,10 @@ use rustpower_proc_marco::DeferBundle;
 use super::bus::{OutOfService, SnaptShotRegGroup};
 use bevy_ecs::name::Name;
 
+/// External line table label, independent of ECS identity and matrix indices.
+#[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LineID(pub i64);
+
 /// Source bus ID (i64) for a  connection.
 ///
 /// Identifies the originating bus of the line.
@@ -125,6 +129,7 @@ impl SnaptShotRegGroup for LineSnapshotReg {
         reg.register::<FromBus>();
         reg.register::<ToBus>();
         reg.register::<LineParams>();
+        reg.register::<LineID>();
         reg.register::<StandardModelType>();
         reg.register::<basic::ecs::elements::Line>();
     }
@@ -136,32 +141,79 @@ pub mod line_systems {
     use crate::basic::ecs::elements::*;
 
     use super::*;
+    /// Closed physical model, independent of optional switch plugins.
+    pub(crate) fn closed_line_patch(params: &LineParams, wbase: f64) -> Matrix2<Complex<f64>> {
+        let length = params.length_km;
+        let parallel = params.parallel as f64;
+        let y_shunt = 0.5
+            * Complex::new(
+                1e-6 * params.g_us_per_km * length * parallel,
+                wbase * 1e-9 * params.c_nf_per_km * length * parallel,
+            );
+        let y_series = 1.0
+            / Complex::new(
+                params.r_ohm_per_km * length / parallel,
+                params.x_ohm_per_km * length / parallel,
+            );
+        Matrix2::new(y_series + y_shunt, -y_series, -y_series, y_series + y_shunt)
+    }
     pub fn setup_line_systems(
         mut commands: Commands,
         q: Query<(Entity, &LineParams), Without<OutOfService>>,
         common: Res<PFCommonData>,
     ) {
         for (entity, params) in &q {
-            let length = params.length_km;
-            let parallel = params.parallel as f64;
-            let wbase = common.wbase;
+            commands.entity(entity).insert((
+                basic::ecs::elements::Line,
+                Port4MatPatch(closed_line_patch(params, common.wbase)),
+            ));
+        }
+    }
+}
 
-            let b = wbase * 1e-9 * params.c_nf_per_km * length * parallel;
-            let g = 1e-6 * params.g_us_per_km * length * parallel;
-            let y_shunt = 0.5 * Complex::new(g, b);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::basic::ecs::elements::{PFCommonData, Port4MatPatch, Switch, SwitchState};
+    use crate::io::pandapower::SwitchType;
 
-            let rl = params.r_ohm_per_km * length / parallel;
-            let xl = params.x_ohm_per_km * length / parallel;
-            let y_series = 1.0 / Complex::new(rl, xl);
-
-            // Physical SI 2x2 admittance matrix:
-            // [ [y_series + y_shunt, -y_series],
-            //   [-y_series, y_series + y_shunt] ]
-            let g_mat = Matrix2::new(y_series + y_shunt, -y_series, -y_series, y_series + y_shunt);
-
-            commands
-                .entity(entity)
-                .insert((basic::ecs::elements::Line, Port4MatPatch(g_mat)));
+    #[test]
+    fn normal_line_setup_does_not_process_switches() {
+        let mut world = World::new();
+        world.insert_resource(PFCommonData {
+            wbase: 1.0,
+            f_hz: 1.0,
+            sbase: 100.0,
+        });
+        let params = LineParams {
+            r_ohm_per_km: 1.0,
+            x_ohm_per_km: 2.0,
+            g_us_per_km: 1000.0,
+            c_nf_per_km: 1000.0,
+            length_km: 1.0,
+            parallel: 1,
+            df: 1.0,
+            max_i_ka: 0.0,
+        };
+        let expected = line_systems::closed_line_patch(&params, 1.0);
+        let line = world.spawn(params).id();
+        let switch = world
+            .spawn((
+                Switch {
+                    bus: 10,
+                    element: 42,
+                    et: SwitchType::SwitchBusLine,
+                    z_ohm: 0.0,
+                },
+                SwitchState(false),
+            ))
+            .id();
+        for closed in [false, true, false] {
+            world.get_mut::<SwitchState>(switch).unwrap().0 = closed;
+            world
+                .run_system_cached(line_systems::setup_line_systems)
+                .unwrap();
+            assert_eq!(world.get::<Port4MatPatch>(line).unwrap().0, expected);
         }
     }
 }

@@ -1,11 +1,11 @@
 mod basic;
 pub mod bevy_cmdbuffer;
-pub mod io; 
-pub mod testcases;
-pub mod timeseries;
+pub mod io;
 pub mod native;
 #[cfg(feature = "python")]
 pub mod python;
+pub mod testcases;
+pub mod timeseries;
 
 pub mod prelude {
     pub use crate::basic::ecs::elements::PPNetwork;

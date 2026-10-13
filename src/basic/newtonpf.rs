@@ -20,9 +20,9 @@ pub struct NewtonCache {
     pub v_a: DVector<f64>,
 }
 
-use super::new_dsdvbus4::fill_jacobian_v4;
 #[cfg(feature = "experimental_fused_scalc")]
 use super::new_dsdvbus_fused::fill_jacobian_and_scalc_v4;
+use super::new_dsdvbus4::fill_jacobian_v4;
 use super::solver::Solve;
 use super::sparse::slice::*;
 use nalgebra::*;
@@ -146,9 +146,18 @@ pub fn newton_pf<Solver: Solve>(
     let mut v_norm = v.map(|e| e.simd_signum());
     #[cfg(feature = "experimental_fused_scalc")]
     fill_jacobian_and_scalc_v4::<false>(
-        Ybus, v.as_slice(), v_norm.as_slice(), ibus.as_mut_slice(), s_calc.as_mut_slice(),
-        &j_pattern.j_col_ptrs, &j_pattern.pq_ends, &j_pattern.active_ends,
-        &j_pattern.diag_ptrs, npv, npq, j_values,
+        Ybus,
+        v.as_slice(),
+        v_norm.as_slice(),
+        ibus.as_mut_slice(),
+        s_calc.as_mut_slice(),
+        &j_pattern.j_col_ptrs,
+        &j_pattern.pq_ends,
+        &j_pattern.active_ends,
+        &j_pattern.diag_ptrs,
+        npv,
+        npq,
+        j_values,
     );
     #[cfg(not(feature = "experimental_fused_scalc"))]
     csc_matvec_and_scalc(
@@ -237,9 +246,18 @@ pub fn newton_pf<Solver: Solve>(
 
         #[cfg(feature = "experimental_fused_scalc")]
         fill_jacobian_and_scalc_v4::<false>(
-            Ybus, v.as_slice(), v_norm.as_slice(), ibus.as_mut_slice(), s_calc.as_mut_slice(),
-            &j_pattern.j_col_ptrs, &j_pattern.pq_ends, &j_pattern.active_ends,
-            &j_pattern.diag_ptrs, npv, npq, j_values,
+            Ybus,
+            v.as_slice(),
+            v_norm.as_slice(),
+            ibus.as_mut_slice(),
+            s_calc.as_mut_slice(),
+            &j_pattern.j_col_ptrs,
+            &j_pattern.pq_ends,
+            &j_pattern.active_ends,
+            &j_pattern.diag_ptrs,
+            npv,
+            npq,
+            j_values,
         );
         #[cfg(not(feature = "experimental_fused_scalc"))]
         csc_matvec_and_scalc(
@@ -266,8 +284,6 @@ pub fn newton_pf<Solver: Solve>(
             }
             return Ok((v, it + 1));
         }
-
-  
     }
 
     if let (Some(target_vm), Some(target_va)) = (cache_vm, cache_va) {

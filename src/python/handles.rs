@@ -72,7 +72,7 @@ impl BusHandle {
         format!("BusHandle({})", self.entity)
     }
 
-    /// Bus ID (from the case data).
+    /// Internal bus ID.
     #[getter]
     fn id(&self, py: Python<'_>) -> PyResult<i64> {
         let grid_py = self.grid.borrow(py);
@@ -82,6 +82,51 @@ impl BusHandle {
             .get::<BusID>(self.entity())
             .map(|b| b.0)
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Not a bus entity"))
+    }
+
+    /// Current physical matrix offset, refreshed at topology preparation.
+    #[getter]
+    fn matrix_index(&self, py: Python<'_>) -> Option<usize> {
+        self.grid
+            .borrow(py)
+            .inner
+            .world()
+            .get::<BusMatrixIndex>(self.entity())
+            .map(|i| i.0)
+    }
+
+    /// Original pandapower bus index, absent on natively created buses.
+    #[getter]
+    fn pp_id(&self, py: Python<'_>) -> Option<i64> {
+        self.grid
+            .borrow(py)
+            .inner
+            .world()
+            .get::<PPBusID>(self.entity())
+            .map(|id| id.0)
+    }
+
+    /// Administrative or geographical zone label.
+    #[getter]
+    fn zone(&self, py: Python<'_>) -> PyResult<String> {
+        let grid = self.grid.borrow(py);
+        grid.inner
+            .world()
+            .get::<Zone>(self.entity())
+            .map(|zone| zone.0.clone())
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Not a bus entity"))
+    }
+
+    #[setter]
+    fn set_zone(&self, py: Python<'_>, value: String) -> PyResult<()> {
+        let mut grid = self.grid.borrow_mut(py);
+        let mut zone = grid
+            .inner
+            .world_mut()
+            .get_mut::<Zone>(self.entity())
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Not a bus entity"))?;
+        zone.0 = value;
+        Ok(())
     }
 
     /// Nominal voltage in kV.
