@@ -269,8 +269,8 @@ impl_defer_bundle!(A, B, C, D, E, F, G, H, I, J);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[derive(Component, Debug, PartialEq, Eq)]
     struct CompA(u32);

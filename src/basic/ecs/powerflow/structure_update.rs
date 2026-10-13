@@ -104,19 +104,43 @@ pub fn reset_solvers(world: &mut World) {
 /// whereas `Changed<T>` semantics depend on observer tick bookkeeping.
 pub fn sbus_pu_update(
     mut pfmat: ResMut<PowerFlowMat>,
-    sbus: Query<(&BusID, &SBusInjPu, Option<&super::qlim::QLimited>)>,
+    agg: Option<Res<NodeAggRes>>,
+    sbus: Query<(&BusMatrixIndex, &SBusInjPu, Option<&super::qlim::QLimited>)>,
 ) {
-    for (bus_id, s, bound) in sbus {
-        let idx = pfmat.reorder_index(bus_id.0 as usize);
-        pfmat.s_bus[idx] = s.0 + num_complex::Complex64::new(0.0, bound.map_or(0.0, |q| q.q_pu));
+    if let Some(a) = agg {
+        pfmat.s_bus.fill(num_complex::Complex64::new(0.0, 0.0));
+        for (bus_id, s, bound) in sbus {
+            let idx = pfmat.reorder_index(a.original_to_merged[bus_id.0]);
+            pfmat.s_bus[idx] +=
+                s.0 + num_complex::Complex64::new(0.0, bound.map_or(0.0, |q| q.q_pu));
+        }
+    } else {
+        for (bus_id, s, bound) in sbus {
+            let idx = pfmat.reorder_index(bus_id.0);
+            pfmat.s_bus[idx] =
+                s.0 + num_complex::Complex64::new(0.0, bound.map_or(0.0, |q| q.q_pu));
+        }
     }
 }
 /// Re-syncs the full `v_bus` vector in [`PowerFlowMat`] from the `VBusPu`
 /// components. Triggered by the coarse [`VoltageChangeEvent`]. Tick-free for
 /// the same reason as [`sbus_pu_update`].
-pub fn vbus_pu_update(mut pfmat: ResMut<PowerFlowMat>, vbus: Query<(&BusID, &VBusPu)>) {
+pub fn vbus_pu_update(
+    mut pfmat: ResMut<PowerFlowMat>,
+    agg: Option<Res<NodeAggRes>>,
+    vbus: Query<(&BusMatrixIndex, &VBusPu)>,
+) {
     for (bus_id, s) in vbus {
-        let idx = pfmat.reorder_index(bus_id.0 as usize);
+        let original = if let Some(a) = &agg {
+            let group = a.original_to_merged[bus_id.0];
+            if a.representatives[group] != bus_id.0 {
+                continue;
+            }
+            group
+        } else {
+            bus_id.0
+        };
+        let idx = pfmat.reorder_index(original);
         pfmat.v_bus_init[idx] = s.0;
     }
 }

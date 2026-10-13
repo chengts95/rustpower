@@ -112,13 +112,21 @@ pub(crate) fn create_permutation_matrix(
 pub(crate) fn create_y_bus(
     common: Res<PFCommonData>,
     node_lookup: Res<NodeLookup>,
-    buses: Query<(&BusID, &VNominal)>,
-    y_br: Query<(&Admittance, &Port2, &VBase)>,
+    buses: Query<(&BusMatrixIndex, &VNominal)>,
+    y_br: Query<(&Admittance, &Port2MatrixIndex, &VBase)>,
     lines_and_switches: Query<
-        (&Port4MatPatch, &FromBus, &ToBus),
+        (&Port4MatPatch, &FromBusMatrixIndex, &ToBusMatrixIndex),
         (Without<OutOfService>, Without<TransformerDevice>),
     >,
-    trafos: Query<(&Port4MatPatch, &TransformerDevice, &FromBus, &ToBus), Without<OutOfService>>,
+    trafos: Query<
+        (
+            &Port4MatPatch,
+            &TransformerDevice,
+            &FromBusMatrixIndex,
+            &ToBusMatrixIndex,
+        ),
+        Without<OutOfService>,
+    >,
 ) -> (CsrMatrix<Complex64>, CscMatrix<Complex64>) {
     let nodes = node_lookup.len();
     let inv_s_base = 1.0 / common.sbase;
@@ -129,7 +137,7 @@ pub(crate) fn create_y_bus(
         for (id_slice, vnom_slice) in chunks {
             let len = id_slice.len();
             for i in 0..len {
-                let idx = id_slice[i].0 as usize;
+                let idx = id_slice[i].0;
                 if idx < nodes {
                     let vn = vnom_slice[i].0.0;
                     bus_z_base[idx] = (vn * vn) * inv_s_base;
@@ -138,7 +146,7 @@ pub(crate) fn create_y_bus(
         }
     } else {
         for (id, vnom) in buses.iter() {
-            let idx = id.0 as usize;
+            let idx = id.0;
             if idx < nodes {
                 let vn = vnom.0.0;
                 bus_z_base[idx] = (vn * vn) * inv_s_base;
@@ -155,48 +163,24 @@ pub(crate) fn create_y_bus(
             for i in 0..len {
                 let f = from_slice[i].0;
                 let t = to_slice[i].0;
-                let z_base = if f >= 0 && (f as usize) < nodes {
-                    bus_z_base[f as usize]
-                } else if t >= 0 && (t as usize) < nodes {
-                    bus_z_base[t as usize]
-                } else {
-                    inv_s_base
-                };
+                let z_base = bus_z_base[f];
                 let p = patch_slice[i].0.scale(z_base);
-                if f >= 0 {
-                    coo.push(f as usize, f as usize, p[(0, 0)]);
-                }
-                if t >= 0 {
-                    coo.push(t as usize, t as usize, p[(1, 1)]);
-                }
-                if f >= 0 && t >= 0 {
-                    coo.push(f as usize, t as usize, p[(0, 1)]);
-                    coo.push(t as usize, f as usize, p[(1, 0)]);
-                }
+                coo.push(f, f, p[(0, 0)]);
+                coo.push(t, t, p[(1, 1)]);
+                coo.push(f, t, p[(0, 1)]);
+                coo.push(t, f, p[(1, 0)]);
             }
         }
     } else {
         for (patch, from, to) in lines_and_switches.iter() {
             let f = from.0;
             let t = to.0;
-            let z_base = if f >= 0 && (f as usize) < nodes {
-                bus_z_base[f as usize]
-            } else if t >= 0 && (t as usize) < nodes {
-                bus_z_base[t as usize]
-            } else {
-                inv_s_base
-            };
+            let z_base = bus_z_base[f];
             let p = patch.0.scale(z_base);
-            if f >= 0 {
-                coo.push(f as usize, f as usize, p[(0, 0)]);
-            }
-            if t >= 0 {
-                coo.push(t as usize, t as usize, p[(1, 1)]);
-            }
-            if f >= 0 && t >= 0 {
-                coo.push(f as usize, t as usize, p[(0, 1)]);
-                coo.push(t as usize, f as usize, p[(1, 0)]);
-            }
+            coo.push(f, f, p[(0, 0)]);
+            coo.push(t, t, p[(1, 1)]);
+            coo.push(f, t, p[(0, 1)]);
+            coo.push(t, f, p[(1, 0)]);
         }
     }
 
@@ -210,16 +194,10 @@ pub(crate) fn create_y_bus(
                 let p = patch_slice[i].0.scale(z_base);
                 let f = from_slice[i].0;
                 let t = to_slice[i].0;
-                if f >= 0 {
-                    coo.push(f as usize, f as usize, p[(0, 0)]);
-                }
-                if t >= 0 {
-                    coo.push(t as usize, t as usize, p[(1, 1)]);
-                }
-                if f >= 0 && t >= 0 {
-                    coo.push(f as usize, t as usize, p[(0, 1)]);
-                    coo.push(t as usize, f as usize, p[(1, 0)]);
-                }
+                coo.push(f, f, p[(0, 0)]);
+                coo.push(t, t, p[(1, 1)]);
+                coo.push(f, t, p[(0, 1)]);
+                coo.push(t, f, p[(1, 0)]);
             }
         }
     } else {
@@ -229,55 +207,26 @@ pub(crate) fn create_y_bus(
             let p = patch.0.scale(z_base);
             let f = from.0;
             let t = to.0;
-            if f >= 0 {
-                coo.push(f as usize, f as usize, p[(0, 0)]);
-            }
-            if t >= 0 {
-                coo.push(t as usize, t as usize, p[(1, 1)]);
-            }
-            if f >= 0 && t >= 0 {
-                coo.push(f as usize, t as usize, p[(0, 1)]);
-                coo.push(t as usize, f as usize, p[(1, 0)]);
-            }
+            coo.push(f, f, p[(0, 0)]);
+            coo.push(t, t, p[(1, 1)]);
+            coo.push(f, t, p[(0, 1)]);
+            coo.push(t, f, p[(1, 0)]);
         }
     }
 
-    // 3. Add ground shunts (EShunt) directly to diagonal
-    if let Ok(chunks) = y_br.contiguous_iter() {
-        for (ad_slice, topo_slice, vbase_slice) in chunks {
-            let len = ad_slice.len();
-            for i in 0..len {
-                let y_pu = ad_slice[i].0 * ((vbase_slice[i].0 * vbase_slice[i].0) * inv_s_base);
-                let topo = &topo_slice[i].0;
-                if topo[0] >= 0 && topo[1] < 0 {
-                    coo.push(topo[0] as usize, topo[0] as usize, y_pu);
-                } else if topo[1] >= 0 && topo[0] < 0 {
-                    coo.push(topo[1] as usize, topo[1] as usize, y_pu);
-                } else if topo[0] >= 0 && topo[1] >= 0 {
-                    let idx0 = topo[0] as usize;
-                    let idx1 = topo[1] as usize;
-                    coo.push(idx0, idx0, y_pu);
-                    coo.push(idx1, idx1, y_pu);
-                    coo.push(idx0, idx1, -y_pu);
-                    coo.push(idx1, idx0, -y_pu);
-                }
-            }
+    // Ground is explicit; the resolved port caches contain native matrix offsets.
+    for (ad, port, base) in y_br.iter() {
+        let y = ad.0 * ((base.0 * base.0) * inv_s_base);
+        let [from, to] = port.0;
+        if let Some(f) = from {
+            coo.push(f, f, y);
         }
-    } else {
-        for (ad, topo, vbase) in y_br.iter() {
-            let y_pu = ad.0 * ((vbase.0 * vbase.0) * inv_s_base);
-            if topo.0[0] >= 0 && topo.0[1] < 0 {
-                coo.push(topo.0[0] as usize, topo.0[0] as usize, y_pu);
-            } else if topo.0[1] >= 0 && topo.0[0] < 0 {
-                coo.push(topo.0[1] as usize, topo.0[1] as usize, y_pu);
-            } else if topo.0[0] >= 0 && topo.0[1] >= 0 {
-                let idx0 = topo.0[0] as usize;
-                let idx1 = topo.0[1] as usize;
-                coo.push(idx0, idx0, y_pu);
-                coo.push(idx1, idx1, y_pu);
-                coo.push(idx0, idx1, -y_pu);
-                coo.push(idx1, idx0, -y_pu);
-            }
+        if let Some(t) = to {
+            coo.push(t, t, y);
+        }
+        if let (Some(f), Some(t)) = (from, to) {
+            coo.push(f, t, -y);
+            coo.push(t, f, -y);
         }
     }
 
@@ -301,6 +250,33 @@ pub(crate) fn create_y_bus(
 pub struct OriginalYBus(pub CscMatrix<Complex64>);
 
 pub fn init_states(world: &mut World) {
+    crate::basic::ecs::elements::topology::prepare_topology(world).expect("invalid bus topology");
+    // Case archives omit result buffers; recreate them when preparing the model.
+    let lines: Vec<_> = world
+        .query_filtered::<Entity, (
+            With<LineParams>,
+            Without<crate::basic::ecs::post_processing::LineResultData>,
+        )>()
+        .iter(world)
+        .collect();
+    for e in lines {
+        world
+            .entity_mut(e)
+            .insert(crate::basic::ecs::post_processing::LineResultData::default());
+    }
+    let trafos: Vec<_> = world
+        .query_filtered::<Entity, (
+            With<TransformerDevice>,
+            Without<crate::basic::ecs::post_processing::TrafoResultData>,
+        )>()
+        .iter(world)
+        .collect();
+    for e in trafos {
+        world
+            .entity_mut(e)
+            .insert(crate::basic::ecs::post_processing::TrafoResultData::default());
+    }
+    crate::basic::ecs::elements::switch::prepare_switches(world);
     let (_incidence_matrix, y_bus) = world.run_system_once(create_y_bus).unwrap();
     world.insert_resource(OriginalYBus(y_bus.clone()));
     insert_bus_states(world, y_bus);
@@ -329,6 +305,7 @@ fn insert_bus_states(world: &mut World, y_bus: CscMatrix<Complex64>) {
         to_perm: cfg.to_perm,
         from_perm: cfg.from_perm,
     });
+    crate::basic::ecs::elements::switch::reduce_switch_nodes(world);
 }
 
 /// Holds the system bus status, including permutation indices, power injections, initial voltages, and counts of PV and PQ buses.
@@ -360,11 +337,11 @@ pub(crate) struct SystemBusStatus {
 /// A `SystemBusStatus` struct containing the initialized bus statuses.
 pub(crate) fn init_bus_status(
     node_lookup: Res<NodeLookup>,
-    pq: Query<(&BusID, &PQBus)>,
-    pv: Query<(&BusID, &PVBus), Without<SlackBus>>,
-    ext: Query<(&BusID, &SlackBus)>,
-    sbus: Query<(&BusID, &SBusInjPu, Option<&super::qlim::QLimited>)>,
-    vbus: Query<(&BusID, &VBusPu)>,
+    pq: Query<(&BusMatrixIndex, &PQBus)>,
+    pv: Query<(&BusMatrixIndex, &PVBus), Without<SlackBus>>,
+    ext: Query<(&BusMatrixIndex, &SlackBus)>,
+    sbus: Query<(&BusMatrixIndex, &SBusInjPu, Option<&super::qlim::QLimited>)>,
+    vbus: Query<(&BusMatrixIndex, &VBusPu)>,
 ) -> SystemBusStatus {
     let nodes = node_lookup.len();
     // Initialize power injections and voltage vectors
@@ -375,11 +352,11 @@ pub(crate) fn init_bus_status(
     let mut exts: Vec<_> = ext.iter().map(|x| x.0.0).collect();
 
     sbus.iter().for_each(|(bus_id, s, bound)| {
-        let idx = bus_id.0 as usize;
+        let idx = bus_id.0;
         s_bus[idx] = s.0 + Complex64::new(0.0, bound.map_or(0.0, |q| q.q_pu));
     });
     vbus.iter().for_each(|(bus_id, s)| {
-        let idx = bus_id.0 as usize;
+        let idx = bus_id.0;
         v_bus_init[idx] = s.0;
     });
 

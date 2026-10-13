@@ -99,11 +99,17 @@ impl TrafoResultData {
 /// falling back to Command entity insertion only on initial setup.
 fn extract_res_bus(
     mut cmd: Commands,
-    mut bus_q: Query<(&BusID, &mut SBusResult, &mut VBusResult)>,
+    mut bus_q: Query<(&BusMatrixIndex, &mut SBusResult, &mut VBusResult)>,
     nodes: Res<NodeLookup>,
     mat: Res<PowerFlowMat>,
     res: Res<PowerFlowResult>,
     common: Res<PFCommonData>,
+    agg: Option<Res<NodeAggRes>>,
+    injections: Query<(
+        &BusMatrixIndex,
+        &SBusInjPu,
+        Option<&super::powerflow::qlim::QLimited>,
+    )>,
     cache: Option<Res<crate::basic::newtonpf::NewtonCache>>,
     cached_result: Option<Res<super::powerflow::prepare::CachedNewtonResult>>,
 ) {
@@ -111,7 +117,10 @@ fn extract_res_bus(
     let s_base = common.sbase;
     let mut s_orig = vec![Complex64::new(0.0, 0.0); n];
 
-    if let Some(c) = cache.as_ref().filter(|c| cached_result.is_some() && c.s_calc.len() == n) {
+    if let Some(c) = cache
+        .as_ref()
+        .filter(|c| cached_result.is_some() && c.s_calc.len() == n)
+    {
         for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
             s_orig[orig_idx] = -c.s_calc[new_idx] * s_base;
         }
@@ -138,12 +147,36 @@ fn extract_res_bus(
         }
     }
 
+    let voltage_at = |i| res.v[agg.as_ref().map_or(i, |a| a.original_to_merged[i])];
+    let s_orig = if let Some(a) = &agg {
+        // Fixed device injections stay on their original buses. The selected
+        // controller receives the remaining merged-node balance.
+        let mut full = vec![Complex64::new(0.0, 0.0); nodes.len()];
+        for (index, injection, bound) in &injections {
+            full[index.0] =
+                -(injection.0 + Complex64::new(0.0, bound.map_or(0.0, |q| q.q_pu))) * s_base;
+        }
+        let mut fixed = vec![Complex64::new(0.0, 0.0); a.representatives.len()];
+        for (i, &g) in a.original_to_merged.iter().enumerate() {
+            if a.representatives[g] != i {
+                fixed[g] += full[i];
+            }
+        }
+        for (g, &r) in a.representatives.iter().enumerate() {
+            full[r] = s_orig[g] - fixed[g];
+        }
+        full
+    } else {
+        s_orig
+    };
+    let n = nodes.len();
+
     if bus_q.is_empty() {
-        for (idx, entity) in nodes.iter() {
+        for (idx, entity) in nodes.dense_iter() {
             let i = idx as usize;
             if i < n {
                 cmd.entity(entity)
-                    .insert((SBusResult(s_orig[i]), VBusResult(res.v[i])));
+                    .insert((SBusResult(s_orig[i]), VBusResult(voltage_at(i))));
             }
         }
     } else if let Ok(chunks) = bus_q.contiguous_iter_mut() {
@@ -155,7 +188,7 @@ fn extract_res_bus(
                 let idx = id_slice[i].0 as usize;
                 if idx < n {
                     s[i].0 = s_orig[idx];
-                    v[i].0 = res.v[idx];
+                    v[i].0 = voltage_at(idx);
                 }
             }
         }
@@ -230,6 +263,38 @@ pub fn compute_two_port_flow_portable(
     }
 }
 
+#[inline(always)]
+fn line_result(
+    flow: TwoPortFlow,
+    f: &BusPrecalc,
+    t: &BusPrecalc,
+    params: &LineParams,
+) -> LineResultData {
+    let i_from_ka = flow.i0_norm * f.i_scale;
+    let i_to_ka = flow.i1_norm * f.i_scale;
+    let i_ka = i_from_ka.max(i_to_ka);
+    LineResultData {
+        p_from_mw: flow.p0_mw,
+        q_from_mvar: flow.q0_mvar,
+        p_to_mw: flow.p1_mw,
+        q_to_mvar: flow.q1_mvar,
+        pl_mw: flow.pl_mw,
+        ql_mvar: flow.ql_mvar,
+        i_from_ka,
+        i_to_ka,
+        i_ka,
+        vm_from_pu: f.vm,
+        va_from_degree: f.va_deg,
+        vm_to_pu: t.vm,
+        va_to_degree: t.va_deg,
+        loading_percent: if params.max_i_ka > 0.0 {
+            i_ka / params.max_i_ka * 100.0
+        } else {
+            0.0
+        },
+    }
+}
+
 /// AVX2 + FMA specialized two-port kernel.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
@@ -292,8 +357,8 @@ pub unsafe fn compute_two_port_flow_avx2(
 #[target_feature(enable = "avx2,fma")]
 unsafe fn process_lines_avx2(
     patch_slice: &[Port4MatPatch],
-    from_slice: &[FromBus],
-    to_slice: &[ToBus],
+    from_slice: &[FromBusMatrixIndex],
+    to_slice: &[ToBusMatrixIndex],
     params_slice: &[LineParams],
     res: &mut [LineResultData],
     bus_calc: &[BusPrecalc],
@@ -301,8 +366,8 @@ unsafe fn process_lines_avx2(
     let len = res.len();
     unsafe {
         for i in 0..len {
-            let f_idx = from_slice[i].0 as usize;
-            let t_idx = to_slice[i].0 as usize;
+            let f_idx = from_slice[i].0;
+            let t_idx = to_slice[i].0;
             let f = &bus_calc[f_idx];
             let t = &bus_calc[t_idx];
 
@@ -313,33 +378,7 @@ unsafe fn process_lines_avx2(
                 f.p_scale,
             );
 
-            let i_from_ka = flow.i0_norm * f.i_scale;
-            let i_to_ka = flow.i1_norm * f.i_scale;
-            let i_ka = i_from_ka.max(i_to_ka);
-
-            let max_i = params_slice[i].max_i_ka;
-            let loading_percent = if max_i > 0.0 {
-                (i_ka / max_i) * 100.0
-            } else {
-                0.0
-            };
-
-            res[i] = LineResultData {
-                p_from_mw: flow.p0_mw,
-                q_from_mvar: flow.q0_mvar,
-                p_to_mw: flow.p1_mw,
-                q_to_mvar: flow.q1_mvar,
-                pl_mw: flow.pl_mw,
-                ql_mvar: flow.ql_mvar,
-                i_from_ka,
-                i_to_ka,
-                i_ka,
-                vm_from_pu: f.vm,
-                va_from_degree: f.va_deg,
-                vm_to_pu: t.vm,
-                va_to_degree: t.va_deg,
-                loading_percent,
-            };
+            res[i] = line_result(flow, f, t, &params_slice[i]);
         }
     }
 }
@@ -347,16 +386,16 @@ unsafe fn process_lines_avx2(
 #[inline(always)]
 fn process_lines_portable(
     patch_slice: &[Port4MatPatch],
-    from_slice: &[FromBus],
-    to_slice: &[ToBus],
+    from_slice: &[FromBusMatrixIndex],
+    to_slice: &[ToBusMatrixIndex],
     params_slice: &[LineParams],
     res: &mut [LineResultData],
     bus_calc: &[BusPrecalc],
 ) {
     let len = res.len();
     for i in 0..len {
-        let f_idx = from_slice[i].0 as usize;
-        let t_idx = to_slice[i].0 as usize;
+        let f_idx = from_slice[i].0;
+        let t_idx = to_slice[i].0;
         let f = &bus_calc[f_idx];
         let t = &bus_calc[t_idx];
 
@@ -367,33 +406,7 @@ fn process_lines_portable(
             f.p_scale,
         );
 
-        let i_from_ka = flow.i0_norm * f.i_scale;
-        let i_to_ka = flow.i1_norm * f.i_scale;
-        let i_ka = i_from_ka.max(i_to_ka);
-
-        let max_i = params_slice[i].max_i_ka;
-        let loading_percent = if max_i > 0.0 {
-            (i_ka / max_i) * 100.0
-        } else {
-            0.0
-        };
-
-        res[i] = LineResultData {
-            p_from_mw: flow.p0_mw,
-            q_from_mvar: flow.q0_mvar,
-            p_to_mw: flow.p1_mw,
-            q_to_mvar: flow.q1_mvar,
-            pl_mw: flow.pl_mw,
-            ql_mvar: flow.ql_mvar,
-            i_from_ka,
-            i_to_ka,
-            i_ka,
-            vm_from_pu: f.vm,
-            va_from_degree: f.va_deg,
-            vm_to_pu: t.vm,
-            va_to_degree: t.va_deg,
-            loading_percent,
-        };
+        res[i] = line_result(flow, f, t, &params_slice[i]);
     }
 }
 
@@ -401,8 +414,8 @@ fn process_lines_portable(
 #[target_feature(enable = "avx2,fma")]
 unsafe fn process_trafos_avx2(
     patch_slice: &[Port4MatPatch],
-    from_slice: &[FromBus],
-    to_slice: &[ToBus],
+    from_slice: &[FromBusMatrixIndex],
+    to_slice: &[ToBusMatrixIndex],
     dev_slice: &[TransformerDevice],
     res: &mut [TrafoResultData],
     bus_calc: &[BusPrecalc],
@@ -412,8 +425,8 @@ unsafe fn process_trafos_avx2(
     let len = res.len();
     unsafe {
         for i in 0..len {
-            let hv_idx = from_slice[i].0 as usize;
-            let lv_idx = to_slice[i].0 as usize;
+            let hv_idx = from_slice[i].0;
+            let lv_idx = to_slice[i].0;
             let f = &bus_calc[hv_idx];
             let t = &bus_calc[lv_idx];
             let dev = &dev_slice[i];
@@ -464,8 +477,8 @@ unsafe fn process_trafos_avx2(
 #[inline(always)]
 fn process_trafos_portable(
     patch_slice: &[Port4MatPatch],
-    from_slice: &[FromBus],
-    to_slice: &[ToBus],
+    from_slice: &[FromBusMatrixIndex],
+    to_slice: &[ToBusMatrixIndex],
     dev_slice: &[TransformerDevice],
     res: &mut [TrafoResultData],
     bus_calc: &[BusPrecalc],
@@ -474,8 +487,8 @@ fn process_trafos_portable(
     const INV_SQRT3: f64 = 0.5773502691896257645;
     let len = res.len();
     for i in 0..len {
-        let hv_idx = from_slice[i].0 as usize;
-        let lv_idx = to_slice[i].0 as usize;
+        let hv_idx = from_slice[i].0;
+        let lv_idx = to_slice[i].0;
         let f = &bus_calc[hv_idx];
         let t = &bus_calc[lv_idx];
         let dev = &dev_slice[i];
@@ -529,31 +542,44 @@ fn extract_res_branches(
     mut lines_q: Query<
         (
             &Port4MatPatch,
-            &FromBus,
-            &ToBus,
+            &FromBusMatrixIndex,
+            &ToBusMatrixIndex,
             &LineParams,
+            &mut LineResultData,
+        ),
+        (Without<OutOfService>, Without<OpenLineModel>),
+    >,
+    mut open_lines_q: Query<
+        (
+            &Port4MatPatch,
+            &FromBusMatrixIndex,
+            &ToBusMatrixIndex,
+            &LineParams,
+            &OpenLineModel,
             &mut LineResultData,
         ),
         Without<OutOfService>,
     >,
+    mut offline_lines_q: Query<&mut LineResultData, With<OutOfService>>,
     mut trafos_q: Query<
         (
             &Port4MatPatch,
-            &FromBus,
-            &ToBus,
+            &FromBusMatrixIndex,
+            &ToBusMatrixIndex,
             &TransformerDevice,
             &mut TrafoResultData,
         ),
         Without<OutOfService>,
     >,
-    buses: Query<(&BusID, &VNominal)>,
+    buses: Query<(&BusMatrixIndex, &VNominal)>,
     lut: Res<NodeLookup>,
     mat: Res<PowerFlowMat>,
     results: Res<PowerFlowResult>,
+    agg: Option<Res<NodeAggRes>>,
     cache: Option<Res<crate::basic::newtonpf::NewtonCache>>,
     cached_result: Option<Res<super::powerflow::prepare::CachedNewtonResult>>,
     mut bus_calc: Local<Vec<BusPrecalc>>,
-    mut init_done: Local<bool>,
+    mut initialized_revision: Local<u64>,
 ) {
     let nodes = lut.len();
     let v_slice = results.v.as_slice();
@@ -562,7 +588,7 @@ fn extract_res_branches(
     const RAD_TO_DEG: f64 = 180.0 / std::f64::consts::PI;
 
     // Single static setup of nominal voltage scales. Retained across runs with 0 malloc overhead!
-    if !*init_done || bus_calc.len() != nodes {
+    if *initialized_revision != lut.revision || bus_calc.len() != nodes {
         bus_calc.resize(
             nodes,
             BusPrecalc {
@@ -587,35 +613,42 @@ fn extract_res_branches(
                 }
             }
         }
-        *init_done = true;
+        *initialized_revision = lut.revision;
     }
 
-    // Direct read from solver polar state (NewtonCache) if present, eliminating atan2 & sqrt!
-    // Zero branches in the permutation update loop for optimal pipeline throughput.
+    // Reuse cached polar state even when ideal switches reduce the solver space.
     if let Some(c) = cache.as_ref().filter(|c| {
-        cached_result.is_some() && c.v_m.len() == nodes
-            && c.v_a.len() == nodes
-            && mat.from_perm.len() == nodes
-            && v_slice.len() >= nodes
+        cached_result.is_some()
+            && c.v_m.len() == v_slice.len()
+            && c.v_a.len() == v_slice.len()
+            && mat.from_perm.len() == v_slice.len()
     }) {
-        let vm_slice = c.v_m.as_slice();
-        let va_slice = c.v_a.as_slice();
-        for (new_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
-            let v = v_slice[orig_idx];
-            bus_calc[orig_idx].vr = v.re;
-            bus_calc[orig_idx].vi = v.im;
-            bus_calc[orig_idx].vm = vm_slice[new_idx];
-            bus_calc[orig_idx].va_deg = va_slice[new_idx] * RAD_TO_DEG;
+        if let Some(a) = &agg {
+            for (original, &group) in a.original_to_merged.iter().enumerate() {
+                let perm = mat.to_perm[group];
+                let v = v_slice[group];
+                bus_calc[original].vr = v.re;
+                bus_calc[original].vi = v.im;
+                bus_calc[original].vm = c.v_m[perm];
+                bus_calc[original].va_deg = c.v_a[perm] * RAD_TO_DEG;
+            }
+        } else {
+            for (perm, &original) in mat.from_perm.iter().enumerate() {
+                let v = v_slice[original];
+                bus_calc[original].vr = v.re;
+                bus_calc[original].vi = v.im;
+                bus_calc[original].vm = c.v_m[perm];
+                bus_calc[original].va_deg = c.v_a[perm] * RAD_TO_DEG;
+            }
         }
     } else {
-        for i in 0..nodes.min(v_slice.len()) {
-            let v = v_slice[i];
-            let vr = v.re;
-            let vi = v.im;
-            bus_calc[i].vr = vr;
-            bus_calc[i].vi = vi;
-            bus_calc[i].vm = (vr * vr + vi * vi).sqrt();
-            bus_calc[i].va_deg = vi.atan2(vr) * RAD_TO_DEG;
+        for i in 0..nodes {
+            let group = agg.as_ref().map_or(i, |a| a.original_to_merged[i]);
+            let v = v_slice[group];
+            bus_calc[i].vr = v.re;
+            bus_calc[i].vi = v.im;
+            bus_calc[i].vm = v.norm();
+            bus_calc[i].va_deg = v.im.atan2(v.re) * RAD_TO_DEG;
         }
     }
 
@@ -659,6 +692,38 @@ fn extract_res_branches(
                 );
             }
         }
+    }
+
+    // Open lines are a separate, usually small query. Closed SIMD loops stay unchanged.
+    for (patch, from, to, params, model, mut result) in &mut open_lines_q {
+        if model.policy == OpenLinePolicy::DisableBranch
+            || (model.terminals.from && model.terminals.to)
+        {
+            *result.bypass_change_detection() = LineResultData::default();
+            continue;
+        }
+        let f = &bus_calc[from.0];
+        let t = &bus_calc[to.0];
+        let flow = compute_two_port_flow_portable(
+            unsafe { &*(patch.0.as_slice().as_ptr() as *const [Complex64; 4]) },
+            f,
+            t,
+            f.p_scale,
+        );
+        let mut value = line_result(flow, f, t, params);
+        let connected = if model.terminals.from { t } else { f };
+        let voltage = model.voltage_ratio * Complex64::new(connected.vr, connected.vi);
+        if model.terminals.from {
+            value.vm_from_pu = voltage.norm();
+            value.va_from_degree = voltage.arg().to_degrees();
+        } else {
+            value.vm_to_pu = voltage.norm();
+            value.va_to_degree = voltage.arg().to_degrees();
+        }
+        *result.bypass_change_detection() = value;
+    }
+    for mut result in &mut offline_lines_q {
+        *result.bypass_change_detection() = LineResultData::default();
     }
 
     // 2. Process In-service Transformers using strictly contiguous slices with SIMD acceleration

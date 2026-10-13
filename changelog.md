@@ -3,6 +3,10 @@
 ## [0.5.3] - Unreleased
 
 ### Changed
+- Require explicit Python `switch_model="merge"` (Type A) or `"admittance"` (Type B) for networks with switches; reuse configured selections for conversion and archive loading, reject unsupported switch types, and keep public voltage/DC arrays in physical bus order.
+- Move open-line behavior out of normal line setup into optional `LineSwitchPlugin`, before core Ybus assembly. Resolve switch-to-line Entity references, cache terminal state only on affected lines, support charging-preserving and whole-branch disabling policies, and reconstruct open line-side voltages in post-processing. Python requires an explicit switch model; native Type A/B include the line plugin.
+- Separate bus labels from dense matrix offsets. Resolve runtime connectivity to world-local Entity references and cache native `usize` indices on bus/element components; retain global lookup and label-based archives. Expose `matrix_index` for Python numerical arrays.
+- Store bus zones as string labels in Rust and Python. `GridEditor.add_bus()` now accepts `zone=""`; `BusHandle.zone` exposes the label.
 - Use V4 Jacobian assembly in Newton–Raphson and Iwamoto solvers. Derive quadrant starts from column pointers and segment lengths instead of storing four additional lookup tables.
 - For Rust callers accessing `NewtonCache` directly, `j_pattern` now holds `JacobianCache`; use `j_row_indices.len()` for the nonzero count.
 - Reduce symbolic searches using the sorted PQ/PV/slack row ranges; retain earlier assembly implementations for ablation tests.
@@ -11,6 +15,11 @@
 - Reuse registered post-processing systems and their local buffers across calls.
 
 ### Fixed
+- Repair native bus-bus switch plugins across startup and later rebuilds: resolve transitive merges, use deterministic Slack/PV/PQ priority, aggregate warm injections and Q limits, map DC phase shifts, and publish voltages/branch results for all original buses. Clear finite-switch stamps when opened and use inverse impedance. Prepare dense mappings and reduce Ybus directly outside the Newton loop.
+- Support gaps in native bus IDs after editing; reject stale/foreign references and invalid topology commits. Defer removals until commit and preserve them on abort. Refresh bus-scale caches on same-size replacement and recreate archived branch result buffers. Handle scalar DC systems without rsparse AMD underflow.
+- Normalize imported pandapower bus labels to contiguous internal IDs and translate all supported bus references (#15). Preserve original labels as `PPBusID`, `BusHandle.pp_id`, and `pp_bus_id` in bus tables and snapshots; reject duplicate or missing bus references before Python grid replacement.
+- Honor open pandapower line switches at either terminal, preserving charging at the connected end. Preserve line table labels for switch targets and serialize switch types as text in Parquet snapshots (#14).
+- Accept string, numeric, and missing pandapower bus zones, including CIGRE network labels (#13). Preserve numeric zones as text when loading JSON/CSV cases.
 - Honor `qlim=True` in `PowerGrid.from_pandapower()`. Aggregate Q limits across in-service generators sharing a bus and exclude slack buses from PV-to-PQ switching.
 - Keep clamped generator Q separate from device injections so subsequent input updates do not count it twice. Limited buses remain PQ across parameter updates; explicit `init_pf()` restores bus classifications from the model.
 - Continue Q-limit outer iterations from the previous AC voltage without repeating DC initialization or input hooks. Publish voltages after the outer loop finishes, and return a failed solve result instead of panicking on nonconvergence.

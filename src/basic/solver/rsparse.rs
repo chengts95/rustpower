@@ -36,6 +36,19 @@ impl Solve for RSparseSolver {
         n: usize,
     ) -> Result<(), &'static str> {
         let n = Ap.len() - 1;
+        // rsparse's AMD ordering underflows at n < 2. Scalar DC systems
+        // need no ordering, symbolic analysis, or workspace allocation.
+        if n == 0 {
+            return Ok(());
+        }
+        if n == 1 {
+            let diagonal: f64 = Ax[Ap[0]..Ap[1]].iter().sum();
+            if !diagonal.is_finite() || diagonal == 0.0 {
+                return Err("singular scalar system");
+            }
+            b[0] /= diagonal;
+            return Ok(());
+        }
         let p: Vec<isize> = Ap.iter().map(|&v| v as isize).collect();
         let mut a = data::Sprs {
             m: n,
@@ -79,5 +92,29 @@ fn ipvec<T: Numeric<T>>(p: &Option<Vec<isize>>, b: &[T], x: &mut [T]) {
     match p {
         Some(pvec) => ipvec_perm(pvec, b, x),
         None => ipvec_identity(b, x),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn scalar_and_empty_systems_need_no_symbolic_workspace() {
+        let mut solver = RSparseSolver::default();
+        let mut rhs = [14.0];
+        solver
+            .solve(&mut [0, 1], &mut [0], &mut [7.0], &mut rhs, 1)
+            .unwrap();
+        assert_eq!(rhs, [2.0]);
+        assert!(solver.symbolic.is_none());
+        assert!(solver.x.is_none());
+        assert!(
+            solver
+                .solve(&mut [0, 1], &mut [0], &mut [0.0], &mut rhs, 1)
+                .is_err()
+        );
+        solver
+            .solve(&mut [0], &mut [], &mut [], &mut [], 0)
+            .unwrap();
     }
 }
