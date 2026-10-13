@@ -15,14 +15,22 @@ use crate::basic::ecs::powerflow::mutation;
 /// Toggle the OutOfService marker on an element entity and post a
 /// FullRebuildEvent: in_service changes are Topology-class, consumed by
 /// structure_update at the next solve.
-fn set_entity_in_service(grid_py: &mut PowerGrid, entity: Entity, on: bool) {
+fn set_entity_in_service(grid_py: &mut PowerGrid, entity: Entity, on: bool) -> PyResult<()> {
     let world = grid_py.inner.world_mut();
+    if world.get_entity(entity).is_err() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "element no longer exists",
+        ));
+    }
     if on {
+        crate::basic::ecs::elements::topology::validate_activation(world, entity)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
         world.entity_mut(entity).remove::<OutOfService>();
     } else {
         world.entity_mut(entity).insert(OutOfService);
     }
     let _ = world.write_message(crate::basic::ecs::powerflow::structure_update::FullRebuildEvent);
+    Ok(())
 }
 
 macro_rules! define_handle {
@@ -344,9 +352,9 @@ impl LoadHandle {
 
     /// Topology-class change: triggers a full rebuild at the next solve.
     #[setter]
-    fn set_in_service(&self, py: Python<'_>, on: bool) {
+    fn set_in_service(&self, py: Python<'_>, on: bool) -> PyResult<()> {
         let mut grid_py = self.grid.borrow_mut(py);
-        set_entity_in_service(&mut grid_py, self.entity(), on);
+        set_entity_in_service(&mut grid_py, self.entity(), on)
     }
 
     /// Set the active power consumption (MW).
@@ -449,9 +457,9 @@ impl GenHandle {
 
     /// Topology-class change: triggers a full rebuild at the next solve.
     #[setter]
-    fn set_in_service(&self, py: Python<'_>, on: bool) {
+    fn set_in_service(&self, py: Python<'_>, on: bool) -> PyResult<()> {
         let mut grid_py = self.grid.borrow_mut(py);
-        set_entity_in_service(&mut grid_py, self.entity(), on);
+        set_entity_in_service(&mut grid_py, self.entity(), on)
     }
 
     /// Set the active power production (MW).
@@ -522,9 +530,9 @@ impl LineHandle {
 
     /// Topology-class change: triggers a full rebuild at the next solve.
     #[setter]
-    fn set_in_service(&self, py: Python<'_>, on: bool) {
+    fn set_in_service(&self, py: Python<'_>, on: bool) -> PyResult<()> {
         let mut grid_py = self.grid.borrow_mut(py);
-        set_entity_in_service(&mut grid_py, self.entity(), on);
+        set_entity_in_service(&mut grid_py, self.entity(), on)
     }
 
     /// Active power flow at the from-side (MW), from the last solve.

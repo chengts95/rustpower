@@ -64,9 +64,11 @@ pub enum ParamDiff {
 /// Set a load's active power consumption (MW, positive = consumption).
 /// Returns false if the entity is not a load-like element.
 pub fn set_load_p(world: &mut World, entity: Entity, p_mw: f64) -> bool {
-    let Some(bus) = world.get::<TargetBusRef>(entity).map(|b| b.0.entity) else {
+    let bus = world.get::<TargetBusRef>(entity).map(|b| b.0.entity);
+    let active = world.get::<OutOfService>(entity).is_none();
+    if active && bus.is_none() {
         return false;
-    };
+    }
     let target = -p_mw; // consumption is a negative injection
     let Some(mut p) = world.get_mut::<TargetPMW>(entity) else {
         return false;
@@ -76,19 +78,23 @@ pub fn set_load_p(world: &mut World, entity: Entity, p_mw: f64) -> bool {
         return true; // no-op filtered at the gateway
     }
     p.0 = target;
-    world.write_message(ParamDiff::InjectionEntity {
-        bus,
-        dp_mw: target - old,
-        dq_mvar: 0.0,
-    });
+    if active {
+        world.write_message(ParamDiff::InjectionEntity {
+            bus: bus.unwrap(),
+            dp_mw: target - old,
+            dq_mvar: 0.0,
+        });
+    }
     true
 }
 
 /// Set a load's reactive power consumption (MVar, positive = consumption).
 pub fn set_load_q(world: &mut World, entity: Entity, q_mvar: f64) -> bool {
-    let Some(bus) = world.get::<TargetBusRef>(entity).map(|b| b.0.entity) else {
+    let bus = world.get::<TargetBusRef>(entity).map(|b| b.0.entity);
+    let active = world.get::<OutOfService>(entity).is_none();
+    if active && bus.is_none() {
         return false;
-    };
+    }
     let target = -q_mvar;
     let Some(mut q) = world.get_mut::<TargetQMVar>(entity) else {
         return false;
@@ -98,19 +104,23 @@ pub fn set_load_q(world: &mut World, entity: Entity, q_mvar: f64) -> bool {
         return true;
     }
     q.0 = target;
-    world.write_message(ParamDiff::InjectionEntity {
-        bus,
-        dp_mw: 0.0,
-        dq_mvar: target - old,
-    });
+    if active {
+        world.write_message(ParamDiff::InjectionEntity {
+            bus: bus.unwrap(),
+            dp_mw: 0.0,
+            dq_mvar: target - old,
+        });
+    }
     true
 }
 
 /// Set a generator's active power production (MW, positive = production).
 pub fn set_gen_p(world: &mut World, entity: Entity, p_mw: f64) -> bool {
-    let Some(bus) = world.get::<TargetBusRef>(entity).map(|b| b.0.entity) else {
+    let bus = world.get::<TargetBusRef>(entity).map(|b| b.0.entity);
+    let active = world.get::<OutOfService>(entity).is_none();
+    if active && bus.is_none() {
         return false;
-    };
+    }
     let Some(mut p) = world.get_mut::<TargetPMW>(entity) else {
         return false;
     };
@@ -119,19 +129,23 @@ pub fn set_gen_p(world: &mut World, entity: Entity, p_mw: f64) -> bool {
         return true;
     }
     p.0 = p_mw;
-    world.write_message(ParamDiff::InjectionEntity {
-        bus,
-        dp_mw: p_mw - old,
-        dq_mvar: 0.0,
-    });
+    if active {
+        world.write_message(ParamDiff::InjectionEntity {
+            bus: bus.unwrap(),
+            dp_mw: p_mw - old,
+            dq_mvar: 0.0,
+        });
+    }
     true
 }
 
 /// Set a generator's voltage magnitude setpoint (p.u.).
 pub fn set_gen_vm(world: &mut World, entity: Entity, vm_pu: f64) -> bool {
-    let Some(bus) = world.get::<TargetBusRef>(entity).map(|b| b.0.entity) else {
+    let bus = world.get::<TargetBusRef>(entity).map(|b| b.0.entity);
+    let active = world.get::<OutOfService>(entity).is_none();
+    if active && bus.is_none() {
         return false;
-    };
+    }
     let Some(mut vm) = world.get_mut::<TargetVmPu>(entity) else {
         return false;
     };
@@ -139,7 +153,12 @@ pub fn set_gen_vm(world: &mut World, entity: Entity, vm_pu: f64) -> bool {
         return true;
     }
     vm.0 = vm_pu;
-    world.write_message(ParamDiff::VoltageMagEntity { bus, vm_pu });
+    if active {
+        world.write_message(ParamDiff::VoltageMagEntity {
+            bus: bus.unwrap(),
+            vm_pu,
+        });
+    }
     true
 }
 

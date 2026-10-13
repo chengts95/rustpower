@@ -77,6 +77,39 @@ class BusIndexTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "switch.element.*999"):
             grid.from_pp_net(net)
 
+    def test_bad_switch_on_disabled_line_preserves_existing_grid(self):
+        grid = rp.PowerGrid.from_pandapower(pn.case14())
+        self.assertTrue(grid.solve(tol=1e-10).converged)
+        original = grid.bus(0)
+        voltage = grid.v.copy()
+        net = pp.create_empty_network()
+        a = pp.create_bus(net, 110.0)
+        b = pp.create_bus(net, 110.0)
+        pp.create_ext_grid(net, a)
+        line = pp.create_line_from_parameters(net, a, b, 1.0, 0.1, 0.1, 0.0, 1.0, in_service=False)
+        pp.create_switch(net, a, line, et="l", closed=True)
+        net.bus = net.bus.drop(b)
+        for closed in (True, False):
+            net.switch.closed = closed
+            for loader in ("from_pp_net", "load_network"):
+                with self.subTest(closed=closed, loader=loader):
+                    candidate = net
+                    if loader == "load_network":
+                        candidate = rp.Network()
+                        candidate.from_pp_net(net)
+                    with self.assertRaisesRegex(ValueError, "missing bus"):
+                        getattr(grid, loader)(candidate, switch_model="merge")
+                    self.assertEqual(original.id, 0)
+                    self.assertEqual(grid.n_bus, 14)
+                    np.testing.assert_array_equal(grid.v, voltage)
+                    self.assertTrue(grid.solve(tol=1e-10).converged)
+                    np.testing.assert_allclose(grid.v, voltage, atol=1e-10, rtol=0)
+        # A failed load must not enable the requested switch model either.
+        net = pn.case14()
+        pp.create_switch(net, int(net.line.at[0, "from_bus"]), 0, et="l", closed=True)
+        with self.assertRaisesRegex(ValueError, "explicitly select"):
+            grid.from_pp_net(net)
+
     def test_duplicate_bus_labels_rejected(self):
         net = pn.case14()
         net.bus.index = [0] * len(net.bus)
