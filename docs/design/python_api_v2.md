@@ -121,7 +121,7 @@ class PowerGrid:
 ```python
 class GridEditor:
     # 拓扑级命令（只在这里，PowerGrid 上不放 add_*）
-    def add_bus(self, vn_kv, *, name=None, vm_min=0.9, vm_max=1.1, zone=0) -> tuple[int, Bus]
+    def add_bus(self, vn_kv, *, name=None, vm_min=0.9, vm_max=1.1, zone="") -> tuple[int, Bus]
     def add_line(self, from_bus, to_bus, length_km, *, std_type=None, ...) -> Line
     def add_trafo(self, hv_bus, lv_bus, *, sn_mva, ...) -> Trafo
     def add_load(self, bus, p_mw, q_mvar, *, name=None) -> Load
@@ -310,6 +310,5 @@ Python 层    PowerGrid(Facade) ── 元素 Proxy ── GridEditor(UnitOfWork
 ### Phase 1 已知妥协（Phase 2/3 偿还）
 
 - 属性 setter 暂时复用现有"增量 + 事件"实现（网关就位后改为立即命令，删除增量算术）。
-- `GridEditor.remove()` 立即 despawn，事务 abort 无法撤销 remove（真正的逆操作命令
-  在 Phase 3 随 undo 一起到位）。
+- `GridEditor.remove()` 现在延迟到 commit；abort 保留被删除对象。删除有连接的 bus 时，必须在同一个事务中删除相关元件；跨 grid 的 handle 会被拒绝。
 - `SolveReport.rebuild` 暂只区分 "full" / "incremental"（五级梯子在 Phase 2）。

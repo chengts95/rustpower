@@ -39,9 +39,8 @@ pub struct SlackBus;
 /// - Global power flow metadata
 #[derive(SystemParam)]
 pub struct NodeOp<'w, 's, T: Component, T1: Component<Mutability = Mutable>> {
-    elements: Query<'w, 's, (&'static TargetBus, &'static T), Without<OutOfService>>,
+    elements: Query<'w, 's, (&'static TargetBusRef, &'static T), Without<OutOfService>>,
     buses: Query<'w, 's, &'static mut T1>,
-    node: ResMut<'w, NodeLookup>,
     common: Res<'w, PFCommonData>,
 }
 
@@ -57,7 +56,7 @@ impl<'w, 's, T: Component, T1: Component<Mutability = Mutable>> NodeOp<'w, 's, T
     {
         let s_base_frac = 1.0 / self.common.sbase;
         for (target_bus, val) in self.elements.iter() {
-            let entity = self.node.get_entity(target_bus.0).unwrap();
+            let entity = target_bus.0.entity;
             let mut target = self.buses.get_mut(entity).unwrap();
             f(val, &mut target, s_base_frac);
         }
@@ -87,11 +86,11 @@ pub fn label_pq_nodes(
 /// Labels PV nodes (voltage-controlled generator nodes) based on available voltage and active power targets.
 pub fn label_pv_nodes(
     mut cmd: Commands,
-    nodes: Res<NodeLookup>,
-    query: Query<&TargetBus, (With<TargetPMW>, With<TargetVmPu>, Without<OutOfService>)>,
+    query: Query<&TargetBusRef, (With<TargetPMW>, With<TargetVmPu>, Without<OutOfService>)>,
 ) {
     for target_bus in &query {
-        if let Some(entity) = nodes.get_entity(target_bus.0) {
+        {
+            let entity = target_bus.0.entity;
             cmd.entity(entity).insert(PVBus);
         }
     }
@@ -101,11 +100,11 @@ pub fn label_pv_nodes(
 /// These nodes serve as the phase and magnitude reference for all others.
 pub fn label_slack_nodes(
     mut cmd: Commands,
-    nodes: Res<NodeLookup>,
-    query: Query<&TargetBus, (With<TargetVaDeg>, With<TargetVmPu>, Without<OutOfService>)>,
+    query: Query<&TargetBusRef, (With<TargetVaDeg>, With<TargetVmPu>, Without<OutOfService>)>,
 ) {
     for target_bus in &query {
-        if let Some(entity) = nodes.get_entity(target_bus.0) {
+        {
+            let entity = target_bus.0.entity;
             cmd.entity(entity).insert(SlackBus);
         }
     }
@@ -127,7 +126,7 @@ pub fn v_inj(mut v: ParamSet<(NodeOp<TargetVmPu, VBusPu>, NodeOp<TargetVaDeg, VB
         .elements
         .iter()
         .for_each(|(target_bus, target_vm_pu)| {
-            let entity = target_vm.node.get_entity(target_bus.0).unwrap();
+            let entity = target_bus.0.entity;
             let mut data = buses.get_mut(entity).unwrap();
             data.0 = data.0.simd_signum() * Complex::new(target_vm_pu.0, 0.0);
         });
@@ -138,7 +137,7 @@ pub fn v_inj(mut v: ParamSet<(NodeOp<TargetVmPu, VBusPu>, NodeOp<TargetVaDeg, VB
         .elements
         .iter()
         .for_each(|(target_bus, target_va_deg)| {
-            let entity = target_va.node.get_entity(target_bus.0).unwrap();
+            let entity = target_bus.0.entity;
             let mut data = buses.get_mut(entity).unwrap();
             data.0 = data.0.simd_modulus() * Complex::from_polar(1.0, target_va_deg.0.to_radians());
         });

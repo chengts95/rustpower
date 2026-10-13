@@ -33,6 +33,9 @@ pub struct OutOfService;
 #[require(VNominal)]
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 pub struct BusID(pub i64);
+/// Original pandapower bus DataFrame index; never used as a matrix offset.
+#[derive(Component, Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct PPBusID(pub i64);
 #[derive(Component, serde::Serialize, serde::Deserialize)]
 pub struct BusType(pub String);
 
@@ -64,7 +67,7 @@ impl Default for VNominal {
 }
 
 #[derive(Component, Default, serde::Serialize, serde::Deserialize)]
-pub struct Zone(pub i64);
+pub struct Zone(pub String);
 /// Bundle for initializing a bus entity.
 ///
 /// Groups core identity, naming, voltage limits and nominal levels into a single spawnable unit.
@@ -78,7 +81,7 @@ pub struct BusBundle {
     pub vm_pu: VmLimit<PerUnit>,
     /// Nominal voltage level (kV)
     pub vn_kv: VNominal,
-    /// Administrative or geographical zone ID
+    /// Administrative or geographical zone label
     pub zone: Zone,
 }
 
@@ -93,7 +96,7 @@ impl From<&Bus> for BusBundle {
             bus_id: BusID(bus.index),
             vm_pu: VmLimit::new(bus.min_vm_pu.unwrap_or(0.9), bus.max_vm_pu.unwrap_or(1.1)),
             vn_kv: VNominal(Pair(bus.vn_kv, PhantomData)),
-            zone: Zone(bus.zone.unwrap_or(0)),
+            zone: Zone(bus.zone.clone().unwrap_or_default()),
         }
     }
 }
@@ -113,6 +116,7 @@ pub struct BusSnapShotReg;
 impl SnaptShotRegGroup for BusSnapShotReg {
     fn register_snap_shot(reg: &mut SnapshotRegistry) {
         reg.register::<BusID>();
+        reg.register::<PPBusID>();
         reg.register::<Zone>();
         reg.register_with::<Name, NameWrapper>();
         VmLimitPerUnit::register_snap_shot(reg);
@@ -139,32 +143,36 @@ pub mod bus_systems {
     /// Initializes the [`NodeLookup`] resource from all existing [`BusID`] components.
     ///
     /// Also inserts default values for [`SBusInjPu`] and [`VBusPu`] into each bus entity.
-    pub fn init_node_lookup(mut cmd: Commands, bus_ids: Query<(Entity, &BusID)>) {
-        let mut node_lookup = NodeLookup::default();
-        bus_ids.iter().for_each(|(entity, bus_id)| {
-            node_lookup.insert(bus_id.0, entity);
-            cmd.entity(entity)
+    pub fn init_node_lookup(world: &mut World) {
+        super::super::topology::prepare_topology(world).expect("invalid bus topology");
+        let entities: Vec<_> = world
+            .resource::<NodeLookup>()
+            .dense_iter()
+            .map(|(_, e)| e)
+            .collect();
+        for entity in entities {
+            world
+                .entity_mut(entity)
                 .insert((SBusInjPu::default(), VBusPu::default()));
-        });
-        cmd.insert_resource(node_lookup);
+        }
     }
-    /// Updates the [`NodeLookup`] in response to changes in [`BusID`] components.
-    ///
-    /// Handles both changes and removals, ensuring consistent ID ↔ entity mapping.
+
+    // Labels are refreshed by the full topology preparation pipeline. Numerical
+    // systems never derive their matrix offsets from this lookup's labels.
     pub fn update_node_lookup(
-        mut lookup: ResMut<NodeLookup>,
+        lookup: Res<NodeLookup>,
         changed: Query<(Entity, &BusID), Changed<BusID>>,
         mut removed: RemovedComponents<BusID>,
+        mut events: Option<
+            ResMut<Messages<crate::basic::ecs::powerflow::structure_update::FullRebuildEvent>>,
+        >,
     ) {
-        for entity in removed.read() {
-            lookup.remove_entity(entity);
-        }
-
-        for (entity, bus_id) in changed.iter() {
-            if lookup.contains_entity(entity) {
-                lookup.remove_entity(entity);
+        let dirty = removed.read().count() != 0
+            || changed.iter().any(|(e, id)| lookup.get_id(e) != Some(id.0));
+        if dirty {
+            if let Some(events) = events.as_mut() {
+                events.write(crate::basic::ecs::powerflow::structure_update::FullRebuildEvent);
             }
-            lookup.insert(bus_id.0, entity);
         }
     }
 }

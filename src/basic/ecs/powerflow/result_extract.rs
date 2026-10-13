@@ -1,7 +1,7 @@
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 
-use crate::basic::{ecs::elements::*, sparse::cast::Cast};
+use crate::basic::ecs::elements::*;
 
 use super::systems::{PowerFlowMat, PowerFlowResult};
 
@@ -17,11 +17,11 @@ pub fn extract_powerflow_results(
         return;
     }
     let v = match &node_agg {
-        Some(node_agg) => &node_agg.expand_mat_v.cast() * &res.v,
+        Some(node_agg) => node_agg.expand_voltage(&res.v),
         None => res.v.clone_owned(),
     };
     for i in 0..v.len() {
-        let entity = buses.get_entity(i as i64).unwrap();
+        let entity = buses.get_by_index(i).unwrap();
         if let Ok(mut bus) = q.get_mut(entity) {
             bus.0 = v[i];
         }

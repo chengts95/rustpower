@@ -1,822 +1,477 @@
-use crate::{basic::sparse::cast::Cast, io::pandapower::SwitchType};
-use bevy_ecs::prelude::*;
-use derive_more::{Deref, DerefMut};
-use nalgebra::{Complex, DVector, vector};
-use nalgebra_sparse::{CooMatrix, CscMatrix};
-use std::collections::{HashMap, HashSet};
-
+//! Switch models are prepared before core Ybus assembly, outside the solver loop.
 use super::{super::powerflow::systems::PowerFlowMat, *};
+use crate::io::pandapower::SwitchType;
+use bevy_ecs::{prelude::*, system::RunSystemOnce};
+use derive_more::{Deref, DerefMut};
+use nalgebra::{Complex, DVector};
+use nalgebra_sparse::{CooMatrix, CscMatrix};
+use std::collections::HashMap;
 
 mod comps;
 pub use comps::*;
 
-/// Represents the result of node aggregation as a matrix resource.
-///
-/// This structure stores the **expansion matrices** used to recover full node-space vectors
-/// from aggregated (merged) representations, typically after ideal switch-based node collapsing.
-///
-/// - `expand_mat` maps vectors from merged-node space back to full-node space.
-///   For example: `v_full = expand_mat * v_merged`.
-/// - `expand_mat_v` is a filtered version applied to voltage initialization,
-///   where only a subset of nodes (e.g., representative ones) retain values.
-///
-/// These matrices are especially useful in:
-/// - Reconstructing full-dimension results after power flow solves on reduced systems
-/// - Broadcasting merged states back to ECS components like `VBusPu`
-///
-/// Note:
-/// If aggregation is needed (from full → merged), use `.transpose()`:
-/// `v_merged = expand_mat.transpose() * v_full`
+/// Transient merge projection. Indices refer to physical matrix order, not BusID.
 #[derive(Default, Debug, Clone, Resource, serde::Serialize, serde::Deserialize)]
 pub struct NodeAggRes {
-    pub expand_mat: CscMatrix<f64>,   // From merged → full
-    pub expand_mat_v: CscMatrix<f64>, // For voltage init expansion
+    pub expand_mat: CscMatrix<f64>,
+    /// Selects one controlling/initial voltage per merged bus (not result expansion).
+    pub expand_mat_v: CscMatrix<f64>,
+    pub original_to_merged: Vec<usize>,
+    pub representatives: Vec<usize>,
 }
-
-/// Represents the merging of two nodes in the power network.
-///
-/// Each `MergeNode` instance represents a pair of nodes to be merged.
+impl NodeAggRes {
+    pub fn expand_voltage(&self, merged: &DVector<Complex<f64>>) -> DVector<Complex<f64>> {
+        DVector::from_iterator(
+            self.original_to_merged.len(),
+            self.original_to_merged.iter().map(|&i| merged[i]),
+        )
+    }
+}
 #[derive(Default, Debug, Clone, Component, serde::Serialize, serde::Deserialize)]
 pub struct MergeNode(pub usize, pub usize);
 
-/// Implements a Union-Find structure for efficiently merging nodes in the network.
-///
-/// This structure is used to manage merging of nodes and to keep track of their relationships.
+/// Legacy arbitrary-node union-find API. The plugin uses dense vectors internally.
 #[derive(Default, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NodeMerge {
-    pub parent: HashMap<u64, u64>, // Maps each node to its parent in the union-find structure.
-    pub rank: HashMap<u64, u64>,   // Rank used for efficient union operations.
+    pub parent: HashMap<u64, u64>,
+    pub rank: HashMap<u64, u64>,
 }
-
-/// Represents the mapping of original nodes to their merged nodes after aggregation.
 #[derive(
     Default, Debug, Clone, Deref, DerefMut, Resource, serde::Serialize, serde::Deserialize,
 )]
 pub struct NodeMapping(HashMap<u64, u64>);
-
 impl NodeMerge {
-    /// Initializes the Union-Find structure for the given nodes.
-    ///
-    /// Each node starts as its own parent and has a rank of 0.
-    ///
-    /// # Arguments
-    /// * `nodes` - A list of nodes to initialize in the union-find structure.
     pub fn new(nodes: &[u64]) -> Self {
-        let mut parent = HashMap::new();
-        let mut rank = HashMap::new();
-        for &node in nodes {
-            parent.insert(node, node);
-            rank.insert(node, 0);
+        Self {
+            parent: nodes.iter().map(|&n| (n, n)).collect(),
+            rank: nodes.iter().map(|&n| (n, 0)).collect(),
         }
-        NodeMerge { parent, rank }
     }
-
-    /// Finds the root of a node using path compression for efficiency.
-    ///
-    /// # Arguments
-    /// * `node` - The node whose root is to be found.
-    ///
-    /// # Returns
-    /// * The root of the specified node.
     fn find(&mut self, node: u64) -> u64 {
         let mut root = node;
         while self.parent[&root] != root {
             root = self.parent[&root];
         }
-
-        let mut current = node;
-        while self.parent[&current] != root {
-            let parent = self.parent[&current];
-            self.parent.insert(current, root);
-            current = parent;
+        let mut n = node;
+        while n != root {
+            let next = self.parent[&n];
+            self.parent.insert(n, root);
+            n = next;
         }
         root
     }
+    pub fn union(&mut self, a: u64, b: u64) {
+        let a = self.find(a);
+        let b = self.find(b);
+        if a == b {
+            return;
+        }
+        if self.rank[&a] < self.rank[&b] {
+            self.parent.insert(a, b);
+        } else {
+            self.parent.insert(b, a);
+            if self.rank[&a] == self.rank[&b] {
+                *self.rank.get_mut(&a).unwrap() += 1;
+            }
+        }
+    }
+    pub fn get_node_mapping(&self, starting_idx: u64) -> HashMap<u64, u64> {
+        let mut roots = HashMap::new();
+        let mut result = HashMap::new();
+        let mut nodes: Vec<_> = self.parent.keys().copied().collect();
+        nodes.sort_unstable();
+        for node in nodes {
+            let mut root = node;
+            while self.parent[&root] != root {
+                root = self.parent[&root];
+            }
+            let next = starting_idx + roots.len() as u64;
+            let merged = *roots.entry(root).or_insert(next);
+            result.insert(node, merged);
+        }
+        result
+    }
+}
+#[derive(Resource, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SwitchModel {
+    Merge,
+    Admittance,
+}
 
-    /// Merges two nodes by their roots based on rank.
-    ///
-    /// # Arguments
-    /// * `node1` - The first node to merge.
-    /// * `node2` - The second node to merge.
-    pub fn union(&mut self, node1: u64, node2: u64) {
-        let root1 = self.find(node1);
-        let root2 = self.find(node2);
-        if root1 != root2 {
-            let rank1 = self.rank[&root1];
-            let rank2 = self.rank[&root2];
-            if rank1 < rank2 {
-                self.parent.insert(root1, root2);
-            } else {
-                self.parent.insert(root2, root1);
-                if rank1 == rank2 {
-                    *self.rank.get_mut(&root1).unwrap() += 1;
+/// Last prepared state lets Changed queries ignore startup writes already consumed.
+#[derive(Component, Clone, PartialEq)]
+pub(crate) struct PreparedSwitch {
+    bus: i64,
+    element: i64,
+    et: SwitchType,
+    z: f64,
+    closed: bool,
+    disabled: bool,
+}
+fn prepared(s: &Switch, state: &SwitchState, disabled: bool) -> PreparedSwitch {
+    PreparedSwitch {
+        bus: s.bus,
+        element: s.element,
+        et: s.et.clone(),
+        z: s.z_ohm,
+        closed: state.0,
+        disabled,
+    }
+}
+#[derive(Component)]
+struct SwitchStamp;
+
+pub(crate) fn detect_switch_changes(
+    q: Query<
+        (
+            &Switch,
+            &SwitchState,
+            Option<&OutOfService>,
+            Option<&PreparedSwitch>,
+        ),
+        Or<(Changed<Switch>, Changed<SwitchState>, Added<OutOfService>)>,
+    >,
+    mut removed: RemovedComponents<Switch>,
+    mut removed_state: RemovedComponents<SwitchState>,
+    mut removed_service: RemovedComponents<OutOfService>,
+    policy: Option<Res<OpenLinePolicy>>,
+    prepared_policy: Option<Res<PreparedOpenLinePolicy>>,
+    mut events: MessageWriter<crate::basic::ecs::powerflow::structure_update::FullRebuildEvent>,
+) {
+    let changed = q
+        .iter()
+        .any(|(s, state, off, old)| old.cloned() != Some(prepared(s, state, off.is_some())));
+    // Service removal may belong to another device; rebuilding is still correct.
+    let removed =
+        removed.read().count() + removed_state.read().count() + removed_service.read().count() > 0;
+    let policy_changed = policy.as_deref().copied() != prepared_policy.as_deref().map(|p| p.0);
+    if changed || removed || policy_changed {
+        events.write_default();
+    }
+}
+fn root(parent: &mut [usize], n: usize) -> usize {
+    let mut r = n;
+    while parent[r] != r {
+        r = parent[r];
+    }
+    let mut x = n;
+    while x != r {
+        let next = parent[x];
+        parent[x] = r;
+        x = next;
+    }
+    r
+}
+fn prepare_switch_model(world: &mut World, model: SwitchModel) {
+    world.remove_resource::<NodeAggRes>();
+    // Stamps are derived and must disappear when switches open, change type or are removed.
+    let stale: Vec<_> = world
+        .query_filtered::<Entity, With<SwitchStamp>>()
+        .iter(world)
+        .collect();
+    for e in stale {
+        world.entity_mut(e).remove::<(
+            SwitchStamp,
+            Port4MatPatch,
+            FromBus,
+            ToBus,
+            FromBusRef,
+            ToBusRef,
+            FromBusMatrixIndex,
+            ToBusMatrixIndex,
+        )>();
+    }
+    let n = world.resource::<NodeLookup>().len();
+    let mut parent: Vec<_> = (0..n).collect();
+    let mut rank = vec![0u8; n];
+    let switches: Vec<_> = world
+        .query::<(
+            Entity,
+            &Switch,
+            &SwitchState,
+            Option<&OutOfService>,
+            &SwitchBusRef,
+            Option<&SwitchOtherBusRef>,
+        )>()
+        .iter(world)
+        .map(|(e, s, state, off, a, b)| (e, s.clone(), state.0, off.is_some(), a.0, b.map(|b| b.0)))
+        .collect();
+    for (e, s, closed, off, a, b) in switches {
+        world
+            .entity_mut(e)
+            .insert(prepared(&s, &SwitchState(closed), off));
+        if s.et != SwitchType::SwitchTwoBuses || !closed || off {
+            continue;
+        }
+        let b = b.expect("prepared bus-bus switch must have both references");
+        assert!(
+            s.z_ohm.is_finite() && s.z_ohm >= 0.0,
+            "switch impedance must be finite and nonnegative"
+        );
+        let va = world.get::<VNominal>(a.entity).unwrap().0.0;
+        let vb = world.get::<VNominal>(b.entity).unwrap().0.0;
+        assert!(
+            (va - vb).abs() <= 1e-9 * va.abs().max(vb.abs()),
+            "bus-bus switch connects different nominal voltage levels"
+        );
+        if model == SwitchModel::Merge && s.z_ohm == 0.0 {
+            let ra = root(&mut parent, a.index);
+            let rb = root(&mut parent, b.index);
+            if ra != rb {
+                if rank[ra] < rank[rb] {
+                    parent[ra] = rb;
+                } else {
+                    parent[rb] = ra;
+                    if rank[ra] == rank[rb] {
+                        rank[ra] += 1;
+                    }
                 }
             }
+        } else {
+            // Existing RustPower model uses a purely resistive finite switch.
+            // Type B approximates an ideal switch with a high conductance.
+            let y = Complex::new(if s.z_ohm == 0.0 { 1e6 } else { 1.0 / s.z_ohm }, 0.0);
+            let patch = nalgebra::Matrix2::new(y, -y, -y, y);
+            world.entity_mut(e).insert((
+                SwitchStamp,
+                Port4MatPatch(patch),
+                FromBusMatrixIndex(a.index),
+                ToBusMatrixIndex(b.index),
+            ));
         }
     }
-
-    /// Generates a mapping of original nodes to their merged nodes.
-    ///
-    /// # Arguments
-    /// * `starting_idx` - The starting index for assigning new merged node IDs.
-    ///
-    /// # Returns
-    /// * A hashmap mapping original nodes to their merged counterparts.
-    pub fn get_node_mapping(&self, starting_idx: u64) -> HashMap<u64, u64> {
-        let mut root_to_new_id = HashMap::new();
-        let mut node_mapping = HashMap::new();
-        let mut new_node_id = starting_idx;
-        let mut nodes: Vec<_> = self.parent.keys().collect();
-        nodes.sort();
-        for &node in &nodes {
-            let root = self.parent[&node];
-            root_to_new_id.entry(root).or_insert_with(|| {
-                let id = new_node_id;
-                new_node_id += 1;
-                id
-            });
-            node_mapping.insert(*node, root_to_new_id[&root]);
+    let mut groups = vec![usize::MAX; n];
+    let mut count = 0;
+    let mapping: HashMap<_, _> = (0..n)
+        .map(|i| {
+            let r = root(&mut parent, i);
+            if groups[r] == usize::MAX {
+                groups[r] = count;
+                count += 1;
+            }
+            (i as u64, groups[r] as u64)
+        })
+        .collect();
+    world.insert_resource(NodeMapping(mapping));
+}
+/// Compatibility entry point; normal preparation is dispatched by the installed plugin.
+pub fn process_switch_state(world: &mut World) {
+    prepare_switch_model(world, SwitchModel::Merge);
+}
+pub fn process_switch_state_admit(world: &mut World) {
+    prepare_switch_model(world, SwitchModel::Admittance);
+}
+pub(crate) fn prepare_switches(world: &mut World) {
+    prepare_open_lines(world);
+    if let Some(model) = world.get_resource::<SwitchModel>().copied() {
+        prepare_switch_model(world, model);
+    } else if world.contains_resource::<OpenLinePolicy>() {
+        let states: Vec<_> = world
+            .query::<(Entity, &Switch, &SwitchState, Has<OutOfService>)>()
+            .iter(world)
+            .map(|(e, s, state, off)| (e, prepared(s, state, off)))
+            .collect();
+        for (e, state) in states {
+            world.entity_mut(e).insert(state);
         }
-        node_mapping
     }
 }
 
-/// Processes the state of switches and updates network components accordingly.
-///
-/// This function performs node merging or adds admittance branches based on the state of switches.
-#[allow(dead_code)]
-pub fn process_switch_state(
-    mut cmd: Commands,
-    nodes: Res<NodeLookup>,
-    buses: Query<&VNominal>,
-    q: Query<(Entity, &Switch, &SwitchState)>,
-) {
-    let node_idx: Vec<u64> = nodes.iter().map(|(id, _)| id as u64).collect();
-    let mut union_find: Option<NodeMerge> = if q.iter().count() > 0 {
-        Some(NodeMerge::new(&node_idx))
-    } else {
-        None
+fn prepare_open_lines(world: &mut World) {
+    // Restore only previously modified lines. Recompute from current parameters,
+    // so repeated preparation and parameter edits cannot compound reductions.
+    let old: Vec<_> = world
+        .query_filtered::<Entity, With<OpenLineModel>>()
+        .iter(world)
+        .collect();
+    if old.is_empty() && !world.contains_resource::<OpenLinePolicy>() {
+        return;
+    }
+    let wbase = world.resource::<PFCommonData>().wbase;
+    for e in old {
+        if let Some(params) = world.get::<LineParams>(e) {
+            let patch = super::line::line_systems::closed_line_patch(params, wbase);
+            world.entity_mut(e).insert(Port4MatPatch(patch));
+        }
+        world
+            .entity_mut(e)
+            .remove::<(OpenLineModel, OpenLineTerminals)>();
+    }
+    let Some(policy) = world.get_resource::<OpenLinePolicy>().copied() else {
+        world.remove_resource::<PreparedOpenLinePolicy>();
+        return;
     };
-
-    q.iter().for_each(|(entity, switch, closed)| {
-        let _z_ohm = switch.z_ohm;
-        match switch.et {
-            SwitchType::SwitchTwoBuses if **closed && _z_ohm == 0.0 => {
-                union_find
-                    .as_mut()
-                    .unwrap()
-                    .union(switch.bus as u64, switch.element as u64);
-            }
-            SwitchType::SwitchTwoBuses if **closed => {
-                let bus = nodes.get_entity(switch.bus).unwrap();
-                let v_base = *buses.get(bus).unwrap().0;
-                cmd.entity(entity).insert(AdmittanceBranch {
-                    y: Admittance(Complex::new(_z_ohm, 0.0)),
-                    port: Port2(vector![switch.bus, switch.element]),
-                    v_base: VBase(v_base),
-                });
-            }
-            _ => {}
+    let mut open: HashMap<Entity, OpenLineTerminals> = HashMap::new();
+    for (connection, state) in world
+        .query_filtered::<(&SwitchLineRef, &SwitchState), (Without<OutOfService>, With<Switch>)>()
+        .iter(world)
+    {
+        if state.0 {
+            continue;
         }
-    });
-
-    if let Some(union_find) = union_find {
-        cmd.insert_resource(NodeMapping(union_find.get_node_mapping(0)));
-    }
-}
-
-/// Processes the state of switches and updates network components accordingly.
-///
-/// This function adds admittance branches based on the state of switches, no ideal switch.
-#[allow(dead_code)]
-pub fn process_switch_state_admit(mut cmd: Commands, q: Query<(Entity, &Switch, &SwitchState)>) {
-    q.iter().for_each(|(entity, switch, closed)| {
-        let _z_ohm = switch.z_ohm;
-        match switch.et {
-            SwitchType::SwitchTwoBuses if **closed && _z_ohm == 0.0 => {
-                let y = Complex::new(1e6, 0.0);
-                let g = nalgebra::Matrix2::new(y, -y, -y, y);
-                cmd.entity(entity).insert((
-                    FromBus(switch.bus),
-                    ToBus(switch.element),
-                    Port4MatPatch(g),
-                ));
-            }
-            SwitchType::SwitchTwoBuses if **closed => {
-                let y = Complex::new(_z_ohm, 0.0);
-                let g = nalgebra::Matrix2::new(y, -y, -y, y);
-                cmd.entity(entity).insert((
-                    FromBus(switch.bus),
-                    ToBus(switch.element),
-                    Port4MatPatch(g),
-                ));
-            }
-            _ => {}
-        }
-    });
-}
-
-/// Builds an aggregation matrix based on the provided node mapping.
-///
-/// # Arguments
-/// * `node_mapping` - A mapping from original nodes to their merged counterparts.
-///
-/// # Returns
-/// * A COO matrix representing the node aggregation.
-fn build_aggregation_matrix(node_mapping: &HashMap<u64, u64>) -> CooMatrix<u64> {
-    let mut nodes: Vec<_> = node_mapping.keys().cloned().collect();
-    nodes.sort_unstable();
-    let original_node_count = nodes.len();
-    let new_node_count = node_mapping.values().collect::<HashSet<_>>().len();
-
-    let mut mat = CooMatrix::new(original_node_count, new_node_count);
-    for (i, node) in nodes.iter().enumerate() {
-        let new_node = node_mapping.get(node).unwrap_or(node);
-        mat.push(i, *new_node as usize, 1);
-    }
-    mat
-}
-
-/// Creates a reverse mapping from merged nodes to their original nodes.
-///
-/// # Arguments
-/// * `node_mapping` - A mapping from original nodes to their merged counterparts.
-///
-/// # Returns
-/// * A hashmap that maps merged nodes back to their original nodes.
-fn build_reverse_mapping(node_mapping: &HashMap<u64, u64>) -> HashMap<u64, Vec<u64>> {
-    let mut reverse_mapping: HashMap<u64, Vec<u64>> = HashMap::new();
-    for (&original_node, &merged_node) in node_mapping {
-        reverse_mapping
-            .entry(merged_node)
-            .or_default()
-            .push(original_node);
-    }
-    reverse_mapping
-}
-
-/// Sets a mask for merged nodes based on node types (PV, PQ, EXT).
-///
-/// # Arguments
-/// * `node_mapping` - A mapping from original nodes to their merged counterparts.
-/// * `current_node_order` - A slice representing the current order of nodes.
-/// * `mats_npv` - Number of PV nodes.
-/// * `mats_npq` - Number of PQ nodes.
-///
-/// # Returns
-/// * A vector representing the mask for merged nodes.
-fn set_mask_for_merged_nodes(
-    node_mapping: &HashMap<u64, u64>,
-    current_node_order: &[u64],
-    mats_npv: usize,
-    mats_npq: usize,
-) -> DVector<bool> {
-    let ext_idx = mats_npv + mats_npq;
-    let pv_nodes: HashSet<_> = current_node_order[0..mats_npv].iter().copied().collect();
-    let ext_nodes: HashSet<_> = current_node_order[ext_idx..].iter().copied().collect();
-    let reverse_mapping = build_reverse_mapping(node_mapping);
-    let mut mask = DVector::from_element(current_node_order.len(), false);
-
-    for original_nodes in reverse_mapping.values() {
-        let prioritized_node = original_nodes
-            .iter()
-            .find(|&&node| ext_nodes.contains(&node))
-            .or_else(|| {
-                original_nodes
-                    .iter()
-                    .find(|&&node| pv_nodes.contains(&node))
-            })
-            .or_else(|| original_nodes.iter().min());
-        if let Some(&node) = prioritized_node {
-            mask[node as usize] = true;
+        let ends = open.entry(connection.entity).or_default();
+        match connection.terminal {
+            LineTerminal::From => ends.from = true,
+            LineTerminal::To => ends.to = true,
         }
     }
-    mask
+    for (e, terminals) in open {
+        let params = world
+            .get::<LineParams>(e)
+            .expect("validated switch line reference");
+        let base = super::line::line_systems::closed_line_patch(params, wbase);
+        let mut patch = nalgebra::Matrix2::zeros();
+        let mut voltage_ratio = Complex::new(0.0, 0.0);
+        if policy == OpenLinePolicy::PreserveCharging && terminals.from != terminals.to {
+            let connected = if terminals.from { 1 } else { 0 };
+            let series = -base[(0, 1)];
+            // Factored Kron reduction avoids subtracting nearly equal series admittances.
+            let shunt = 0.5
+                * Complex::new(
+                    1e-6 * params.g_us_per_km * params.length_km * params.parallel as f64,
+                    wbase * 1e-9 * params.c_nf_per_km * params.length_km * params.parallel as f64,
+                );
+            patch[(connected, connected)] = shunt * (2.0 * series + shunt) / (series + shunt);
+            voltage_ratio = series / (series + shunt);
+        }
+        world.entity_mut(e).insert((
+            terminals,
+            OpenLineModel {
+                terminals,
+                policy,
+                voltage_ratio,
+            },
+            Port4MatPatch(patch),
+        ));
+    }
+    world.insert_resource(PreparedOpenLinePolicy(policy));
 }
 
-/// Executes the node aggregation process and returns the aggregation matrices.
-///
-/// # Arguments
-/// * `node_mapping` - Resource containing the mapping of nodes.
-/// * `mats` - Power flow matrix resource.
-///
-/// # Returns
-/// * A tuple containing two CSC matrices, one for aggregation and one for voltage values.
+/// Deterministic voltage priority: Slack > PV > PQ, then physical bus order.
 pub fn node_aggregation_system(
-    node_mapping: Res<NodeMapping>,
-    mats: Res<PowerFlowMat>,
+    mapping: Res<NodeMapping>,
+    mat: Res<PowerFlowMat>,
 ) -> (CscMatrix<f64>, CscMatrix<f64>) {
-    let coo = build_aggregation_matrix(&node_mapping.0);
-    let mut nodes: Vec<_> = node_mapping.keys().copied().collect();
-    nodes.sort_unstable();
-    let current_node_order: Vec<u64> = mats.from_perm.iter().map(|&idx| nodes[idx]).collect();
-    let mask = set_mask_for_merged_nodes(
-        &node_mapping,
-        current_node_order.as_slice(),
-        mats.npv,
-        mats.npq,
-    );
-
-    let (pattern, values) = CscMatrix::from(&coo).into_pattern_and_values();
-
-    let pre_select_mat = unsafe {
-        CscMatrix::try_from_pattern_and_values(
-            pattern,
-            values.iter().copied().map(|x| x as f64).collect(),
-        )
-        .unwrap_unchecked()
-    };
-
-    let pre_select_mat_for_voltages = pre_select_mat.filter(|r, _, _| mask[r]);
-    (pre_select_mat, pre_select_mat_for_voltages)
+    let n = mapping.len();
+    let m = mapping
+        .values()
+        .copied()
+        .max()
+        .map_or(0, |x| x as usize + 1);
+    let mut priority = vec![0u8; n];
+    for (i, &original) in mat.from_perm.iter().enumerate() {
+        priority[original] = if i >= mat.npq + mat.npv {
+            2
+        } else if i >= mat.npq {
+            1
+        } else {
+            0
+        };
+    }
+    let mut representatives = vec![usize::MAX; m];
+    let mut full = CooMatrix::new(n, m);
+    for i in 0..n {
+        let group = mapping[&(i as u64)] as usize;
+        full.push(i, group, 1.0);
+        let old = representatives[group];
+        if old == usize::MAX || priority[i] > priority[old] {
+            representatives[group] = i;
+        }
+    }
+    let mut selected = CooMatrix::new(n, m);
+    for (group, &i) in representatives.iter().enumerate() {
+        selected.push(i, group, 1.0);
+    }
+    (CscMatrix::from(&full), CscMatrix::from(&selected))
 }
-
-/// Updates the power flow matrix with the new merged node mappings.
-///
-/// # Arguments
-/// * `agg_mats` - Input aggregation matrices.
-/// * `node_mapping` - Node mapping resource.
-/// * `pf_mats` - Power flow matrix resource to be updated.
-/// * `cmd` - Commands to interact with the ECS.
 pub fn handle_node_merge(
-    In(agg_mats): In<(CscMatrix<f64>, CscMatrix<f64>)>,
-    node_mapping: Res<NodeMapping>,
-    pf_mats: ResMut<PowerFlowMat>,
+    In((full, selected)): In<(CscMatrix<f64>, CscMatrix<f64>)>,
+    mapping: Res<NodeMapping>,
+    mut mat: ResMut<PowerFlowMat>,
     mut cmd: Commands,
 ) {
-    let (mat, mat_v) = agg_mats;
-
-    let nodes = get_sorted_nodes(&node_mapping);
-    let input_vector = DVector::from_iterator(nodes.len(), nodes.iter().map(|&x| x as f64));
-    let merged_v_vector = calculate_merged_vector(&mat_v, &input_vector);
-
-    let mats = &pf_mats;
-    let (pv_nodes, pq_nodes, ext_nodes) = extract_pv_pq_ext_nodes(mats, &input_vector);
-
-    let (pv, pq, ext, _old_to_new) = filter_and_remap_nodes(
-        pv_nodes,
-        pq_nodes,
-        ext_nodes,
-        merged_v_vector.as_slice(),
-        mats.v_bus_init.len(),
+    let n = full.nrows();
+    let m = full.ncols();
+    if n == m {
+        cmd.remove_resource::<NodeAggRes>();
+        return;
+    }
+    assert_eq!(
+        mat.y_bus.nrows(),
+        n,
+        "switch reduction must start in physical bus space"
     );
-
-    let new_total_nodes = merged_v_vector.len();
-    let mut mats = pf_mats;
-    update_power_flow_matrix(&mut mats, pv, pq, ext, &mat, &mat_v, new_total_nodes);
+    let indices: Vec<_> = (0..n).map(|i| mapping[&(i as u64)] as usize).collect();
+    let reps: Vec<_> = (0..m)
+        .map(|g| selected.row_indices()[selected.col_offsets()[g]])
+        .collect();
+    let mut priority = vec![0u8; n];
+    for (i, &original) in mat.from_perm.iter().enumerate() {
+        priority[original] = if i >= mat.npq + mat.npv {
+            2
+        } else if i >= mat.npq {
+            1
+        } else {
+            0
+        };
+    }
+    let mut pq = Vec::new();
+    let mut pv = Vec::new();
+    let mut slack = Vec::new();
+    for (g, &r) in reps.iter().enumerate() {
+        match priority[r] {
+            2 => slack.push(g),
+            1 => pv.push(g),
+            _ => pq.push(g),
+        }
+    }
+    let mut y = CooMatrix::new(m, m);
+    for (r, c, &value) in mat.y_bus.triplet_iter() {
+        y.push(indices[r], indices[c], value);
+    }
+    let mut s = DVector::zeros(m);
+    for i in 0..n {
+        s[indices[i]] += mat.s_bus[i];
+    }
+    let v = DVector::from_iterator(m, reps.iter().map(|&i| mat.v_bus_init[i]));
+    mat.npq = pq.len();
+    mat.npv = pv.len();
+    mat.from_perm = pq.into_iter().chain(pv).chain(slack).collect();
+    mat.to_perm = vec![0; m];
+    for i in 0..m {
+        let g = mat.from_perm[i];
+        mat.to_perm[g] = i;
+    }
+    mat.y_bus = CscMatrix::from(&y);
+    mat.s_bus = s;
+    mat.v_bus_init = v;
     cmd.insert_resource(NodeAggRes {
-        expand_mat: mat,
-        expand_mat_v: mat_v,
+        expand_mat: full,
+        expand_mat_v: selected,
+        original_to_merged: indices,
+        representatives: reps,
     });
 }
-
-/// Sorts the nodes based on their keys from the `NodeMapping`.
-///
-/// # Arguments
-/// * `node_mapping` - The node mapping to be sorted.
-///
-/// # Returns
-/// * A sorted vector of node keys.
-fn get_sorted_nodes(node_mapping: &NodeMapping) -> Vec<u64> {
-    let mut nodes: Vec<_> = node_mapping.keys().cloned().collect();
-    nodes.sort_unstable();
-    nodes
-}
-
-/// Calculates the merged vector based on the given aggregation matrix and input vector.
-///
-/// # Arguments
-/// * `mat_v` - The aggregation matrix for voltages.
-/// * `input_vector` - The input vector representing nodes.
-///
-/// # Returns
-/// * A vector containing the merged node indices.
-fn calculate_merged_vector(mat_v: &CscMatrix<f64>, input_vector: &DVector<f64>) -> DVector<i64> {
-    (&mat_v.clone().transpose() * input_vector).map(|x| x as i64)
-}
-
-/// Extracts PV, PQ, and EXT nodes from the reordered structure.
-///
-/// # Arguments
-/// * `mats` - Power flow matrix resource.
-/// * `input_vector` - The vector representing the current node structure.
-///
-/// # Returns
-/// * A tuple containing PV nodes, PQ nodes, and EXT nodes as vectors.
-fn extract_pv_pq_ext_nodes(
-    mats: &PowerFlowMat,
-    input_vector: &DVector<f64>,
-) -> (Vec<i64>, Vec<i64>, Vec<i64>) {
-    let (npv, npq) = (mats.npv, mats.npq);
-    let ext_idx = npv + npq;
-
-    let pq_nodes: Vec<i64> = mats.from_perm[0..npq]
-        .iter()
-        .map(|&idx| input_vector[idx] as i64)
-        .collect();
-    let pv_nodes: Vec<i64> = mats.from_perm[npq..ext_idx]
-        .iter()
-        .map(|&idx| input_vector[idx] as i64)
-        .collect();
-    let ext_nodes: Vec<i64> = mats.from_perm[ext_idx..]
-        .iter()
-        .map(|&idx| input_vector[idx] as i64)
-        .collect();
-
-    (pv_nodes, pq_nodes, ext_nodes)
-}
-
-/// Filters and remaps the nodes based on the given merged vector and total node count.
-///
-/// # Arguments
-/// * `pv_nodes` - PV nodes vector.
-/// * `pq_nodes` - PQ nodes vector.
-/// * `ext_nodes` - EXT nodes vector.
-/// * `merged_v_vector` - The vector containing merged node indices.
-/// * `total_nodes` - The total number of nodes before merging.
-///
-/// # Returns
-/// * A tuple containing the filtered PV, PQ, EXT nodes, and the mapping from old to new indices.
-fn filter_and_remap_nodes(
-    pv_nodes: Vec<i64>,
-    pq_nodes: Vec<i64>,
-    ext_nodes: Vec<i64>,
-    merged_v_vector: &[i64],
-    total_nodes: usize,
-) -> (Vec<i64>, Vec<i64>, Vec<i64>, Vec<i64>) {
-    let merged_v_set: HashSet<_> = merged_v_vector.iter().cloned().collect();
-    let pv_nodes_set: HashSet<_> = pv_nodes.iter().cloned().collect();
-    let pq_nodes_set: HashSet<_> = pq_nodes.iter().cloned().collect();
-    let ext_nodes_set: HashSet<_> = ext_nodes.iter().cloned().collect();
-
-    let pv = pv_nodes_set
-        .intersection(&merged_v_set)
-        .cloned()
-        .collect::<Vec<_>>();
-    let pq = pq_nodes_set
-        .intersection(&merged_v_set)
-        .cloned()
-        .collect::<Vec<_>>();
-    let ext = ext_nodes_set
-        .intersection(&merged_v_set)
-        .cloned()
-        .collect::<Vec<_>>();
-
-    if ext.is_empty() {
-        panic!("cannot find ext grid after merge!");
+pub(crate) fn reduce_switch_nodes(world: &mut World) {
+    if world.get_resource::<SwitchModel>() == Some(&SwitchModel::Merge) {
+        if world
+            .resource::<NodeMapping>()
+            .iter()
+            .all(|(original, merged)| original == merged)
+        {
+            world.remove_resource::<NodeAggRes>();
+            return;
+        }
+        world
+            .run_system_once(node_aggregation_system.pipe(handle_node_merge))
+            .unwrap();
     }
-
-    let mut pv = pv;
-    let mut pq = pq;
-    let mut ext = ext;
-    pv.sort_unstable();
-    pq.sort_unstable();
-    ext.sort_unstable();
-
-    let mut old_to_new = vec![-1; total_nodes];
-    for (new_idx, &old_idx) in merged_v_vector.iter().enumerate() {
-        old_to_new[old_idx as usize] = new_idx as i64;
-    }
-
-    pv.iter_mut()
-        .chain(pq.iter_mut())
-        .chain(ext.iter_mut())
-        .for_each(|x| *x = old_to_new[*x as usize]);
-
-    (pv, pq, ext, old_to_new)
-}
-
-/// Updates the power flow matrix based on the new node structure after aggregation.
-///
-/// # Arguments
-/// * `mats` - Power flow matrix resource to be updated.
-/// * `pv` - PV nodes vector.
-/// * `pq` - PQ nodes vector.
-/// * `ext` - EXT nodes vector.
-/// * `mat` - Aggregation matrix.
-/// * `mat_v` - Aggregation matrix for voltages.
-/// * `new_total_nodes` - The new total number of nodes after merging.
-fn update_power_flow_matrix(
-    mats: &mut PowerFlowMat,
-    pv: Vec<i64>,
-    pq: Vec<i64>,
-    ext: Vec<i64>,
-    mat: &CscMatrix<f64>,
-    mat_v: &CscMatrix<f64>,
-    new_total_nodes: usize,
-) {
-    let mut to_perm = vec![0; new_total_nodes];
-    let mut from_perm = vec![0; new_total_nodes];
-    let n_bus_re = pq.len() + pv.len();
-    for (i, &v) in pq.iter().enumerate() {
-        to_perm[v as usize] = i;
-        from_perm[i] = v as usize;
-    }
-    for (i, &v) in pv.iter().enumerate() {
-        to_perm[v as usize] = pq.len() + i;
-        from_perm[pq.len() + i] = v as usize;
-    }
-    for (i, &v) in ext.iter().enumerate() {
-        to_perm[v as usize] = n_bus_re + i;
-        from_perm[n_bus_re + i] = v as usize;
-    }
-    mats.to_perm = to_perm;
-    mats.from_perm = from_perm;
-
-    mats.npq = pq.len();
-    mats.npv = pv.len();
-    mats.y_bus = mat.transpose().cast() * &mats.y_bus * &mat.cast();
-    mats.s_bus = mat.transpose().cast() * &mats.s_bus;
-    mats.v_bus_init = mat_v.transpose().cast() * &mats.v_bus_init;
 }
 
 #[cfg(test)]
-#[allow(unused_imports)]
-mod tests {
-    use std::{env, fs};
+#[path = "switch_tests.rs"]
+mod tests;
 
-    use bevy_ecs::system::RunSystemOnce;
-    use nalgebra_sparse::CsrMatrix;
-    use serde_json::{Map, Value};
-
-    use crate::{
-        basic::{
-            ecs::{network::*, post_processing::PostProcessing},
-            sparse::{self, conj::RealImage},
-        },
-        io::pandapower::{load_pandapower_json, load_pandapower_json_obj},
-    };
-
-    use super::*;
-
-    /// Loads a JSON object from a string.
-    fn load_json_from_str(file_content: &str) -> Result<Map<String, Value>, std::io::Error> {
-        let parsed: Value = serde_json::from_str(&file_content)?;
-        let obj: Map<String, Value> = parsed.as_object().unwrap().clone();
-        Ok(obj)
-    }
-
-    /// Loads a JSON object from a file.
-    fn load_json(file_path: &str) -> Result<Map<String, Value>, std::io::Error> {
-        let file_content = fs::read_to_string(file_path).expect("Error reading network file");
-        let obj = load_json_from_str(&file_content);
-        obj
-    }
-
-    #[test]
-    /// Tests the node merging logic using union-find (disjoint set).
-    fn test_node_merge() {
-        let nodes = vec![1, 2, 3, 4, 5, 6, 7];
-        let switches = vec![
-            Switch {
-                bus: 2,
-                element: 3,
-                et: SwitchType::SwitchTwoBuses,
-                z_ohm: 0.0,
-            },
-            Switch {
-                bus: 3,
-                element: 4,
-                et: SwitchType::SwitchTwoBuses,
-                z_ohm: 0.0,
-            },
-            Switch {
-                bus: 5,
-                element: 6,
-                et: SwitchType::SwitchTwoBuses,
-                z_ohm: 0.0,
-            },
-            Switch {
-                bus: 6,
-                element: 7,
-                et: SwitchType::SwitchTwoBuses,
-                z_ohm: 0.0,
-            },
-        ];
-
-        let switch_states = vec![
-            SwitchState(true),
-            SwitchState(true),
-            SwitchState(false),
-            SwitchState(true),
-        ];
-
-        let mut uf = NodeMerge::new(&nodes);
-
-        for (switch, state) in switches.iter().zip(switch_states.iter()) {
-            if **state {
-                if switch.et == SwitchType::SwitchTwoBuses {
-                    uf.union(switch.bus as u64, switch.element as u64);
-                }
-            }
-        }
-
-        assert_eq!(uf.find(2), uf.find(3));
-        assert_eq!(uf.find(3), uf.find(4));
-        assert_ne!(uf.find(5), uf.find(6));
-        assert_eq!(uf.find(6), uf.find(7));
-    }
-
-    #[test]
-    /// Tests the entire power flow ECS system, including switch processing.
-    fn test_node_agg_mat() {
-        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-        let folder = format!("{}/cases/test/", dir);
-        let name = folder.to_owned() + "/new_input_PFLV_modified.json";
-        let json = load_json(&name).unwrap();
-        let json: Map<String, Value> = json
-            .get("pp_network")
-            .and_then(|v| v.as_object())
-            .unwrap()
-            .clone();
-        let net = load_pandapower_json_obj(&json);
-        let mut pf_net = PowerGrid::default();
-        pf_net.world_mut().insert_resource(PPNetwork(net));
-        pf_net.init_pf_net();
-        pf_net
-            .world_mut()
-            .run_system_once(process_switch_state)
-            .unwrap();
-        // 3. 运行系统并获取结果矩阵 `mat` 和 `mat_v`
-        let (mat, mat_v) = pf_net
-            .world_mut()
-            .run_system_once(node_aggregation_system)
-            .unwrap();
-
-        // 4. 获取节点映射
-        let node_mapping = pf_net.world().get_resource::<NodeMapping>().unwrap();
-
-        let mut nodes: Vec<_> = node_mapping.keys().cloned().collect();
-        nodes.sort();
-
-        // 5. 设置测试节点和目标节点
-        let merged_nodes = [12, 28, 30];
-        let target_node = 0; // 合并的目标节点
-
-        // 6. 构造节点向量并与 `mat_v` 相乘，验证 `mat_v` 的合并效果
-        let input_vector = DVector::from_iterator(nodes.len(), nodes.iter().map(|&x| x as f64));
-        let result_vector_v = &mat_v.clone().transpose_as_csr() * &input_vector;
-
-        // 确保向量维度符合预期
-        assert_eq!(
-            result_vector_v.len(),
-            nodes.len() - merged_nodes.len(),
-            "Result vector dimension mismatch"
-        );
-
-        // 检查 `mat_v` 乘完向量后的合并效果
-        for node in &merged_nodes {
-            assert_eq!(
-                result_vector_v.map(|x| x as i32).as_slice().contains(node),
-                false,
-                "Node {} should be zero after merging in mat_v",
-                node
-            );
-        }
-
-        // 7. 检查 `mat` 的合并效果，确保节点 `0` 是 `12 + 28 + 30` 的累加
-        let result_vector = &mat.transpose_as_csr() * &input_vector;
-        let expected_sum: f64 = merged_nodes.iter().map(|&n| n as f64).sum();
-
-        assert_eq!(
-            result_vector[target_node], expected_sum,
-            "Node 0 should equal the sum of nodes 12, 28, 30 in mat"
-        );
-        println!("All node merges and calculations are correct!");
-    }
-
-    #[test]
-    /// Tests the entire power flow ECS system, including switch processing.
-    fn test_node_agg_pf_mats() {
-        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-        let folder = format!("{}/cases/test/", dir);
-        let name = folder.to_owned() + "/new_input_PFLV_modified.json";
-        let json = load_json(&name).unwrap();
-        let json: Map<String, Value> = json
-            .get("pp_network")
-            .and_then(|v| v.as_object())
-            .unwrap()
-            .clone();
-        let net = load_pandapower_json_obj(&json);
-        let mut pf_net = PowerGrid::default();
-        pf_net.world_mut().insert_resource(PPNetwork(net));
-        pf_net.init_pf_net();
-        pf_net
-            .world_mut()
-            .run_system_once(process_switch_state)
-            .unwrap();
-        // Step 3: Run system and retrieve result matrices
-        let (mat, mat_v) = pf_net
-            .world_mut()
-            .run_system_once(node_aggregation_system)
-            .unwrap();
-
-        // Step 4: Retrieve node mapping and generate input vector
-        let node_mapping = pf_net.world().get_resource::<NodeMapping>().unwrap();
-        let nodes = get_sorted_nodes(node_mapping);
-        let input_vector = DVector::from_iterator(nodes.len(), nodes.iter().map(|&x| x as f64));
-        let merged_v_vector = calculate_merged_vector(&mat_v, &input_vector);
-
-        // Step 5: Extract PV, PQ, EXT nodes from the reordered structure
-        let mats = pf_net.world().get_resource::<PowerFlowMat>().unwrap();
-        let (pv_nodes, pq_nodes, ext_nodes) = extract_pv_pq_ext_nodes(mats, &input_vector);
-
-        // Step 6: Filter and remap nodes, verify that only nodes 12, 28, 30 are merged
-        let (pv, pq, ext, old_to_new) = filter_and_remap_nodes(
-            pv_nodes,
-            pq_nodes,
-            ext_nodes,
-            merged_v_vector.as_slice(),
-            mats.v_bus_init.len(),
-        );
-
-        // Check that nodes 12, 28, 30 have been merged (old_to_new contains -1 for these)
-        assert_eq!(old_to_new[12], -1, "Node 12 was not merged correctly.");
-        assert_eq!(old_to_new[28], -1, "Node 28 was not merged correctly.");
-        assert_eq!(old_to_new[30], -1, "Node 30 was not merged correctly.");
-
-        // Step 7: Verify that the total number of nodes is now 28
-        let new_total_nodes = merged_v_vector.len();
-        assert_eq!(
-            new_total_nodes, 28,
-            "Total nodes after merging should be 28."
-        );
-
-        // Verify that nodes 29 and 30 are swapped in the reordered structure
-        let reordered_v_before: Vec<i64> = mats
-            .from_perm
-            .iter()
-            .map(|&idx| input_vector[idx] as i64)
-            .collect();
-        assert_eq!(
-            reordered_v_before[29], 30,
-            "Node 29 should map to position 30 after reordering."
-        );
-        assert_eq!(
-            reordered_v_before[30], 29,
-            "Node 30 should map to position 29 after reordering."
-        );
-
-        // Step 8: Update PowerFlowMat and verify permutation vector dimensions
-        let mut mats = pf_net
-            .world_mut()
-            .get_resource_mut::<PowerFlowMat>()
-            .unwrap();
-        update_power_flow_matrix(&mut mats, pv, pq, ext, &mat, &mat_v, new_total_nodes);
-        assert_eq!(
-            mats.to_perm.len(),
-            new_total_nodes,
-            "to_perm length should match new total nodes."
-        );
-        assert_eq!(
-            mats.from_perm.len(),
-            new_total_nodes,
-            "from_perm length should match new total nodes."
-        );
-
-        // Step 9: Check resulting matrices (optional, for further verification)
-        assert_eq!(
-            mats.y_bus.nrows(),
-            new_total_nodes,
-            "Y bus matrix should have dimensions matching new total nodes."
-        );
-        assert_eq!(
-            mats.v_bus_init.nrows(),
-            new_total_nodes,
-            "V bus init matrix should have dimensions matching new total nodes."
-        );
-    }
-
-    #[test]
-    /// Tests the power flow calculation and generation of aggregation matrix.
-    fn test_ecs_pf_switch() {
-        let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-        let folder = format!("{}/cases/test/", dir);
-        let name = folder.to_owned() + "/new_input_PFLV_modified.json";
-        let json = load_json(&name).unwrap();
-        let json: Map<String, Value> = json
-            .get("pp_network")
-            .and_then(|v| v.as_object())
-            .unwrap()
-            .clone();
-        let net = load_pandapower_json_obj(&json);
-        let mut pf_net = PowerGrid::default();
-        pf_net.world_mut().insert_resource(PPNetwork(net));
-        pf_net.init_pf_net();
-        let mut node_process_schedule = Schedule::default();
-
-        node_process_schedule.add_systems(
-            (
-                process_switch_state,
-                (node_aggregation_system.pipe(handle_node_merge)),
-            )
-                .chain(),
-        );
-        node_process_schedule.run(pf_net.world_mut());
-        let mat = pf_net.world().resource::<PowerFlowMat>();
-        println!("{:?}", mat.v_bus_init);
-        pf_net.run_pf();
-        pf_net.post_process();
-        pf_net.print_res_bus();
-    }
-}
+#[cfg(test)]
+#[path = "open_line_tests.rs"]
+mod open_line_tests;
