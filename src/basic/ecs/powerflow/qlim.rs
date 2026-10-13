@@ -1,16 +1,11 @@
-use std::ops::DerefMut;
-
 use bevy_app::prelude::*;
 use bevy_ecs::{prelude::*, system::SystemParam};
 use nalgebra::DVector;
 
 use crate::{
-    basic::{
-        ecs::{
-            elements::*,
-            powerflow::init::{PQBus, PVBus},
-        },
-        sparse::cast::Cast,
+    basic::ecs::{
+        elements::*,
+        powerflow::init::{PQBus, PVBus, SlackBus},
     },
     prelude::ecs::network::SolverStage::*,
 };
@@ -25,13 +20,34 @@ pub struct QLimEnv<'w, 's> {
     buses: Res<'w, NodeLookup>,
     common: Res<'w, PFCommonData>,
     res: Res<'w, PowerFlowResult>,
-    mat: ResMut<'w, PowerFlowMat>,
+    mat: Res<'w, PowerFlowMat>,
     res_convergence: ResMut<'w, ConvergedResult>,
+    pass: ResMut<'w, super::prepare::SolvePass>,
     node_agg: Option<Res<'w, NodeAggRes>>,
     cache: Option<Res<'w, crate::basic::newtonpf::NewtonCache>>,
-    generators:
-        Query<'w, 's, (&'static TargetBus, &'static PQLim), (With<TargetPMW>, With<TargetVmPu>)>,
-    pf_bus: Query<'w, 's, &'static mut SBusInjPu, With<PVBus>>,
+    cached_result: Option<Res<'w, super::prepare::CachedNewtonResult>>,
+    generators: Query<
+        'w,
+        's,
+        (&'static TargetBusMatrixIndex, Option<&'static PQLim>),
+        (With<TargetPMW>, With<TargetVmPu>, Without<OutOfService>),
+    >,
+    pf_bus: Query<'w, 's, (&'static BusMatrixIndex, &'static SBusInjPu)>,
+    roles: Query<'w, 's, (Option<&'static PVBus>, Option<&'static SlackBus>)>,
+}
+
+/// Solver constraint state; the device injection remains unchanged.
+/// Retained across parameter updates; full initialization resets bus types.
+#[derive(Component)]
+#[component(storage = "SparseSet")]
+pub struct QLimited {
+    pub q_pu: f64,
+}
+
+#[derive(Clone, Copy)]
+struct BusQLimits {
+    min: f64,
+    max: f64,
 }
 
 /// Checks if reactive power output of PV buses exceeds their generator Q limits.
@@ -50,28 +66,38 @@ pub struct QLimEnv<'w, 's> {
 /// - This relies on [`NonLinearSchedulePlugin`] and `[StructureUpdatePlugin]`.
 ///
 /// # Notes:
-/// - Assumes only **one generator per bus**, or at least uses the first found.
+/// - Combines the Q limits of in-service generators sharing a PV bus.
 /// - Requires consistent ordering with matrix reordering / aggregation structure.
 fn modify_qlim_system(
     mut cmd: Commands,
     mut event: MessageWriter<NodeTypeChangeEvent>,
     env: QLimEnv,
+    mut limits: Local<Vec<Option<BusQLimits>>>,
 ) {
     let QLimEnv {
         buses,
         common,
         res,
-        mut mat,
+        mat,
         mut res_convergence,
+        mut pass,
         node_agg,
         cache,
+        cached_result,
         generators,
-        mut pf_bus,
+        pf_bus,
+        roles,
     } = env;
 
+    if !res.converged {
+        return;
+    }
     let n = res.v.len();
     let mut sbus_res = DVector::zeros(n);
-    if let Some(c) = cache.as_ref().filter(|c| c.s_calc.len() == n) {
+    if let Some(c) = cache
+        .as_ref()
+        .filter(|c| cached_result.is_some() && c.s_calc.len() == n)
+    {
         for (perm_idx, &orig_idx) in mat.from_perm.iter().enumerate() {
             sbus_res[orig_idx] = c.s_calc[perm_idx];
         }
@@ -87,43 +113,68 @@ fn modify_qlim_system(
         }
     }
 
-    let sbus_res = match &node_agg {
-        Some(node_agg) => &node_agg.expand_mat.cast() * &sbus_res,
-        None => sbus_res,
-    };
+    // Constraints belong to the electrical node, so combine all generators
+    // and fixed injections in each ideal-switch group before checking Q.
+    let merged_index = |i: usize| node_agg.as_ref().map_or(i, |a| a.original_to_merged[i]);
+    limits.resize(n, None);
+    limits.fill(None);
+    for (bus, lim) in &generators {
+        let entry = &mut limits[merged_index(bus.0)];
+        let (min, max) = lim.map_or((f64::NEG_INFINITY, f64::INFINITY), |l| (l.q.min, l.q.max));
+        let total = entry.get_or_insert(BusQLimits { min: 0.0, max: 0.0 });
+        total.min += min;
+        total.max += max;
+    }
+    let mut injections = vec![0.0; n];
+    for (index, s) in &pf_bus {
+        injections[merged_index(index.0)] += s.0.im;
+    }
     let mut structure_change = false;
-    generators
-        .iter()
-        .map(|d| {
-            let bus = d.0.0;
-            let e = buses.get_entity(bus).unwrap();
-            (e, bus, d.1)
-        })
-        .for_each(|(e, bus, lim)| {
-            if !pf_bus.contains(e) {
-                return;
+    for (bus, limit) in limits.iter().enumerate() {
+        let Some(limit) = limit else {
+            continue;
+        };
+        let original = node_agg.as_ref().map_or(bus, |a| a.representatives[bus]);
+        let Some(entity) = buses.get_by_index(original) else {
+            continue;
+        };
+        let Ok((pv, slack)) = roles.get(entity) else {
+            continue;
+        };
+        if pv.is_none() || slack.is_some() {
+            continue;
+        }
+        let q_mvar = (sbus_res[bus].im - injections[bus]) * common.sbase;
+        let bound = if q_mvar < limit.min {
+            Some(limit.min)
+        } else if q_mvar > limit.max {
+            Some(limit.max)
+        } else {
+            None
+        };
+        if let Some(q_mvar) = bound {
+            // Keep the clamp separate so injection updates do not count it twice.
+            if let Some(a) = &node_agg {
+                for (i, &group) in a.original_to_merged.iter().enumerate() {
+                    if group == bus {
+                        cmd.entity(buses.get_by_index(i).unwrap())
+                            .remove::<PVBus>()
+                            .insert(PQBus);
+                    }
+                }
             }
-            let mut q_target = pf_bus.get_mut(e).unwrap();
-            let q_mvar = (sbus_res[bus as usize].im - q_target.0.im) * common.sbase;
-            let qlim = &lim.q;
-            // SBusInjPu at a PV bus holds the NON-generator injection (e.g.
-            // -Q_load); the generator's Q is a free variable and not part of
-            // it (which is exactly why `q_mvar` above equals the gen output).
-            // Clamping must therefore ADD the limited gen output on top of
-            // the existing injection — overwriting it would erase the load.
-            if q_mvar < qlim.min {
-                structure_change = true;
-                cmd.entity(e).remove::<PVBus>().insert(PQBus);
-                q_target.deref_mut().0.im += qlim.min / common.sbase;
-            }
-            if q_mvar > qlim.max {
-                structure_change = true;
-                cmd.entity(e).remove::<PVBus>().insert(PQBus);
-                q_target.deref_mut().0.im += qlim.max / common.sbase;
-            }
-        });
+            cmd.entity(entity).remove::<PVBus>().insert((
+                PQBus,
+                QLimited {
+                    q_pu: q_mvar / common.sbase,
+                },
+            ));
+            structure_change = true;
+        }
+    }
     if structure_change {
-        mat.v_bus_init.clone_from(&res.v);
+        pass.continuation = true;
+        pass.voltage = Some(res.v.clone());
         res_convergence.converged = NonlinearConvType::Continue;
         event.write(NodeTypeChangeEvent);
     }
@@ -133,7 +184,7 @@ fn modify_qlim_system(
 /// by converting PV buses to PQ when violations are detected during power flow simulation.
 ///
 /// # Responsibilities
-/// - Adds the [`modify_qlim_system`] to check generator Q output after each NR iteration.
+/// - Checks generator Q output after each complete AC solve.
 /// - Ensures compatibility with the power flow structure update system and nonlinear solver schedule.
 ///
 /// # Plugin Dependencies
@@ -157,7 +208,6 @@ impl Plugin for QLimPlugin {
             //panic!("QLimPlugin requires StructureUpdatePlugin to be added before it.");
             app.add_plugins(NonLinearSchedulePlugin);
         }
-        app.init_resource::<crate::basic::newtonpf::NewtonCache>();
         app.add_systems(Update, modify_qlim_system.in_set(AfterSolve));
     }
 }

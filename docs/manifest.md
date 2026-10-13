@@ -8,13 +8,13 @@
   RustPower uses Bevy ECS to construct its core architecture. All physical entities (buses, generators, lines, etc.) are modeled as components, and behaviors are implemented as systems and plugins.
 
 - **PandaPower as input source**  
-  Power network data can be imported from `csv` and `json` files, providing compatibility with a wide range of real-world test cases.
+  Supported basic network elements can be converted from pandapower `csv` and `json` files into RustPower's native ECS model. AC power-flow results have been validated on selected IEEE benchmark systems; this conversion does not provide full pandapower feature compatibility.
 
 - **Native ECS data schema (from 0.3.0)**  
   Since version `0.3.0`, RustPower includes native ECS component definitions under `elements/`, allowing full ECS-native modeling without reliance on external Pandapower imports.
 
 - **High-Performance Python Bindings (from 0.5.0, enhanced in 0.5.2)**  
-  A transactional Python API allows seamless integration with the Python data science ecosystem (Pandas, NumPy) while maintaining Rust's performance. Supports DCPF warm starts, and matrix caching.
+  A transactional Python grid API supports Pandas/NumPy workflows, DCPF warm starts, and matrix caching. Separately, the Python `NewtonSolver` interface provides seamless numerical solver replacement using pandapower's `ppc`/`ppci` matrices and vectors, retaining pandapower's model preparation and surrounding workflow. The solver binding offers zero-copy access to compatible NumPy buffers and zero-allocation result extraction into pre-allocated arrays; the solver still allocates its internal storage and workspaces. See the [integration scope](python_api.md#pandapower-integration-scope).
 
 - **Composable file format via `bevy_archive` (0.5.0)**  
   RustPower introduces a plugin-based snapshot and archive system built on [`bevy_archive`](https://github.com/chengts95/bevy_archive), enabling modular, component-level persistence and state restoration via Apache Arrow / Parquet, TOML, and CSV.
@@ -35,7 +35,15 @@
 - **Q-limit adjustment plugin (`QLimPlugin`)**
   - Automatically checks and enforces generator reactive power limits by dynamically switching PV→PQ bus types during iteration.
 - **Switch plugins (`SwitchPluginTypeA`, `SwitchPluginTypeB`)**
-  - Node-merging or admittance-based modeling of breaker and switch elements.
+  - Native bus-bus switching; choose one plugin. Type A merges closed zero-impedance switches exactly. Type B approximates them with high conductance, which may worsen conditioning.
+  - Both models use conductance `1 / z_ohm` for closed finite switches. The current finite model is resistive; pandapower's `switch_rx_ratio` option is not implemented.
+  - Type A prepares deterministic dense merge mappings when topology changes. Ybus is reduced by mapping its nonzeros directly; injections are summed, and voltage results expand to every original bus. The Newton loop operates only on the reduced arrays.
+  - Voltage control priority is Slack, then PV, then PQ; ties choose the first bus in physical matrix order. Reactive limits combine across generators in a merged node. Bus results keep fixed injections on their original buses and assign the remaining power balance to the representative controller; distributed controller sharing is not modeled.
+  - Switch state, connection, impedance, and removal edits trigger the shared rebuild pipeline at AC/DC preparation. Bus-type changes reuse the physical Ybus and merge mapping. These mappings and matrix indices are derived state, rebuilt after archive loading.
+  - `LineSwitchPlugin` independently supports line-terminal switches; Type A/B include it. Normal line setup builds a closed patch, then switch preparation adjusts affected lines immediately before core Ybus assembly. Any open switch at a terminal disconnects it.
+  - `OpenLinePolicy::PreserveCharging` (default) eliminates the floating terminal and retains charging; `DisableBranch` removes the entire branch contribution. Insert the policy resource before adding the plugin, or update it later; policy changes trigger preparation. Repeated rebuilds restore the current normal model before applying terminal state. An independent `OutOfService` marker always wins.
+  - Line switches resolve to a line Entity and `LineTerminal`. `SwitchLineRef`, `OpenLineTerminals`, and voltage reconstruction data are transient caches; archives retain original labels and rebuild these caches. Results report zero current at the open switch and reconstruct the disconnected line-side voltage. Fully disconnected or disabled lines use zero results.
+  - Transformer switches remain unsupported; these plugins do not claim complete pandapower switch compatibility.
 - **Time series plugin (`TimeSeriesDefaultPlugins`)**
   - Provides scheduled actions, time-stepping, and state recording using ECS resources and systems.
 - **Archive plugin (`ArchivePlugin`)**
@@ -302,7 +310,5 @@ let guide = ExportGuidance::file_all(ExportFormat::Csv, "outdir/");
 let manifest = save_world_manifest_with_guidance(&world, &registry, &guide).unwrap();
 manifest.to_file("output.toml", None).unwrap();
 ```
-
-
 
 

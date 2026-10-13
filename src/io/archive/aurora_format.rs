@@ -171,6 +171,7 @@ impl Plugin for ArchivePlugin {
                 out_reg,
                 [
                     BusID,
+                    PPBusID,
                     VBusResult,
                     SBusResult,
                     crate::basic::ecs::post_processing::LineResultData

@@ -2,6 +2,48 @@
 
 RustPower provides a high-performance, transactional Python API designed for both batch analysis, complex iterative workflows (e.g., time-series or optimization), and direct solver acceleration for libraries like `pandapower`.
 
+## Pandapower Integration Scope
+
+RustPower is designed primarily for native Rust modeling and simulation. Its Python API offers two integration paths:
+
+- **Numerical solver replacement (`NewtonSolver`)**: Seamlessly replace the numerical Newton-Raphson stage using pandapower's `ppc`/`ppci` matrices and vectors. Pandapower prepares the electrical model and manages the surrounding workflow; RustPower solves the supplied numerical system. The Python interface provides zero-copy access to compatible NumPy buffers and zero-allocation result extraction directly into pre-allocated output arrays. The solver still allocates internal storage and workspaces. See the [solver integration report](pandapower_integration_report.md).
+- **Network conversion (`PowerGrid.from_pandapower()`)**: Convert supported basic elements into RustPower's native ECS model, where RustPower prepares and solves the network. Basic elements include buses, lines, two-winding transformers, loads, generators, external grids, shunts, and static generators. This does not imply support for every pandapower parameter, element model, option, controller, or analysis feature.
+
+AC power-flow comparisons on selected IEEE benchmark systems validate the tested cases and configurations. Comparisons using pandapower-generated matrices validate the numerical solver; they do not establish feature compatibility for the network importer.
+
+Networks containing switches require an explicit `switch_model="merge"` (native Type A) or `switch_model="admittance"` (native Type B). RustPower detects the need for a choice and raises `ValueError` if none is configured; it does not choose an electrical model implicitly. Both choices enable line-terminal switching. Bus-bus switches (`et="b"`) and line switches (`et="l"`) are supported; transformer switches and unknown switch types are rejected before replacing the grid. Networks without switches need no selection.
+
+```python
+grid = rp.PowerGrid.from_pandapower(net, switch_model="merge")
+# Or configure the grid before importing/loading:
+grid = rp.PowerGrid(switch_model="admittance")
+grid.from_pp_net(net)
+```
+
+`"merge"` exactly merges closed ideal bus-bus switches. `"admittance"` approximates ideal bus-bus switches with high conductance, which can worsen numerical conditioning. Both model finite switch impedance as pure resistance; this does not reproduce pandapower's configurable switch R/X ratio. Choose the model according to your native modeling requirements. Once selected, the model is reused by imports and fixed for that `PowerGrid`; create another grid to change it. `from_pp_net()`, `load_network()`, and `load_parquet_case()` also accept the keyword to make the first selection. Archive loading requires an explicit choice when switches are present, because solver plugin configuration is not stored in case snapshots.
+
+Public voltage arrays (`v`, `v_init`, `compute_dcpf_v()`) retain dense physical bus order and one entry per original bus, including merged buses. Initial voltages for a merged group use its selected representative (slack, then PV, then PQ; lowest physical index breaks ties).
+
+### Bus identifiers during conversion
+
+The importer assigns internal `BusID` values `0..n-1` in bus-table row order and preserves the original `net.bus.index` labels as `PPBusID`. It translates bus references in lines, transformers, loads, generators, external grids, shunts, static generators, and switches. For bus-bus switches, both endpoints are translated; for line/transformer switches, `element` remains the device label. Duplicate bus labels and active elements referencing missing buses raise `ValueError` before replacing the existing Python grid. Disabled elements may retain missing connections; these get separate negative internal labels during conversion.
+
+Python handles, editor arguments, branch endpoint columns, and `bus_id` use internal IDs. `BusHandle.pp_id` and the `pp_bus_id` bus-table column expose the original pandapower label (absent for native buses). These labels are preserved in case and result snapshots. `BusID` remains stable when buses are removed; gaps are valid. `BusHandle.matrix_index` and the `matrix_index` bus-table column expose the current dense physical matrix offset, which can change on a topology rebuild. To align imported results with pandapower:
+
+```python
+results = grid.res_bus.set_index("pp_bus_id").reindex(net.bus.index)
+```
+
+This normalization applies to network ingestion, including CSV cases and `load_network()`. Native grid creation and editing continue to use RustPower IDs.
+
+### Core connectivity and numerical caches
+
+Native callers can obtain a validated connection with `NodeLookup::connection(bus_entity)` and construct reference components directly; preparation generates the label metadata for archives. Runtime connections use world-local Entity references (`FromBusRef`, `ToBusRef`, `TargetBusRef`, and resolved switch bus references). Label components remain the API/archive representation; topology preparation resolves new or deliberately changed labels and preserves established Entity identity. Deleting a bus and reusing its label cannot reconnect an existing Entity reference. Disabled elements may retain unresolved references, but get no matrix indices until their connections are valid.
+
+The core assigns `BusMatrixIndex` and compact `FromBusMatrixIndex`, `ToBusMatrixIndex`, and `TargetBusMatrixIndex` components during preparation. Matrix assembly, injections, AC/DC state updates, Q limits, and SIMD result extraction use these caches directly. Newton iterations continue to operate on numerical arrays. `NodeLookup` provides label-to-Entity, Entity-to-matrix-index, and matrix-index-to-Entity access at boundaries. Solver permutation is separate from the physical matrix offset.
+
+Topology preparation validates references and refreshes caches, including bus scales on same-size replacement. Native callers can use `elements::topology::prepare_topology(world)` to receive validation errors before rebuilding, and should request `FullRebuildEvent` after topology changes. Case archives store labels and reconstruct Entity references and indices in the receiving world; these runtime caches are not serialized.
+
 ## Installation
 
 ```bash
@@ -12,10 +54,10 @@ pip install rustpower
 
 ## Core Workflows
 
-1. **Scenario A: Batch Analysis** — Ingest a network from pandapower or a CSV-ZIP file, solve, and analyze DataFrame results.
+1. **Scenario A: Batch Analysis** — Convert supported basic elements from a pandapower network or CSV-ZIP file, solve with RustPower's ECS model, and analyze DataFrame results.
 2. **Scenario B: Parameter Loops & Sweeps** — Modify element properties (`load.p_mw = ...`) in place and re-solve. Runs an incremental warm-start solve with cached matrices.
 3. **Scenario C: Transactional Topology Research** — Add or remove buses, lines, loads, etc., using the `grid.edit()` context manager with atomicity and fused batch insertions.
-4. **Scenario D: Direct SciPy / Pandapower Solver Backend** — Use `rustpower.solver.NewtonSolver` with $O(\text{nnz})$ CSR-to-CSC permutation to accelerate external power flow pipelines.
+4. **Scenario D: Direct SciPy / Pandapower Solver Backend** — Use `rustpower.solver.NewtonSolver` with pandapower's `ppc`/`ppci` data and $O(\text{nnz})$ CSR-to-CSC permutation to replace the numerical solve in external power flow pipelines.
 
 ---
 
@@ -35,7 +77,7 @@ grid = rp.PowerGrid.from_pandapower(net)
 # grid = rp.PowerGrid("cases/IEEE118/data.zip")
 
 # Enable solver optimizations (optional)
-grid.enable_cache(True)       # Reuses symbolic LU factorization
+grid.enable_cache(True)       # Already enabled by default; reuses symbolic caches
 grid.enable_dcpf_init(True)   # Warm-starts voltage angles via DCPF
 
 # Solve power flow
@@ -107,7 +149,7 @@ grid.solve(max_iter=30)
 
 ### 5. Low-Level Stateful Solver (`rustpower.solver.NewtonSolver`)
 
-For direct integration with pandapower's `ppci` or custom SciPy code:
+For seamless numerical solver replacement using pandapower's `ppc`/`ppci` data or custom SciPy code, pass the externally prepared matrices, vectors, bus partition, and permutation to `NewtonSolver`. This path retains pandapower's model preparation and is independent of `PowerGrid.from_pandapower()`:
 
 ```python
 from rustpower.solver import NewtonSolver
@@ -132,6 +174,21 @@ if converged:
     s_calc = solver.get_scalc()      # Exact bus power injections
 ```
 
+Rust array indexing and the solver's sparse matrix representation use `usize`, a pointer-sized unsigned integer (64 bits on 64-bit platforms). NumPy/SciPy index arrays commonly use signed `int32` or `int64`; the binding converts these into owned `usize` buffers during setup. This type conversion is required for those signed inputs by the current solver representation. Integer index arrays are therefore outside the zero-copy claim for compatible numerical buffers.
+
+For repeated solves, allocate NumPy output buffers once and reuse them:
+
+```python
+v_out = np.empty(solver.n_buses, dtype=np.complex128)
+vm_out = np.empty(solver.n_buses, dtype=np.float64)
+scalc_out = np.empty(solver.n_buses, dtype=np.complex128)
+
+if solver.solve(max_iter=15, tol=1e-8):
+    solver.extract_results(v=v_out, vm=vm_out, scalc=scalc_out)
+```
+
+`extract_results()` borrows writable, contiguous 1D NumPy buffers and writes results directly in original bus order, without allocating temporary result arrays. After a solve, power injections use the populated solver cache, so their extraction also avoids heap allocations. Compatible contiguous `complex128` inputs are borrowed directly at the Python binding boundary; the solver separately allocates internal storage and workspaces, and context setup copies and reorders data into that storage. Zero-copy interface access does not mean an allocation-free solver. Convenience getters such as `get_voltage()` return newly allocated arrays.
+
 ---
 
 ## API Reference
@@ -139,15 +196,17 @@ if converged:
 ### `PowerGrid`
 
 #### Constructors & Ingestion
-- `PowerGrid(case_path=None, qlim=False, f_hz=50.0, sn_mva=100.0)`: Initialize a grid. Can load from a CSV-ZIP case file or start empty.
-- `PowerGrid.from_pandapower(net) -> PowerGrid`: Classmethod to construct a `PowerGrid` directly from a pandapower `net` object.
-- `grid.from_pp_net(net)`: Ingest a pandapower `net` into an existing `PowerGrid` instance.
-- `grid.load_network(net)`: Ingest an internal `rustpower.Network` struct.
+- `PowerGrid(case_path=None, qlim=False, *, switch_model=None, **kwargs)`: Initialize a grid. Can load from a CSV-ZIP case file or start empty.
+- `PowerGrid.from_pandapower(net, qlim=False, *, switch_model=None) -> PowerGrid`: Classmethod to construct a `PowerGrid` directly from a pandapower `net` object. Set `qlim=True` to enforce generator reactive-power limits.
+- `grid.from_pp_net(net, *, switch_model=None)`: Ingest a pandapower `net` into an existing `PowerGrid` instance.
+- `grid.load_network(net, *, switch_model=None)`: Ingest an internal `rustpower.Network` struct.
 
 #### Solvers & Algorithms
-- `solve(max_iter=10, tol=1e-8, v_init=None) -> SolveReport`: Run power flow analysis.
-  - `v_init`: Optional complex array in **bus-id order** for custom warm-start.
-- `enable_cache(enable=True)`: Enable or disable Jacobian pattern and symbolic LU factorization caching across solves.
+- `solve(v_init=None, max_iter=None, tol=None) -> SolveReport`: Run power flow analysis.
+  - `v_init`: Optional complex array in **dense physical matrix order** (`matrix_index`) for custom warm-start.
+- `enable_cache(enable=True)`: Enable or disable Newton workspace/Jacobian caching. Enabled by default; the setting survives model rebuilds. Structural changes invalidate affected solver caches automatically.
+- `clear_cache()`: Clear solver caches while preserving the cache policy, model and current Q-limit clamps. Caches are rebuilt at the next solve when enabled.
+- `init_pf()`: Rebuild the model and restore bus classifications from the current device data. With Q limits enabled, this clears previous PV-to-PQ clamps so the next solve determines them again. Ordinary parameter updates preserve existing clamps.
 - `enable_dcpf_init(enable=True)`: Enable or disable automatic DC power flow angle initialization prior to Newton-Raphson.
 - `compute_dcpf_v() -> np.ndarray`: Compute DCPF voltage vector (complex, bus-id ordered) without running full AC power flow.
 - `apply_dcpf_init()`: Manually solve DCPF and update internal `v_bus_init`.
@@ -174,20 +233,36 @@ if converged:
 - `grid.iterations -> int`: Number of iterations taken.
 - `grid.post_process()`: Manually trigger result extraction (normally executed lazily).
 
+#### Optional connection check
+
+`grid.validate() -> list[str]` lists missing or invalid bus/line references, including out-of-service elements. It checks the current grid and changes nothing. An empty list means no reference issues were found; this does not test power-flow convergence or every electrical parameter. Saving does not run this check automatically.
+
+```python
+for problem in grid.validate():
+    print(problem)
+```
+
+Archives store connection labels. After loading, a connection may attach to a replacement bus with the same ID. This can be intentional: reconnecting retained elements to a replacement bus is a valid use case. `validate()` reports missing or invalid references; it cannot decide whether a valid connection is the one you intended. Existing runtime Entity references still keep their original identity.
+
 #### Persistence (Apache Arrow / Parquet)
 - `grid.get_parquet_case() -> bytes`: Export grid topology and parameters to an in-memory ZIP of Parquet files.
 - `grid.get_parquet_results() -> bytes`: Export simulation results to an in-memory ZIP of Parquet files.
-- `grid.load_parquet_case(zip_bytes: bytes)`: Load and reconstruct ECS state from a ZIP of Parquet files.
+- `grid.load_parquet_case(zip_bytes: bytes, *, switch_model=None)`: Load and reconstruct ECS state from a ZIP of Parquet files.
 
 #### Transactional Editing (`grid.edit()`)
-- `add_bus(vn_kv, name=None, vm_min=0.9, vm_max=1.1, zone=0) -> (int, BusHandle)`
+
+Zones are string labels. Pandapower numeric zones are converted to text; missing zones become `""`. Use `bus_handle.zone` to read or update the label.
+
+Pandapower line switches (`et="l"`) are honored when a switch model is explicitly selected. An open terminal disconnects that bus while retaining the line's charging at the connected terminal; opening both terminals disconnects the entire line. Switch targets use the original line table indices, including sparse or reordered indices. Both explicit switch models include this line-terminal behavior; transformer switching remains unsupported. The line-switch plugin prepares terminal state and the effective patch before core Ybus assembly. Line results reconstruct the disconnected line-side voltage; fully disconnected and out-of-service lines publish zero results. Runtime Entity references and terminal caches are rebuilt after archive loading.
+
+- `add_bus(vn_kv, name=None, vm_min=0.9, vm_max=1.1, zone="") -> (int, BusHandle)`
 - `add_line(from_bus, to_bus, length_km, std_type=None, r_ohm_per_km=0.1, x_ohm_per_km=0.1, c_nf_per_km=0.0, g_us_per_km=0.0, parallel=1, max_i_ka=0.0, name=None) -> LineHandle`
 - `add_load(bus, p_mw=0.0, q_mvar=0.0, const_z_percent=0.0, const_i_percent=0.0, sn_mva=None, scaling=1.0, in_service=True, name=None) -> LoadHandle`
 - `add_gen(bus, p_mw=0.0, vm_pu=1.0, sn_mva=None, min_q_mvar=-1e9, max_q_mvar=1e9, min_p_mw=-1e9, max_p_mw=1e9, scaling=1.0, in_service=True, name=None) -> GenHandle`
 - `add_ext_grid(bus, vm_pu=1.0, va_degree=0.0, name=None) -> ExtGridHandle`
 - `add_trafo(hv_bus, lv_bus, sn_mva=100.0, vn_hv_kv=110.0, vn_lv_kv=10.0, vk_percent=10.0, vkr_percent=1.0, pfe_kw=0.0, i0_percent=0.0, shift_degree=0.0, tap_pos=0.0, tap_neutral=0.0, tap_step_percent=1.0, tap_min=-10.0, tap_max=10.0, in_service=True, name=None) -> TrafoHandle`
 - `add_shunt(bus, q_mvar=0.0, p_mw=0.0, vn_kv=110.0, step=1, max_step=1, in_service=True, name=None) -> ShuntHandle`
-- `remove(handle)`: Mark an element for deletion.
+- `remove(handle)`: Defer deletion until commit. Deleting a bus keeps its connected elements and puts them out of service. Reconnect them before enabling them again. Foreign-grid and stale handles are rejected; abort preserves queued removals.
 
 ---
 

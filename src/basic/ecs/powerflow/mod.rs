@@ -11,6 +11,7 @@ pub mod init; // System and resource initialization logic
 pub mod mutation; // Standardized parameter-mutation pipeline (message bus + consumer)
 pub mod nonlinear_schedule;
 pub mod pf_init; // Re-runnable full-initialization schedule (PFInit)
+pub mod prepare; // Shared event consumption and cache preparation boundary
 pub mod qlim; // Generator reactive power limit handling
 pub mod result_extract; // Snapshot and result extraction into simulation state
 pub mod structure_update; // Dynamic structural updates triggered by simulation stages

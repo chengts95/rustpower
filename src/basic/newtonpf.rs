@@ -1,7 +1,7 @@
 #![allow(unused)]
 use std::f64::consts::PI;
 
-use super::new_dsdvbus2::JacobianPattern2;
+use super::jacobian_cache::JacobianCache as V4JacobianCache;
 
 use bevy_ecs::prelude::Resource;
 
@@ -10,7 +10,7 @@ use bevy_ecs::prelude::Resource;
 pub struct NewtonCache {
     pub npv: usize,
     pub npq: usize,
-    pub j_pattern: Option<JacobianPattern2>,
+    pub j_pattern: Option<V4JacobianCache>,
     pub j_values: Vec<f64>,
     pub ibus: DVector<Complex64>,
     #[allow(non_snake_case)]
@@ -20,7 +20,9 @@ pub struct NewtonCache {
     pub v_a: DVector<f64>,
 }
 
-use super::new_dsdvbus3::fill_jacobian_v3;
+#[cfg(feature = "experimental_fused_scalc")]
+use super::new_dsdvbus_fused::fill_jacobian_and_scalc_v4;
+use super::new_dsdvbus4::fill_jacobian_v4;
 use super::solver::Solve;
 use super::sparse::slice::*;
 use nalgebra::*;
@@ -61,7 +63,7 @@ impl<T: Clone + Zero + Scalar + ClosedAddAssign> Slice for CscMatrix<T> {
 // ─── Default solver: newton_pf ────────────────────────────────────────────────
 
 /// Newton-Raphson power flow under the `[PQ | PV | slack]` bus ordering.
-/// Branch-free Jacobian assembly via `JacobianPattern2` + `fill_jacobian_v2`.
+/// Branch-free Jacobian assembly via the V4 cache and inline quadrant starts.
 ///
 /// Requires `Ybus`, `Sbus`, `v_init` already permuted into `[PQ | PV | slack]`:
 /// PQ buses at indices `0..npq`, PV at `npq..npq+npv`, slack at `npq+npv..`.
@@ -97,13 +99,13 @@ pub fn newton_pf<Solver: Solve>(
     let (j_pattern, j_values, ibus, F, s_calc, mut cache_vm, mut cache_va) =
         if let Some(ref mut c) = cache_opt {
             if c.j_pattern.is_none() || c.npv != npv || c.npq != npq {
-                c.j_pattern = Some(JacobianPattern2::build_from_permuted(
+                c.j_pattern = Some(V4JacobianCache::build_from_permuted(
                     Ybus.col_offsets(),
                     Ybus.row_indices(),
                     npv,
                     npq,
                 ));
-                c.j_values = vec![0.0; c.j_pattern.as_ref().unwrap().nnz_j];
+                c.j_values = vec![0.0; c.j_pattern.as_ref().unwrap().j_row_indices.len()];
                 c.ibus = DVector::zeros(n_bus);
                 c.F = DVector::zeros(n_state);
                 c.s_calc = DVector::zeros(n_bus);
@@ -120,13 +122,13 @@ pub fn newton_pf<Solver: Solve>(
                 Some(&mut c.v_a),
             )
         } else {
-            local_j_pattern = Some(JacobianPattern2::build_from_permuted(
+            local_j_pattern = Some(V4JacobianCache::build_from_permuted(
                 Ybus.col_offsets(),
                 Ybus.row_indices(),
                 npv,
                 npq,
             ));
-            local_j_values = vec![0.0; local_j_pattern.as_ref().unwrap().nnz_j];
+            local_j_values = vec![0.0; local_j_pattern.as_ref().unwrap().j_row_indices.len()];
             local_ibus = DVector::zeros(n_bus);
             local_F = DVector::zeros(n_state);
             local_s_calc = DVector::zeros(n_bus);
@@ -140,6 +142,24 @@ pub fn newton_pf<Solver: Solve>(
                 None,
             )
         };
+    #[cfg(feature = "experimental_fused_scalc")]
+    let mut v_norm = v.map(|e| e.simd_signum());
+    #[cfg(feature = "experimental_fused_scalc")]
+    fill_jacobian_and_scalc_v4::<false>(
+        Ybus,
+        v.as_slice(),
+        v_norm.as_slice(),
+        ibus.as_mut_slice(),
+        s_calc.as_mut_slice(),
+        &j_pattern.j_col_ptrs,
+        &j_pattern.pq_ends,
+        &j_pattern.active_ends,
+        &j_pattern.diag_ptrs,
+        npv,
+        npq,
+        j_values,
+    );
+    #[cfg(not(feature = "experimental_fused_scalc"))]
     csc_matvec_and_scalc(
         Ybus.col_offsets(),
         Ybus.row_indices(),
@@ -167,6 +187,7 @@ pub fn newton_pf<Solver: Solve>(
 
     let mut v_m = v.map(|e| e.simd_modulus());
     let mut v_a = v.map(|e| e.simd_argument());
+    #[cfg(not(feature = "experimental_fused_scalc"))]
     let mut v_norm = v.map(|e| e.simd_signum());
 
     let Ap = unsafe {
@@ -183,12 +204,16 @@ pub fn newton_pf<Solver: Solve>(
     };
 
     for it in 0..max_iter {
-        fill_jacobian_v3(
+        #[cfg(not(feature = "experimental_fused_scalc"))]
+        fill_jacobian_v4::<false>(
             Ybus,
             v.as_slice(),
             v_norm.as_slice(),
             s_calc.as_slice(),
-            j_pattern,
+            &j_pattern.j_col_ptrs,
+            &j_pattern.pq_ends,
+            &j_pattern.active_ends,
+            &j_pattern.diag_ptrs,
             npv,
             npq,
             j_values,
@@ -219,6 +244,22 @@ pub fn newton_pf<Solver: Solve>(
         v_norm.zip_apply(&v_a, |a, va| *a = Complex64::from_polar(1.0, va));
         v.zip_zip_apply(&v_norm, &v_m, |a, e, vm| *a = vm * e);
 
+        #[cfg(feature = "experimental_fused_scalc")]
+        fill_jacobian_and_scalc_v4::<false>(
+            Ybus,
+            v.as_slice(),
+            v_norm.as_slice(),
+            ibus.as_mut_slice(),
+            s_calc.as_mut_slice(),
+            &j_pattern.j_col_ptrs,
+            &j_pattern.pq_ends,
+            &j_pattern.active_ends,
+            &j_pattern.diag_ptrs,
+            npv,
+            npq,
+            j_values,
+        );
+        #[cfg(not(feature = "experimental_fused_scalc"))]
         csc_matvec_and_scalc(
             Ybus.col_offsets(),
             Ybus.row_indices(),
@@ -243,8 +284,6 @@ pub fn newton_pf<Solver: Solve>(
             }
             return Ok((v, it + 1));
         }
-
-  
     }
 
     if let (Some(target_vm), Some(target_va)) = (cache_vm, cache_va) {

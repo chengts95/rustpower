@@ -2,7 +2,7 @@ use bevy_ecs::prelude::Resource;
 use nalgebra::DVector;
 use num_complex::Complex64;
 
-use super::newtonpf::{newton_pf, NewtonCache};
+use super::newtonpf::{NewtonCache, newton_pf};
 use super::solver::Solve;
 use nalgebra_sparse::CscMatrix;
 
@@ -167,14 +167,6 @@ pub fn newton_pf_dcpf_serial<Solver: Solve>(
         .map_err(|e| (e.to_string(), v_init.clone(), 0))?;
 
     newton_pf(
-        Ybus,
-        Sbus,
-        &v_dcpf,
-        npv,
-        npq,
-        tolerance,
-        max_iter,
-        solver,
-        cache_opt,
+        Ybus, Sbus, &v_dcpf, npv, npq, tolerance, max_iter, solver, cache_opt,
     )
 }
