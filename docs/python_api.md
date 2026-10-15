@@ -11,7 +11,7 @@ RustPower is designed primarily for native Rust modeling and simulation. Its Pyt
 
 AC power-flow comparisons on selected IEEE benchmark systems validate the tested cases and configurations. Comparisons using pandapower-generated matrices validate the numerical solver; they do not establish feature compatibility for the network importer.
 
-Networks containing switches require an explicit `switch_model="merge"` (native Type A) or `switch_model="admittance"` (native Type B). RustPower detects the need for a choice and raises `ValueError` if none is configured; it does not choose an electrical model implicitly. Both choices enable line-terminal switching. Bus-bus switches (`et="b"`) and line switches (`et="l"`) are supported; transformer switches and unknown switch types are rejected before replacing the grid. Networks without switches need no selection.
+Networks containing switches require an explicit `switch_model="merge"` (native Type A) or `switch_model="admittance"` (native Type B). RustPower detects the need for a choice and raises `ValueError` if none is configured; it does not choose an electrical model implicitly. Both choices enable line and two-winding transformer terminal switching. Bus-bus switches (`et="b"`) and line switches (`et="l"`) are supported. Two-winding transformer switches (`et="t"`) support closed, HV-open, LV-open, and both-open states. An open winding carries no terminal current; the connected winding retains magnetizing current and core losses. Three-winding transformer switches and unknown types are rejected before replacing the grid. Networks without switches need no selection.
 
 ```python
 grid = rp.PowerGrid.from_pandapower(net, switch_model="merge")
@@ -23,6 +23,16 @@ grid.from_pp_net(net)
 `"merge"` exactly merges closed ideal bus-bus switches. `"admittance"` approximates ideal bus-bus switches with high conductance, which can worsen numerical conditioning. Both model finite switch impedance as pure resistance; this does not reproduce pandapower's configurable switch R/X ratio. Choose the model according to your native modeling requirements. Once selected, the model is reused by imports and fixed for that `PowerGrid`; create another grid to change it. `from_pp_net()`, `load_network()`, and `load_parquet_case()` also accept the keyword to make the first selection. Archive loading requires an explicit choice when switches are present, because solver plugin configuration is not stored in case snapshots.
 
 Public voltage arrays (`v`, `v_init`, `compute_dcpf_v()`) retain dense physical bus order and one entry per original bus, including merged buses. Initial voltages for a merged group use its selected representative (slack, then PV, then PQ; lowest physical index breaks ties).
+
+The CIGRE MV example can be used without removing its closed transformer switches:
+
+```python
+import pandapower.networks as pn
+
+net = pn.create_cigre_network_mv(with_der=False)
+grid = rp.PowerGrid.from_pandapower(net, switch_model="merge")
+grid.solve()
+```
 
 ### Bus identifiers during conversion
 
@@ -226,7 +236,7 @@ if solver.solve(max_iter=15, tol=1e-8):
 #### Results
 - `grid.res_bus -> pd.DataFrame`: Bus results (`vm_pu`, `va_degree`, `p_mw`, `q_mvar`).
 - `grid.res_line -> pd.DataFrame`: Line results (`p_from_mw`, `q_from_mvar`, `p_to_mw`, `q_to_mvar`, `pl_mw`, `ql_mvar`, `i_ka`, `vm_from_pu`, `va_from_degree`, `vm_to_pu`, `va_to_degree`, `loading_percent`).
-- `grid.res_trafo -> pd.DataFrame`: Transformer results.
+- `grid.res_trafo -> pd.DataFrame`: Transformer results. `trafo_id` is the original transformer table label (missing for native transformers without a label).
 - `grid.v -> np.ndarray`: Complex voltage vector in **bus-id order**. Assignable for warm-starts (`grid.v = custom_v`).
 - `grid.y_bus() -> scipy.sparse.csc_matrix`: Admittance matrix.
 - `grid.converged -> bool`: Whether the last solve converged.
@@ -253,7 +263,7 @@ Archives store connection labels. After loading, a connection may attach to a re
 
 Zones are string labels. Pandapower numeric zones are converted to text; missing zones become `""`. Use `bus_handle.zone` to read or update the label.
 
-Pandapower line switches (`et="l"`) are honored when a switch model is explicitly selected. An open terminal disconnects that bus while retaining the line's charging at the connected terminal; opening both terminals disconnects the entire line. Switch targets use the original line table indices, including sparse or reordered indices. Both explicit switch models include this line-terminal behavior; transformer switching remains unsupported. The line-switch plugin prepares terminal state and the effective patch before core Ybus assembly. Line results reconstruct the disconnected line-side voltage; fully disconnected and out-of-service lines publish zero results. Runtime Entity references and terminal caches are rebuilt after archive loading.
+Pandapower line switches (`et="l"`) are honored when a switch model is explicitly selected. An open terminal disconnects that bus while retaining the line's charging at the connected terminal; opening both terminals disconnects the entire line. Switch targets use the original line table indices, including sparse or reordered indices. Both explicit switch models include this line-terminal behavior. Two-winding transformer switches also support open terminals. The connected winding retains the transformer core and magnetizing losses; the disconnected winding has zero terminal current. Opening both windings disconnects the transformer. The line-switch plugin prepares terminal state and the effective patch before core Ybus assembly. Line results reconstruct the disconnected line-side voltage; fully disconnected and out-of-service lines publish zero results. Runtime Entity references and terminal caches are rebuilt after archive loading. Transformer results likewise reconstruct the voltage on the disconnected winding. Fully disconnected and out-of-service transformers publish zero device results. Opening a branch can leave buses without a supply; automatic removal of such islands is not part of this terminal model.
 
 - `add_bus(vn_kv, name=None, vm_min=0.9, vm_max=1.1, zone="") -> (int, BusHandle)`
 - `add_line(from_bus, to_bus, length_km, std_type=None, r_ohm_per_km=0.1, x_ohm_per_km=0.1, c_nf_per_km=0.0, g_us_per_km=0.0, parallel=1, max_i_ka=0.0, name=None) -> LineHandle`

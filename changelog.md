@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.4] - 2026-10-15
+
+### Fixed
+
+- Fix the full CIGRE MV case with all switches present (#14).
+- Support open switches on either winding of a two-winding transformer. Keep magnetizing current and core losses on the connected side.
+- Apply transformer switch patches in `TransformerSwitchPlugin`, using Kron reduction. No extra buses are added.
+- Keep original transformer IDs through loading and archives. Expose them as `trafo_id` in Python results.
+- Fix Python builds after renaming `Readme.md` to `README.md`.
+
 ## [0.5.3]  
 
 ### Changed

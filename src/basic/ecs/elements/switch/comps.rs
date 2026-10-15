@@ -98,6 +98,14 @@ pub struct SwitchLineRef {
     pub(crate) label: i64,
     pub(crate) world_id: u64,
 }
+/// Resolved transformer and winding terminal. Rebuilt after archive loading.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct SwitchTransformerRef {
+    pub entity: Entity,
+    pub terminal: TransformerTerminal,
+    pub(crate) label: i64,
+    pub(crate) world_id: u64,
+}
 /// Effective terminal state; present only on lines with an active open switch.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OpenLineTerminals {
@@ -120,3 +128,21 @@ pub(crate) struct OpenLineModel {
 }
 #[derive(Resource, Clone, Copy)]
 pub(crate) struct PreparedOpenLinePolicy(pub OpenLinePolicy);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransformerTerminal {
+    Hv,
+    Lv,
+}
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OpenTransformerTerminals {
+    pub hv: bool,
+    pub lv: bool,
+}
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct OpenTransformerModel {
+    pub terminals: OpenTransformerTerminals,
+    pub voltage_ratio: num_complex::Complex64,
+}
+#[derive(Resource)]
+pub(crate) struct TransformerSwitchEnabled;

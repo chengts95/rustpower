@@ -8,9 +8,9 @@ import rustpower as rp
 
 
 class LineSwitchTests(unittest.TestCase):
-    def assert_matches(self, net):
+    def assert_matches(self, net, switch_model="merge"):
         pp.runpp(net, init="flat", tolerance_mva=1e-10)
-        grid = rp.PowerGrid.from_pandapower(net, switch_model="merge")
+        grid = rp.PowerGrid.from_pandapower(net, switch_model=switch_model)
         grid.solve(tol=1e-10)
         self.assertTrue(grid.converged)
         buses = grid.res_bus.set_index("bus_id").reindex(net.bus.index)
@@ -20,9 +20,9 @@ class LineSwitchTests(unittest.TestCase):
 
     def test_cigre_open_line_switches(self):
         net = pn.create_cigre_network_mv(with_der=False)
-        self.assertTrue(net.switch.loc[net.switch.et == "t", "closed"].all())
-        net.switch = net.switch[net.switch.et != "t"].copy()
-        self.assert_matches(net)
+        for model in ("merge", "admittance"):
+            with self.subTest(model=model):
+                self.assert_matches(net, switch_model=model)
 
     def test_open_ends_and_charging(self):
         for ends in ((), ("from_bus",), ("to_bus",), ("from_bus", "to_bus")):
@@ -47,10 +47,6 @@ class LineSwitchTests(unittest.TestCase):
 
     def test_sparse_and_reordered_line_indices(self):
         net = pn.create_cigre_network_mv(with_der=False)
-        # This fixture also contains closed transformer switches. Their model
-        # is unsupported; omit them explicitly to exercise line switching.
-        self.assertTrue(net.switch.loc[net.switch.et == "t", "closed"].all())
-        net.switch = net.switch[net.switch.et != "t"].copy()
         mapping = {int(i): 100 + int(i) * 3 for i in net.line.index}
         net.line.index = [mapping[int(i)] for i in net.line.index]
         line_switches = net.switch.et == "l"
@@ -88,15 +84,40 @@ class LineSwitchTests(unittest.TestCase):
     @unittest.skipUnless("arrow" in rp.features(), "requires Parquet support")
     def test_archive_preserves_switch_target(self):
         net = pn.create_cigre_network_mv(with_der=False)
-        # This fixture also contains closed transformer switches. Their model
-        # is unsupported; omit them explicitly to exercise line switching.
-        self.assertTrue(net.switch.loc[net.switch.et == "t", "closed"].all())
-        net.switch = net.switch[net.switch.et != "t"].copy()
         grid = self.assert_matches(net)
         restored = rp.PowerGrid(switch_model="merge")
         restored.load_parquet_case(grid.get_parquet_case())
         restored.solve(tol=1e-10)
         np.testing.assert_allclose(restored.res_bus.set_index("bus_id").vm_pu, net.res_bus.vm_pu, atol=1e-8, rtol=0)
+
+    def test_closed_transformer_switch_targets_and_reimport(self):
+        net = pn.create_cigre_network_mv(with_der=False)
+        mapping = {int(i): 100 + 7 * int(i) for i in net.trafo.index}
+        net.trafo.index = [mapping[int(i)] for i in net.trafo.index]
+        net.trafo = net.trafo.iloc[::-1]
+        mask = net.switch.et == "t"
+        net.switch.loc[mask, "element"] = net.switch.loc[mask, "element"].map(mapping)
+        grid = self.assert_matches(net)
+        self.assertEqual(grid.validate(), [])
+        old = grid.bus(0)
+        switch = net.switch.index[mask][0]
+        target = int(net.switch.at[switch, "element"])
+        for field, invalid, pattern in (
+            ("element", 999, "missing transformer"),
+            ("bus", 14, "transformer terminal"),
+        ):
+            with self.subTest(field=field):
+                previous = net.switch.at[switch, field]
+                net.switch.at[switch, field] = invalid
+                with self.assertRaisesRegex(ValueError, pattern):
+                    grid.from_pp_net(net)
+                self.assertEqual(old.id, 0)
+                self.assertTrue(grid.solve(tol=1e-10).converged)
+                net.switch.at[switch, field] = previous
+        # The whole network, including closed transformer switches, still loads.
+        grid.from_pp_net(net)
+        self.assertTrue(grid.solve(tol=1e-10).converged)
+        self.assertEqual(int(net.switch.at[switch, "element"]), target)
 
     def test_invalid_switch_references(self):
         net = pn.case14()
