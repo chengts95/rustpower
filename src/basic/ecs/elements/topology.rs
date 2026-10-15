@@ -156,6 +156,84 @@ fn collect_connections(
     Ok(pending)
 }
 
+fn resolve_transformer_switch(
+    world: &World,
+    lookup: &NodeLookup,
+    switch: &Switch,
+    bus: Entity,
+    previous: Option<&SwitchTransformerRef>,
+    excluded: &HashSet<Entity>,
+) -> Result<SwitchTransformerRef, String> {
+    let entity = if let Some(old) = previous.filter(|r| r.label == switch.element) {
+        if old.world_id != lookup.world_id {
+            return Err("transformer reference belongs to another world".into());
+        }
+        if excluded.contains(&old.entity) || world.get::<TransformerDevice>(old.entity).is_none() {
+            return Err(format!(
+                "switch.element references a deleted transformer entity {:?}",
+                old.entity
+            ));
+        }
+        old.entity
+    } else {
+        let mut found = None;
+        for e in world
+            .iter_entities()
+            .filter(|e| !excluded.contains(&e.id()) && e.contains::<TransformerDevice>())
+        {
+            if e.get::<TransformerID>()
+                .is_some_and(|id| id.0 == switch.element)
+            {
+                if found.replace(e.id()).is_some() {
+                    return Err(format!("duplicate TransformerID {}", switch.element));
+                }
+            }
+        }
+        found.ok_or_else(|| {
+            format!(
+                "switch.element references missing transformer {}",
+                switch.element
+            )
+        })?
+    };
+    let endpoint = |label: Option<i64>, old: Option<BusConnection>| {
+        resolve(
+            label
+                .or_else(|| old.map(|r| r.label))
+                .ok_or("transformer is missing an endpoint")?,
+            old,
+            lookup,
+        )
+        .map(|r| r.entity)
+    };
+    let from = endpoint(
+        world.get::<FromBus>(entity).map(|r| r.0),
+        world.get::<FromBusRef>(entity).map(|r| r.0),
+    )?;
+    let to = endpoint(
+        world.get::<ToBus>(entity).map(|r| r.0),
+        world.get::<ToBusRef>(entity).map(|r| r.0),
+    )?;
+    if (bus == from) == (bus == to) {
+        return Err(format!(
+            "switch bus is not a unique endpoint of transformer {}",
+            switch.element
+        ));
+    }
+    Ok(SwitchTransformerRef {
+        entity,
+        terminal: if bus == from {
+            TransformerTerminal::Hv
+        } else {
+            TransformerTerminal::Lv
+        },
+        label: world
+            .get::<TransformerID>(entity)
+            .map_or(switch.element, |id| id.0),
+        world_id: lookup.world_id,
+    })
+}
+
 fn resolve_switches(
     world: &mut World,
     lookup: &NodeLookup,
@@ -167,6 +245,7 @@ fn resolve_switches(
         SwitchBusRef,
         Option<SwitchOtherBusRef>,
         Option<SwitchLineRef>,
+        Option<SwitchTransformerRef>,
     )>,
     String,
 > {
@@ -276,7 +355,20 @@ fn resolve_switches(
             } else {
                 None
             };
-            Ok((e, SwitchBusRef(bus), other, line))
+            let transformer =
+                if switch.et == crate::io::pandapower::SwitchType::SwitchBusTransformer {
+                    Some(resolve_transformer_switch(
+                        world,
+                        lookup,
+                        switch,
+                        bus.entity,
+                        world.get::<SwitchTransformerRef>(e),
+                        excluded,
+                    )?)
+                } else {
+                    None
+                };
+            Ok((e, SwitchBusRef(bus), other, line, transformer))
         })();
         match connections {
             Ok(connection) => pending.push(connection),
@@ -365,6 +457,23 @@ pub fn validate_references(world: &mut World) -> Vec<String> {
             }
             if !element.contains::<ToBus>() && !element.contains::<ToBusRef>() {
                 errors.push(format!("{description}: missing ToBus connection"));
+            }
+        }
+        if let (Some(switch), Some(bus)) = (
+            element
+                .get::<Switch>()
+                .filter(|s| s.et == crate::io::pandapower::SwitchType::SwitchBusTransformer),
+            switch_bus,
+        ) {
+            if let Err(error) = resolve_transformer_switch(
+                world,
+                &lookup,
+                switch,
+                bus,
+                element.get::<SwitchTransformerRef>(),
+                &HashSet::new(),
+            ) {
+                errors.push(format!("{description}: {error}"));
             }
         }
         if let Some(id) = element
@@ -514,6 +623,10 @@ pub fn connected_elements_for_removal(world: &World, removed: &HashSet<Entity>) 
             .iter()
             .filter_map(|&e| world.get::<LineID>(e).map(|v| v.0))
             .collect();
+        let transformers: HashSet<_> = disabled
+            .iter()
+            .filter_map(|&e| world.get::<TransformerID>(e).map(|v| v.0))
+            .collect();
         for e in world.iter_entities() {
             if removed.contains(&e.id()) {
                 continue;
@@ -521,6 +634,12 @@ pub fn connected_elements_for_removal(world: &World, removed: &HashSet<Entity>) 
             if e.get::<ChildOf>().is_some_and(|p| disabled.contains(&p.0))
                 || e.get::<SwitchLineRef>()
                     .is_some_and(|r| disabled.contains(&r.entity))
+                || e.get::<SwitchTransformerRef>()
+                    .is_some_and(|r| disabled.contains(&r.entity))
+                || e.get::<Switch>().is_some_and(|s| {
+                    s.et == crate::io::pandapower::SwitchType::SwitchBusTransformer
+                        && transformers.contains(&s.element)
+                })
                 || e.get::<Switch>().is_some_and(|s| {
                     s.et == crate::io::pandapower::SwitchType::SwitchBusLine
                         && lines.contains(&s.element)
@@ -613,7 +732,7 @@ pub fn prepare_topology(world: &mut World) -> Result<(), String> {
             ));
         }
     }
-    for (e, bus, other, line) in switches {
+    for (e, bus, other, line, transformer) in switches {
         let mut switch = world.get_mut::<Switch>(e).unwrap();
         switch.bus = bus.0.label;
         if let Some(other) = other {
@@ -622,8 +741,16 @@ pub fn prepare_topology(world: &mut World) -> Result<(), String> {
         if let Some(line) = line {
             switch.element = line.label;
         }
+        if let Some(transformer) = transformer {
+            switch.element = transformer.label;
+        }
         let mut entity = world.entity_mut(e);
         entity.insert(bus);
+        if let Some(transformer) = transformer {
+            entity.insert(transformer);
+        } else {
+            entity.remove::<SwitchTransformerRef>();
+        }
         if let Some(other) = other {
             entity.insert(other);
         } else {

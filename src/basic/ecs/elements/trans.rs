@@ -17,6 +17,10 @@ pub struct Port4MatPatch(pub Matrix2<Complex<f64>>);
 //     pub from_port: Vector2<i64>,
 //     pub to_port: Vector2<i64>,
 // }
+/// External transformer table label, independent of matrix indices.
+#[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TransformerID(pub i64);
+
 /// Represents the electrical and modeling parameters of a transformer.
 #[derive(Component, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TransformerDevice {
@@ -240,6 +244,7 @@ impl From<&Transformer> for TransformerBundle {
 pub struct TransSnapShotReg;
 impl SnaptShotRegGroup for TransSnapShotReg {
     fn register_snap_shot(reg: &mut SnapshotRegistry) {
+        reg.register::<TransformerID>();
         reg.register_named::<TransformerDevice>("trafo");
         #[cfg(feature = "arrow")]
         {
@@ -261,14 +266,12 @@ pub mod trans_systems {
         q: Query<(Entity, &TransformerDevice), Without<OutOfService>>,
     ) {
         q.iter().for_each(|(entity, transformer)| {
-            setup_transformer_admittance(&mut commands, entity, transformer);
+            commands
+                .entity(entity)
+                .insert(Port4MatPatch(closed_transformer_patch(transformer)));
         });
     }
-    fn setup_transformer_admittance(
-        commands: &mut Commands,
-        parent: Entity,
-        dev: &TransformerDevice,
-    ) {
+    pub(crate) fn closed_transformer_patch(dev: &TransformerDevice) -> Matrix2<Complex<f64>> {
         let (ratio, shift_deg, z_scale, tap_factor) = dev.effective_tap_params();
         let is_lv = dev.is_lv_tap();
 
@@ -340,6 +343,6 @@ pub mod trans_systems {
         let y_base = dev.sn_mva / (dev.vn_lv_kv * dev.vn_lv_kv);
         let g_physical = g_mat_pu.scale(y_base);
 
-        commands.entity(parent).insert(Port4MatPatch(g_physical));
+        g_physical
     }
 }

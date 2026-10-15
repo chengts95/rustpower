@@ -27,3 +27,6 @@ __pycache__/
 # Build files
 *.rs.bk
 */.ipynb_checkpoints/
+
+# Local reproductions for GitHub issues
+/issue solving/

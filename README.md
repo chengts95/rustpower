@@ -69,7 +69,7 @@ RustPower leverages the **Bevy Plugin System**, allowing users to extend the sol
 - **`DcpfNewtonPfPlugin`**: Solves DC power flow to initialize bus voltage angles prior to AC power flow.
 - **`IwamotoPlugin`**: Implements Iwamoto's optimal step-size multiplier method for robust convergence under extreme load conditions.
 - **`QLimPlugin`**: Automatically enforces generator reactive power limits by dynamically switching PV buses to PQ during the iteration process.
-- **`SwitchPluginTypeA` / `SwitchPluginTypeB`**: Optional bus-bus switch modeling (exact node merging or admittance approximation). Both include **`LineSwitchPlugin`**, which also works independently for line-terminal switching.
+- **`SwitchPluginTypeA` / `SwitchPluginTypeB`**: Optional bus-bus switch modeling (exact node merging or admittance approximation). Both include **`LineSwitchPlugin`** and **`TransformerSwitchPlugin`** for line and two-winding transformer terminal switching. Each terminal plugin can also be used independently.
 - **`TimeSeriesDefaultPlugins`**: Quasi-static time-series simulations with scheduled events.
 - **`ArchivePlugin`**: High-performance ECS state persistence system.
 

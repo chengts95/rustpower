@@ -1414,6 +1414,15 @@ impl PowerGrid {
                 )));
             }
         }
+        let mut transformers = std::collections::HashMap::new();
+        for (row, transformer) in net.trafo.iter().flatten().enumerate() {
+            let label = transformer.index.unwrap_or(row as i64);
+            if transformers.insert(label, transformer).is_some() {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "duplicate transformer label {label}"
+                )));
+            }
+        }
         for s in switches {
             match s.et {
                 SwitchType::SwitchTwoBuses if s.closed => {
@@ -1433,9 +1442,22 @@ impl PowerGrid {
                         ));
                     }
                 }
+                SwitchType::SwitchBusTransformer => {
+                    let transformer = transformers.get(&s.element).ok_or_else(|| {
+                        pyo3::exceptions::PyValueError::new_err(format!(
+                            "switch references missing transformer {}",
+                            s.element
+                        ))
+                    })?;
+                    if (s.bus == transformer.hv_bus) == (s.bus == transformer.lv_bus) {
+                        return Err(pyo3::exceptions::PyValueError::new_err(
+                            "transformer switch bus must identify exactly one transformer terminal",
+                        ));
+                    }
+                }
                 _ => {
                     return Err(pyo3::exceptions::PyValueError::new_err(
-                        "unsupported switch element type: only bus-bus ('b') and line ('l') switches are supported",
+                        "unsupported switch: three-winding transformers and unknown element types are not supported",
                     ));
                 }
             }
@@ -1506,6 +1528,7 @@ impl PowerGrid {
                     )?;
                 }
                 SwitchType::SwitchTwoBuses | SwitchType::SwitchBusLine => {}
+                SwitchType::SwitchBusTransformer => {}
                 _ => {
                     return Err(pyo3::exceptions::PyValueError::new_err(
                         "unsupported switch element type in archive",
@@ -1801,14 +1824,17 @@ impl PowerGrid {
 
     fn get_trafo_results_impl<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let world = self.inner.world_mut();
-        let mut query = world.query::<(&FromBus, &ToBus, &TrafoResultData)>();
+        let mut query =
+            world.query::<(&FromBus, &ToBus, &TrafoResultData, Option<&TransformerID>)>();
         let count = query.iter(world).count();
 
+        let mut ids = Vec::with_capacity(count);
         let mut hv_bus = Vec::with_capacity(count);
         let mut lv_bus = Vec::with_capacity(count);
         let mut data = Vec::with_capacity(count * 13);
 
-        query.iter(world).for_each(|(f, t, d)| {
+        query.iter(world).for_each(|(f, t, d, id)| {
+            ids.push(id.map(|id| id.0));
             hv_bus.push(f.0);
             lv_bus.push(t.0);
             data.extend_from_slice(d.as_slice());
@@ -1838,6 +1864,10 @@ impl PowerGrid {
         let df = pandas.call_method("DataFrame", (py_data_2d,), Some(&kwargs))?;
         df.call_method1("insert", (0, "lv_bus", lv_bus.into_pyarray(py)))?;
         df.call_method1("insert", (0, "hv_bus", hv_bus.into_pyarray(py)))?;
+        let id_kwargs = pyo3::types::PyDict::new(py);
+        id_kwargs.set_item("dtype", "Int64")?;
+        let ids = pandas.call_method("array", (ids,), Some(&id_kwargs))?;
+        df.call_method1("insert", (0, "trafo_id", ids))?;
         Ok(df)
     }
 }
