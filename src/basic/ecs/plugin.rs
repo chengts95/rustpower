@@ -41,28 +41,46 @@ pub struct SwitchPluginTypeB;
 /// Optional line-terminal switching. Defaults to preserving open-end charging.
 #[derive(Default)]
 pub struct LineSwitchPlugin;
-impl Plugin for LineSwitchPlugin {
-    fn build(&self, app: &mut App) {
-        use super::powerflow::{
-            prepare::PFPrepare, result_extract::VBusUpdatePlugin,
-            structure_update::StructureUpdatePlugin,
-        };
-        if !app.is_plugin_added::<StructureUpdatePlugin>() {
-            app.add_plugins(StructureUpdatePlugin);
-        }
-        if !app.is_plugin_added::<VBusUpdatePlugin>() {
-            app.add_plugins(VBusUpdatePlugin);
-        }
-        app.init_resource::<super::elements::switch::OpenLinePolicy>();
+#[derive(Resource)]
+struct SwitchTrackingInstalled;
+
+fn install_terminal_switch_tracking(app: &mut App) {
+    use super::powerflow::{
+        prepare::PFPrepare, result_extract::VBusUpdatePlugin,
+        structure_update::StructureUpdatePlugin,
+    };
+    if !app.is_plugin_added::<StructureUpdatePlugin>() {
+        app.add_plugins(StructureUpdatePlugin);
+    }
+    if !app.is_plugin_added::<VBusUpdatePlugin>() {
+        app.add_plugins(VBusUpdatePlugin);
+    }
+    if !app.world().contains_resource::<SwitchTrackingInstalled>() {
+        app.insert_resource(SwitchTrackingInstalled);
         app.add_systems(
             PFPrepare,
             super::elements::switch::detect_switch_changes
                 .before(super::powerflow::structure_update::structure_update),
         );
-        if app.world().contains_resource::<PowerFlowMat>() {
-            app.world_mut()
-                .write_message(super::powerflow::structure_update::FullRebuildEvent);
-        }
+    }
+    if app.world().contains_resource::<PowerFlowMat>() {
+        app.world_mut()
+            .write_message(super::powerflow::structure_update::FullRebuildEvent);
+    }
+}
+impl Plugin for LineSwitchPlugin {
+    fn build(&self, app: &mut App) {
+        install_terminal_switch_tracking(app);
+        app.init_resource::<super::elements::switch::OpenLinePolicy>();
+    }
+}
+/// Optional two-winding transformer switches. Keeps connected-winding magnetizing current.
+#[derive(Default)]
+pub struct TransformerSwitchPlugin;
+impl Plugin for TransformerSwitchPlugin {
+    fn build(&self, app: &mut App) {
+        install_terminal_switch_tracking(app);
+        app.insert_resource(super::elements::switch::TransformerSwitchEnabled);
     }
 }
 
@@ -137,6 +155,9 @@ fn install_switch_model(app: &mut App, model: super::elements::switch::SwitchMod
     app.insert_resource(model);
     if !app.is_plugin_added::<LineSwitchPlugin>() {
         app.add_plugins(LineSwitchPlugin);
+    }
+    if !app.is_plugin_added::<TransformerSwitchPlugin>() {
+        app.add_plugins(TransformerSwitchPlugin);
     }
     if app.world().contains_resource::<PowerFlowMat>() {
         app.world_mut()

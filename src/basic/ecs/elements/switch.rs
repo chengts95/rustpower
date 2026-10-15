@@ -3,7 +3,7 @@ use super::{super::powerflow::systems::PowerFlowMat, *};
 use crate::io::pandapower::SwitchType;
 use bevy_ecs::{prelude::*, system::RunSystemOnce};
 use derive_more::{Deref, DerefMut};
-use nalgebra::{Complex, DVector};
+use nalgebra::{Complex, DVector, Matrix2};
 use nalgebra_sparse::{CooMatrix, CscMatrix};
 use std::collections::HashMap;
 
@@ -263,10 +263,13 @@ pub fn process_switch_state_admit(world: &mut World) {
 }
 pub(crate) fn prepare_switches(world: &mut World) {
     prepare_open_lines(world);
+    prepare_open_transformers(world);
     if let Some(model) = world.get_resource::<SwitchModel>().copied() {
         prepare_switch_model(world, model);
     }
-    if world.contains_resource::<OpenLinePolicy>() {
+    if world.contains_resource::<OpenLinePolicy>()
+        || world.contains_resource::<TransformerSwitchEnabled>()
+    {
         let states: Vec<_> = world
             .query::<(Entity, &Switch, &SwitchState, Has<OutOfService>)>()
             .iter(world)
@@ -346,6 +349,80 @@ fn prepare_open_lines(world: &mut World) {
         ));
     }
     world.insert_resource(PreparedOpenLinePolicy(policy));
+}
+
+/// Reduced physical admittance and floating terminal voltage for one open winding.
+fn open_transformer_patch(
+    dev: &TransformerDevice,
+    terminals: OpenTransformerTerminals,
+) -> (Matrix2<Complex<f64>>, Complex<f64>) {
+    let mut patch = Matrix2::zeros();
+    if terminals.hv == terminals.lv {
+        return (patch, Complex::new(0.0, 0.0));
+    }
+    let (ratio, shift_deg, z_scale, tap_factor) = dev.effective_tap_params();
+    let vk = dev.vk_percent * 0.01 * z_scale;
+    let r = dev.vkr_percent * 0.01 * z_scale;
+    let x = (vk * vk - r * r).max(0.0).sqrt();
+    let half_z = Complex::new(r, x) / (2.0 * dev.parallel as f64);
+    let g = dev.pfe_kw * 0.001 / dev.sn_mva;
+    let y0 = dev.i0_percent * 0.01;
+    let magnetizing = Complex::new(g, -(y0 * y0 - g * g).max(0.0).sqrt()) * dev.parallel as f64
+        / if dev.is_lv_tap() {
+            tap_factor * tap_factor
+        } else {
+            1.0
+        };
+    let denominator = Complex::new(1.0, 0.0) + half_z * magnetizing;
+    let admittance = magnetizing / denominator * (dev.sn_mva / (dev.vn_lv_kv * dev.vn_lv_kv));
+    let tap = Complex::from_polar(ratio, shift_deg.to_radians());
+    let voltage_ratio = if terminals.hv {
+        patch[(1, 1)] = admittance;
+        tap / denominator
+    } else {
+        patch[(0, 0)] = admittance / (ratio * ratio);
+        Complex::new(1.0, 0.0) / (tap * denominator)
+    };
+    (patch, voltage_ratio)
+}
+
+fn prepare_open_transformers(world: &mut World) {
+    let old: Vec<_> = world
+        .query_filtered::<Entity, With<OpenTransformerModel>>()
+        .iter(world)
+        .collect();
+    for e in old {
+        if let Some(dev) = world.get::<TransformerDevice>(e) {
+            let patch = super::trans::trans_systems::closed_transformer_patch(dev);
+            world.entity_mut(e).insert(Port4MatPatch(patch));
+        }
+        world
+            .entity_mut(e)
+            .remove::<(OpenTransformerModel, OpenTransformerTerminals)>();
+    }
+    if !world.contains_resource::<TransformerSwitchEnabled>() {
+        return;
+    }
+    let mut open: HashMap<Entity, OpenTransformerTerminals> = HashMap::new();
+    for (reference, state) in world.query_filtered::<(&SwitchTransformerRef, &SwitchState), (With<Switch>, Without<OutOfService>)>().iter(world) {
+        if state.0 { continue; }
+        let ends = open.entry(reference.entity).or_default();
+        match reference.terminal { TransformerTerminal::Hv => ends.hv = true, TransformerTerminal::Lv => ends.lv = true }
+    }
+    for (e, terminals) in open {
+        let dev = world
+            .get::<TransformerDevice>(e)
+            .expect("validated transformer reference");
+        let (patch, voltage_ratio) = open_transformer_patch(dev, terminals);
+        world.entity_mut(e).insert((
+            Port4MatPatch(patch),
+            terminals,
+            OpenTransformerModel {
+                terminals,
+                voltage_ratio,
+            },
+        ));
+    }
 }
 
 /// Deterministic voltage priority: Slack > PV > PQ, then physical bus order.

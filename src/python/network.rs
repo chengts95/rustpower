@@ -258,6 +258,7 @@ impl Network {
     }
 
     fn extract_trafos(&self, py: Python<'_>, df: Bound<'_, PyAny>) -> PyResult<Vec<Transformer>> {
+        let indices: Vec<i64> = df.getattr("index")?.call_method0("tolist")?.extract()?;
         let hv_bus = Self::get_int_vec(&df, "hv_bus")?;
         let lv_bus = Self::get_int_vec(&df, "lv_bus")?;
         let sn_mva = Self::get_float_vec(&df, "sn_mva")?;
@@ -313,6 +314,7 @@ impl Network {
 
         Ok((0..hv_bus.len())
             .map(|i| Transformer {
+                index: Some(indices[i]),
                 hv_bus: hv_bus[i],
                 lv_bus: lv_bus[i],
                 sn_mva: sn_mva[i],
