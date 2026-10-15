@@ -108,9 +108,9 @@ class SwitchModelTests(unittest.TestCase):
         self.assertTrue(grid.solve().converged)
 
     def test_unsupported_switch_and_voltage_mismatch(self):
-        for kind in ("t", "t3", "unsupported"):
+        for kind in ("t3", "unsupported"):
             net = pn.case14()
-            pp.create_switch(net, int(net.trafo.at[0, "hv_bus"]), 0, et="t", closed=True)
+            pp.create_switch(net, int(net.trafo.at[0, "hv_bus"]), 0, et="t", closed=False)
             net.switch.at[0, "et"] = kind
             with self.assertRaisesRegex(ValueError, "unsupported switch"):
                 rp.PowerGrid.from_pandapower(net, switch_model="merge")

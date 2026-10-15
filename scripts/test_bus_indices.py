@@ -45,10 +45,6 @@ class BusIndexTests(unittest.TestCase):
 
     def test_open_line_with_distinct_bus_and_line_namespaces(self):
         net = pn.create_cigre_network_mv(with_der=False)
-        # This fixture also contains closed transformer switches. Their model
-        # is unsupported; omit them explicitly to exercise line switching.
-        self.assertTrue(net.switch.loc[net.switch.et == "t", "closed"].all())
-        net.switch = net.switch[net.switch.et != "t"].copy()
         pp.toolbox.reindex_buses(net, {i: i * 11 + 100 for i in net.bus.index})
         lines = {i: i * 3 + 900 for i in net.line.index}
         net.line.index = [lines[i] for i in net.line.index]
