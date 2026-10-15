@@ -92,12 +92,13 @@ impl LoadPandapowerNet for World {
             buffer.insert(world, e, PPBusID(bus.index));
         }
 
-        for trafo in net.trafo.iter().flatten() {
+        for (row, trafo) in net.trafo.iter().flatten().enumerate() {
             let mut t: TransformerBundle = trafo.into();
             t.from_bus = FromBus(ids[&trafo.hv_bus]);
             t.to_bus = ToBus(ids[&trafo.lv_bus]);
             let e = world.spawn_empty().id();
             buffer.insert_bundle(world, e, t);
+            buffer.insert(world, e, TransformerID(trafo.index.unwrap_or(row as i64)));
         }
 
         for (row, line) in net.line.iter().flatten().enumerate() {

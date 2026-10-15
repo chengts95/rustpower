@@ -317,3 +317,106 @@ fn deleting_bus_disables_connected_lines_and_their_switches() {
             .full_rebuild
     );
 }
+
+#[test]
+fn transformer_switch_plugin_is_optional_and_rebuilds_from_current_parameters() {
+    use crate::basic::ecs::plugin::TransformerSwitchPlugin;
+    use crate::basic::ecs::post_processing::TrafoResultData;
+    let mut app = App::new();
+    app.add_plugins((BasePFPlugin, StructureUpdatePlugin, VBusUpdatePlugin));
+    let w = app.world_mut();
+    w.insert_resource(PFCommonData {
+        sbase: 100.0,
+        f_hz: 50.0,
+        wbase: 100.0 * std::f64::consts::PI,
+    });
+    for (id, kv) in [(0, 110.0), (1, 20.0)] {
+        let bus = w.spawn(BusID(id)).id();
+        w.get_mut::<VNominal>(bus).unwrap().0.0 = kv;
+    }
+    w.spawn((TargetBus(0), TargetVmPu(1.02), TargetVaDeg(0.0)));
+    w.spawn((TargetBus(1), TargetPMW(-5.0), TargetQMVar(-1.0)));
+    let dev = TransformerDevice {
+        df: 1.0,
+        i0_percent: 0.8,
+        pfe_kw: 80.0,
+        vk_percent: 10.0,
+        vkr_percent: 0.5,
+        shift_degree: 17.0,
+        sn_mva: 40.0,
+        vn_hv_kv: 110.0,
+        vn_lv_kv: 20.0,
+        max_loading_percent: None,
+        parallel: 1,
+        tap: None,
+    };
+    let target = w
+        .spawn((
+            TransformerID(901),
+            FromBus(0),
+            ToBus(1),
+            dev.clone(),
+            TrafoResultData::default(),
+        ))
+        .id();
+    w.spawn((
+        TransformerID(903),
+        FromBus(0),
+        ToBus(1),
+        dev,
+        TrafoResultData::default(),
+    ));
+    let switch = w
+        .spawn((
+            Switch {
+                bus: 0,
+                element: 901,
+                et: SwitchType::SwitchBusTransformer,
+                z_ohm: 0.0,
+            },
+            SwitchState(false),
+        ))
+        .id();
+    w.run_schedule(PFInit);
+    assert!(w.get::<OpenTransformerModel>(target).is_none());
+    let closed = w.get::<Port4MatPatch>(target).unwrap().0;
+    app.add_plugins(TransformerSwitchPlugin);
+    solve(&mut app);
+    let patch = app.world().get::<Port4MatPatch>(target).unwrap().0;
+    assert_eq!(patch[(0, 0)], Complex::new(0.0, 0.0));
+    assert_eq!(patch[(0, 1)], Complex::new(0.0, 0.0));
+    assert!(patch[(1, 1)].norm() > 0.0);
+    assert_eq!(
+        app.world().get::<TrafoResultData>(target).unwrap().i_hv_ka,
+        0.0
+    );
+    solve(&mut app);
+    assert!(
+        !app.world()
+            .resource::<crate::basic::ecs::powerflow::structure_update::LastStructureAction>()
+            .full_rebuild
+    );
+    app.world_mut().get_mut::<SwitchState>(switch).unwrap().0 = true;
+    solve(&mut app);
+    assert_eq!(app.world().get::<Port4MatPatch>(target).unwrap().0, closed);
+    app.world_mut().get_mut::<SwitchState>(switch).unwrap().0 = false;
+    solve(&mut app);
+    app.world_mut()
+        .get_mut::<TransformerDevice>(target)
+        .unwrap()
+        .pfe_kw = 120.0;
+    app.world_mut().write_message(FullRebuildEvent);
+    solve(&mut app);
+    let changed = app.world().get::<Port4MatPatch>(target).unwrap().0;
+    assert!(changed[(1, 1)].re > patch[(1, 1)].re);
+    app.world_mut().write_message(FullRebuildEvent);
+    solve(&mut app);
+    assert_eq!(app.world().get::<Port4MatPatch>(target).unwrap().0, changed);
+    app.world_mut().entity_mut(target).insert(OutOfService);
+    app.world_mut().write_message(FullRebuildEvent);
+    solve(&mut app);
+    assert_eq!(
+        *app.world().get::<TrafoResultData>(target).unwrap(),
+        TrafoResultData::default()
+    );
+}

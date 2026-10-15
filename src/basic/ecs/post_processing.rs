@@ -569,8 +569,20 @@ fn extract_res_branches(
             &TransformerDevice,
             &mut TrafoResultData,
         ),
+        (Without<OutOfService>, Without<OpenTransformerModel>),
+    >,
+    mut open_trafos_q: Query<
+        (
+            &Port4MatPatch,
+            &FromBusMatrixIndex,
+            &ToBusMatrixIndex,
+            &TransformerDevice,
+            &OpenTransformerModel,
+            &mut TrafoResultData,
+        ),
         Without<OutOfService>,
     >,
+    mut offline_trafos_q: Query<&mut TrafoResultData, With<OutOfService>>,
     buses: Query<(&BusMatrixIndex, &VNominal)>,
     lut: Res<NodeLookup>,
     mat: Res<PowerFlowMat>,
@@ -766,6 +778,52 @@ fn extract_res_branches(
                 );
             }
         }
+    }
+    // Only open transformers use this path; closed SIMD loops stay unchanged.
+    for (patch, from, to, dev, model, mut result) in &mut open_trafos_q {
+        if model.terminals.hv && model.terminals.lv {
+            *result.bypass_change_detection() = TrafoResultData::default();
+            continue;
+        }
+        let f = &bus_calc[from.0];
+        let t = &bus_calc[to.0];
+        let v_scale = dev.vn_lv_kv * dev.vn_lv_kv;
+        let flow = compute_two_port_flow_portable(
+            unsafe { &*(patch.0.as_slice().as_ptr() as *const [Complex64; 4]) },
+            f,
+            t,
+            v_scale,
+        );
+        let mut hv = Complex64::new(f.vr, f.vi);
+        let mut lv = Complex64::new(t.vr, t.vi);
+        if model.terminals.hv {
+            hv = model.voltage_ratio * lv;
+        } else {
+            lv = model.voltage_ratio * hv;
+        }
+        let sn_rated = dev.sn_mva * dev.parallel as f64;
+        *result.bypass_change_detection() = TrafoResultData {
+            p_hv_mw: flow.p0_mw,
+            q_hv_mvar: flow.q0_mvar,
+            p_lv_mw: flow.p1_mw,
+            q_lv_mvar: flow.q1_mvar,
+            pl_mw: flow.pl_mw,
+            ql_mvar: flow.ql_mvar,
+            i_hv_ka: flow.i0_norm * v_scale * INV_SQRT3 / dev.vn_hv_kv,
+            i_lv_ka: flow.i1_norm * dev.vn_lv_kv * INV_SQRT3,
+            vm_hv_pu: hv.norm(),
+            va_hv_degree: hv.arg().to_degrees(),
+            vm_lv_pu: lv.norm(),
+            va_lv_degree: lv.arg().to_degrees(),
+            loading_percent: if sn_rated > 0.0 {
+                flow.i0_norm.max(flow.i1_norm) * v_scale * 100.0 / sn_rated
+            } else {
+                0.0
+            },
+        };
+    }
+    for mut result in &mut offline_trafos_q {
+        *result.bypass_change_detection() = TrafoResultData::default();
     }
 }
 

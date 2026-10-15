@@ -43,7 +43,7 @@
   - `LineSwitchPlugin` independently supports line-terminal switches; Type A/B include it. Normal line setup builds a closed patch, then switch preparation adjusts affected lines immediately before core Ybus assembly. Any open switch at a terminal disconnects it.
   - `OpenLinePolicy::PreserveCharging` (default) eliminates the floating terminal and retains charging; `DisableBranch` removes the entire branch contribution. Insert the policy resource before adding the plugin, or update it later; policy changes trigger preparation. Repeated rebuilds restore the current normal model before applying terminal state. An independent `OutOfService` marker always wins.
   - Line switches resolve to a line Entity and `LineTerminal`. `SwitchLineRef`, `OpenLineTerminals`, and voltage reconstruction data are transient caches; archives retain original labels and rebuild these caches. Results report zero current at the open switch and reconstruct the disconnected line-side voltage. Fully disconnected or disabled lines use zero results.
-  - Transformer switches remain unsupported; these plugins do not claim complete pandapower switch compatibility.
+  - `TransformerSwitchPlugin` independently handles two-winding transformer terminals; Type A/B include it. An open winding carries zero terminal current while the connected winding retains magnetizing current and core losses. Both-open and out-of-service transformers contribute zero. Three-winding transformer switches remain unsupported.
 - **Time series plugin (`TimeSeriesDefaultPlugins`)**
   - Provides scheduled actions, time-stepping, and state recording using ECS resources and systems.
 - **Archive plugin (`ArchivePlugin`)**
