@@ -257,6 +257,9 @@ impl Line {
 #[derive(Default, Debug, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 pub struct Transformer {
+    /// Original transformer table label; legacy cases use row order.
+    #[serde(default)]
+    pub index: Option<i64>,
     pub df: f64,
     pub hv_bus: i64,
     pub i0_percent: f64,
@@ -313,6 +316,7 @@ impl Transformer {
         std_type: Option<String>,
     ) -> Self {
         Self {
+            index: None,
             hv_bus,
             lv_bus,
             sn_mva,
