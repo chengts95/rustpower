@@ -796,6 +796,9 @@ impl PowerGrid {
                 ActiveSolver::NewtonRaphson => {}
             }
         }
+        self.inner
+            .world_mut()
+            .remove_resource::<crate::basic::ecs::dcpf::DcpfSolverActive>();
         self.inner.world_mut().insert_resource(sel);
         Ok(())
     }
@@ -816,7 +819,7 @@ impl PowerGrid {
             }
             let world = self.inner.world_mut();
             world.insert_resource(crate::basic::ecs::dcpf::DcpfSolverActive);
-            world.remove_resource::<crate::basic::ecs::plugin::CustomSolverActive>();
+            world.insert_resource(crate::basic::ecs::plugin::ActiveSolver::NewtonRaphson);
         } else {
             let world = self.inner.world_mut();
             world.remove_resource::<crate::basic::ecs::dcpf::DcpfSolverActive>();
