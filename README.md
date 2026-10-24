@@ -27,11 +27,19 @@ For repeated solves, reuse the solver context and NumPy output arrays. `extract_
 
 `PowerGrid.from_pandapower()` converts supported basic network elements into RustPower's own ECS model. Its AC power-flow results have been validated against pandapower on selected IEEE benchmark systems. This conversion does not provide full compatibility with every pandapower element model, parameter, option, controller, or analysis feature. Networks with switches require an explicit `switch_model="merge"` (Type A) or `"admittance"` (Type B); no model is chosen automatically. RustPower's primary focus is native Rust modeling and simulation; see the [Python API guide](docs/python_api.md#pandapower-integration-scope) for the distinction and current switch limitations.
 
+### **Jacobian Assembly**
+
+Conventional slicing and reassembly versus single-pass direct sparse filling:
+
+![Conventional Jacobian slicing and reassembly compared with direct sparse filling](docs/images/block-sparse-prefix-ordering.gif)
+
+With the sparse structure prepared once, RustPower writes numerical values directly into the final compressed sparse column (CSC) Jacobian. The animation is schematic, not a timing comparison; independent columns are shown filling concurrently, while the current implementation is serial.
+
 ---
 
 ## **Performance Comparison**
 
-RustPower is designed for extreme performance and memory efficiency. Below is a comparison between established standards and RustPower on the hot loop (caches Ybus and solver data for an invariant topology).
+RustPower is a power flow calculation library implemented in Rust. Below is a comparison between established standards and RustPower on the hot loop (caches Ybus and solver data for an invariant topology).
 
 ### **Core Solve Time (Newton-Raphson, Hot Loop)**
  
