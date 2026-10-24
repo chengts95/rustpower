@@ -1,5 +1,7 @@
 pub mod branch;
 pub mod dcpf;
+#[cfg(test)]
+pub(crate) mod d2sbus_dv2;
 pub(crate) mod dsbus_dv;
 pub mod iwamoto;
 pub mod jacobian_cache;

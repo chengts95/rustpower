@@ -1,4 +1,4 @@
-mod basic;
+pub mod basic;
 
 /// Performance probe timer: `timeit!(path::to::COUNTER, { ... })` runs the
 /// block and, when the `probe` cargo feature is enabled, adds its wall-clock

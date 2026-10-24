@@ -96,9 +96,3 @@ required-features = ["benchmark"]
 [[example]]
 name = "audit_lm"
 path = "performance/audit_lm.rs"
-
-[[example]]
-name = "audit_opf"
-path = "performance/audit_opf.rs"
-
- 
