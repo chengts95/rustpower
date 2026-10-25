@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.5]
+
+### Fixed
+
+- Allow legacy pandapower load tables to omit `const_i_percent` and `const_z_percent`; both fields default to `0.0`, preserving constant-power loads.
+
 ## [0.5.4] - 2026-10-15
 
 ### Fixed
