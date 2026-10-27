@@ -1,0 +1,115 @@
+{
+  "recorded_date": "2026-10-27",
+  "source": "User-reported AI Max 395 measurements; raw terminal lines preserved below",
+  "cpu": "AMD Ryzen AI Max 395",
+  "reported_frequency_ghz": 3.0,
+  "case": "case9241",
+  "buses": 9241,
+  "candidates": 16049,
+  "numerically_solved": 14384,
+  "islanded": 1665,
+  "numerical_failed": 10,
+  "benchmark": "bench_n1_scale",
+  "timing_scope": "run_wall_seconds_median: study.run through classification, worker startup, solve, configured monitoring, collection and joins; shared preparation and final JSON write separate",
+  "benchmark_defaults": {
+    "initialization": "BaseAc",
+    "reporting": "StatusOnly",
+    "constraint_rules": 0,
+    "batch_size": 8,
+    "max_iter": 30,
+    "tolerance": 1e-10
+  },
+  "configuration_evidence": "Frequency and repetitions reported by user; solver options follow named benchmark defaults. Affinity, binary/input hashes, actual frequency samples and per-scenario result files have not been supplied.",
+  "cpu_affinity": null,
+  "binary_sha256": null,
+  "input_sha256": null,
+  "prior_single_worker_baseline": {
+    "seconds": 145.29,
+    "frequency_ghz": 3.0,
+    "repeats": null,
+    "source": "Earlier user measurement, same stated fixed frequency"
+  },
+  "prior_four_worker_measurement": {
+    "median_seconds": 38.483238,
+    "frequency_ghz": 3.0,
+    "power_watts_approx": 26,
+    "repeats": null
+  },
+  "runs": [
+    {
+      "workers": 8,
+      "repeats": 3,
+      "median_seconds": 19.980268,
+      "speedup_vs_prior_single_worker": 7.271674233799066,
+      "parallel_efficiency_percent": 90.89592792248833
+    },
+    {
+      "workers": 10,
+      "repeats": 3,
+      "median_seconds": 16.84242,
+      "speedup_vs_prior_single_worker": 8.626432543541842,
+      "parallel_efficiency_percent": 86.26432543541841
+    },
+    {
+      "workers": 12,
+      "repeats": 3,
+      "median_seconds": 13.859751,
+      "speedup_vs_prior_single_worker": 10.48287231134239,
+      "parallel_efficiency_percent": 87.3572692611866
+    },
+    {
+      "workers": 14,
+      "repeats": 3,
+      "median_seconds": 12.140084,
+      "speedup_vs_prior_single_worker": 11.967791985623823,
+      "parallel_efficiency_percent": 85.48422846874159
+    },
+    {
+      "workers": 16,
+      "repeats": 3,
+      "median_seconds": 11.087117,
+      "speedup_vs_prior_single_worker": 13.104398555548752,
+      "parallel_efficiency_percent": 81.90249097217969
+    }
+  ],
+  "power_observations": [
+    {
+      "workers": [
+        10,
+        12
+      ],
+      "watts_range": [
+        48,
+        50
+      ],
+      "source": "Current user report: combined 10–12-worker range; separate averages not provided"
+    },
+    {
+      "workers": [
+        14
+      ],
+      "watts_approx": 60,
+      "source": "Current user report"
+    },
+    {
+      "workers": [
+        16
+      ],
+      "watts_approx": 60,
+      "source": "Earlier user report alongside 11.3-second run; not a newly supplied power measurement for the 11.087117-second run"
+    }
+  ],
+  "power_scope": "Approximate observed power, not recorded whole-run energy integration",
+  "validation": "Reported aggregate scenario counts agree across configurations; per-scenario and iteration signatures unavailable for independent verification",
+  "raw_terminal_output": [
+    "case=case9241 buses=9241 workers=8 repeats=3 scenarios=16049 solved=14384 islands=1665 failed=10 median=19.980268s",
+    "case=case9241 buses=9241 workers=10 repeats=3 scenarios=16049 solved=14384 islands=1665 failed=10 median=16.842420s",
+    "case=case9241 buses=9241 workers=12 repeats=3 scenarios=16049 solved=14384 islands=1665 failed=10 median=13.859751s",
+    "case=case9241 buses=9241 workers=14 repeats=3 scenarios=16049 solved=14384 islands=1665 failed=10 median=12.140084s",
+    "case=case9241 buses=9241 workers=16 repeats=3 scenarios=16049 solved=14384 islands=1665 failed=10 median=11.087117s"
+  ],
+  "gpu_direction": {
+    "decision": "Defer GPU Jacobian offload",
+    "reason": "User reports approximately 100 us Jacobian fill while factorization dominates; a suitable batch sparse direct backend is needed to address the main cost"
+  }
+}
