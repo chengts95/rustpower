@@ -3,6 +3,7 @@ use super::{
     BranchIdentity, CaseSolution, LinearSolveStats, N1Topology, N1Worker, PreparedBase, SolveStage,
     outage::{OutageTask, WorkerPatchState},
     runner::prepare_base,
+    solver::CaseStatus,
     watch::{WatchHits, WatchPlan},
 };
 use bevy_app::{App, Plugin, Update};
@@ -148,7 +149,7 @@ pub struct N1Config {
     pub batch_size: usize,
     pub max_iter: usize,
     pub tolerance: f64,
-    /// Upper bound on per-group voltage/trigger-result scratch. Excludes persistent LU.
+    /// Upper bound on per-group task/event scratch. Excludes persistent solver buffers and LU.
     pub max_batch_bytes: usize,
     pub reporting: N1Reporting,
 }
@@ -175,19 +176,11 @@ impl N1Config {
         if !self.tolerance.is_finite() || self.tolerance <= 0. {
             return Err("N-1 tolerance must be finite and positive".into());
         }
-        let per_case = prepared
-            .base
-            .baseline()
-            .v_init()
-            .len()
-            .checked_mul(std::mem::size_of::<num_complex::Complex64>())
-            .and_then(|n| {
-                let output = match self.reporting {
-                    N1Reporting::Detailed => prepared.watch.max_output_bytes(),
-                    N1Reporting::StatusOnly => Some(0),
-                };
-                output.and_then(|output| n.checked_add(output))
-            })
+        let output = match self.reporting {
+            N1Reporting::Detailed => prepared.watch.max_output_bytes(),
+            N1Reporting::StatusOnly => Some(0),
+        };
+        let per_case = output
             .and_then(|n| {
                 n.checked_add(std::mem::size_of::<OutageTask>() + std::mem::size_of::<N1Event>())
             })
@@ -286,7 +279,6 @@ struct State {
     engine: N1Worker,
     patches: WorkerPatchState,
     inbox: Option<Vec<OutageTask>>,
-    solved: Vec<(OutageTask, CaseSolution)>,
     events: Vec<N1Event>,
     summary: N1Summary,
     fatal_error: Option<String>,
@@ -297,7 +289,7 @@ struct N1WorkerPlugin;
 impl Plugin for N1WorkerPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<ExecuteGroup>();
-        app.add_systems(Update, (solve_group, emit_group).chain());
+        app.add_systems(Update, solve_group);
     }
 }
 fn solve_group(
@@ -325,118 +317,119 @@ fn solve_group(
                 N1Initialization::BaseAc => {
                     state
                         .engine
-                        .solve_ac_current(base, config.max_iter, config.tolerance)
+                        .solve_ac_current_status(base, config.max_iter, config.tolerance)
                 }
                 N1Initialization::DcPerCase => {
                     state
                         .engine
-                        .solve_current(base, config.max_iter, config.tolerance)
+                        .solve_current_status(base, config.max_iter, config.tolerance)
                 }
             },
-            Err(error) => CaseSolution {
+            Err(error) => CaseStatus {
                 converged: false,
                 stage: SolveStage::NewtonFailed,
                 iterations: 0,
                 residual: f64::INFINITY,
-                voltage: base.v_init().to_vec(),
                 error: Some(error),
                 timings: Default::default(),
                 linear: Default::default(),
             },
         };
-        state.solved.push((task, solution));
+        record_solution(prepared, state, task, solution);
     }
 }
-fn emit_group(input: Res<Input>, mut state: ResMut<State>) {
-    let prepared = unsafe { &*input.0 };
+/// Consume voltage-dependent results before the next scenario overwrites worker voltage.
+fn record_solution(
+    prepared: &PreparedN1,
+    state: &mut State,
+    task: OutageTask,
+    solution: CaseStatus,
+) {
     let catalog = prepared.base.catalog();
-    let solved = std::mem::take(&mut state.solved);
-    for (task, solution) in solved {
-        state.summary.processed += 1;
-        state.summary.linear = state.summary.linear.add(solution.linear);
-        state.summary.total_iterations += solution.iterations;
-        state.summary.attempted_iterations += solution.timings.attempted_iterations;
-        state.summary.dc_time += solution.timings.dc;
-        state.summary.ac_time += solution.timings.ac;
-        state.summary.ac_iteration_time += solution.timings.ac_iterations;
-        match solution.stage {
-            SolveStage::DcFailed => state.summary.dc_failed += 1,
-            SolveStage::NewtonFailed => state.summary.newton_failed += 1,
-            SolveStage::Converged => {}
-        }
-        if !solution.converged {
-            state.summary.failed += 1;
-        }
-        let watch_started = Instant::now();
-        let reporting = state.config.reporting;
-        let evaluated = match reporting {
-            N1Reporting::Detailed => prepared
-                .watch
-                .evaluate(
-                    catalog,
-                    &solution.voltage,
-                    Some(task.branch_index),
-                    solution.converged,
-                )
-                .map(|hits| {
-                    let violated = hits.violation_count() > 0;
-                    (hits, violated)
-                }),
-            N1Reporting::StatusOnly => {
-                if solution.converged {
-                    prepared
-                        .watch
-                        .is_violated(catalog, &solution.voltage, Some(task.branch_index))
-                        .map(|violated| (WatchHits::default(), violated))
-                } else {
-                    Ok((WatchHits::default(), false))
-                }
-            }
-        };
-        state.summary.watch_time += watch_started.elapsed();
-        let (hits, violated) = match evaluated {
-            Ok(result) => result,
-            Err(error) => {
-                state.summary.failed += usize::from(solution.converged);
-                state.fatal_error = Some(error);
-                continue;
-            }
-        };
-        let outcome = if !solution.converged {
-            N1Outcome::NumericalFailure
-        } else if violated {
-            N1Outcome::ConstraintViolation
-        } else {
-            N1Outcome::Passed
-        };
-        state.summary.violated_cases += usize::from(violated);
-        state.summary.violation_hits += hits.violation_count();
-        let emit = state.emit_all
-            || match reporting {
-                N1Reporting::Detailed => !hits.is_empty(),
-                N1Reporting::StatusOnly => outcome != N1Outcome::Passed,
-            };
-        if !emit {
-            continue;
-        }
-        state.summary.emitted_cases += 1;
-        state.summary.emitted_hits += hits.len();
-        let event = N1Event {
-            case_id: task.case_id,
-            outage_index: task.branch_index,
-            outage: catalog.identities()[task.branch_index],
-            outage_entity: catalog.source_entities()[task.branch_index],
-            worker_id: state.id,
-            stage: solution.stage,
-            outcome,
-            iterations: solution.iterations,
-            residual: solution.residual,
-            error: solution.error,
-            hits,
-            linear: solution.linear,
-        };
-        state.events.push(event);
+    state.summary.processed += 1;
+    state.summary.linear = state.summary.linear.add(solution.linear);
+    state.summary.total_iterations += solution.iterations;
+    state.summary.attempted_iterations += solution.timings.attempted_iterations;
+    state.summary.dc_time += solution.timings.dc;
+    state.summary.ac_time += solution.timings.ac;
+    state.summary.ac_iteration_time += solution.timings.ac_iterations;
+    match solution.stage {
+        SolveStage::DcFailed => state.summary.dc_failed += 1,
+        SolveStage::NewtonFailed => state.summary.newton_failed += 1,
+        SolveStage::Converged => {}
     }
+    if !solution.converged {
+        state.summary.failed += 1;
+    }
+    let watch_started = Instant::now();
+    let reporting = state.config.reporting;
+    let evaluated = match reporting {
+        N1Reporting::Detailed => prepared
+            .watch
+            .evaluate(
+                catalog,
+                state.engine.voltage(),
+                Some(task.branch_index),
+                solution.converged,
+            )
+            .map(|hits| {
+                let violated = hits.violation_count() > 0;
+                (hits, violated)
+            }),
+        N1Reporting::StatusOnly => {
+            if solution.converged {
+                prepared
+                    .watch
+                    .is_violated(catalog, state.engine.voltage(), Some(task.branch_index))
+                    .map(|violated| (WatchHits::default(), violated))
+            } else {
+                Ok((WatchHits::default(), false))
+            }
+        }
+    };
+    state.summary.watch_time += watch_started.elapsed();
+    let (hits, violated) = match evaluated {
+        Ok(result) => result,
+        Err(error) => {
+            state.summary.failed += usize::from(solution.converged);
+            state.fatal_error = Some(error);
+            return;
+        }
+    };
+    let outcome = if !solution.converged {
+        N1Outcome::NumericalFailure
+    } else if violated {
+        N1Outcome::ConstraintViolation
+    } else {
+        N1Outcome::Passed
+    };
+    state.summary.violated_cases += usize::from(violated);
+    state.summary.violation_hits += hits.violation_count();
+    let emit = state.emit_all
+        || match reporting {
+            N1Reporting::Detailed => !hits.is_empty(),
+            N1Reporting::StatusOnly => outcome != N1Outcome::Passed,
+        };
+    if !emit {
+        return;
+    }
+    state.summary.emitted_cases += 1;
+    state.summary.emitted_hits += hits.len();
+    let event = N1Event {
+        case_id: task.case_id,
+        outage_index: task.branch_index,
+        outage: catalog.identities()[task.branch_index],
+        outage_entity: catalog.source_entities()[task.branch_index],
+        worker_id: state.id,
+        stage: solution.stage,
+        outcome,
+        iterations: solution.iterations,
+        residual: solution.residual,
+        error: solution.error,
+        hits,
+        linear: solution.linear,
+    };
+    state.events.push(event);
 }
 fn worker(
     prepared: &PreparedN1,
@@ -461,7 +454,6 @@ fn worker(
         },
         patches: WorkerPatchState::default(),
         inbox: None,
-        solved: vec![],
         events: vec![],
         fatal_error: None,
         summary: N1Summary {

@@ -1,5 +1,5 @@
 //! Complete contingency batches; numerical stage clocks + end-to-end wall clock.
-#[path = "common/n1.rs"]
+#[path = "../../examples/common/n1.rs"]
 mod common_n1;
 use rustpower::{n1::*, prelude::*};
 use serde_json::{Value, json};

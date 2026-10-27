@@ -79,33 +79,34 @@ version = "0.1.4"
 optional = true
 
 [[example]]
-name = "n1_base"
-required-features = ["experimental_n1"]
-
-[[example]]
 name = "n1_run"
 required-features = ["experimental_n1"]
 
-[[example]]
+[[bin]]
 name = "bench_n1"
+path = "tools/n1/bench_n1.rs"
 required-features = ["experimental_n1"]
 
-[[example]]
+[[bin]]
 name = "n1_memory_layout"
+path = "tools/n1/n1_memory_layout.rs"
 required-features = ["experimental_n1"]
 
-[[example]]
+[[bin]]
 name = "n1_bevy_memory"
+path = "tools/n1/n1_bevy_memory.rs"
 required-features = ["experimental_n1"]
 
 [[example]]
 name = "n1_retry_dc"
 required-features = ["experimental_n1"]
 
-[[example]]
+[[bin]]
 name = "bench_n1_scale"
+path = "tools/n1/bench_n1_scale.rs"
 required-features = ["experimental_n1"]
 
-[[example]]
+[[bin]]
 name = "bench_acpf_floor"
+path = "tools/n1/bench_acpf_floor.rs"
 required-features = ["experimental_n1"]
