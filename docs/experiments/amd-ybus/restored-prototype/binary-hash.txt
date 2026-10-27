@@ -1,0 +1,3 @@
+1657c5172cde725c752ee7fd4719c4240174b58106068e53d1cadd49c083c07f  examples/bench_super_amd.rs
+eff714ddf4d2c757b999752dfd17851f4eb961d3fe052211dcdacca8c969cce0  super-amd-shim/amd_super2.c
+d4fc7e1547ba7c9433927a7cf4f06bc8aef34591a12a64a582bac663dc40b839  target/release/examples/bench_super_amd

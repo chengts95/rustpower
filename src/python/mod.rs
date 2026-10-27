@@ -21,6 +21,12 @@ pub fn features() -> Vec<&'static str> {
     if cfg!(feature = "klu") {
         f.push("klu");
     }
+    if cfg!(feature = "klu_ybus_amd") {
+        f.push("klu_ybus_amd");
+    }
+    if cfg!(feature = "klu_ybus_amd_rust") {
+        f.push("klu_ybus_amd_rust");
+    }
     if cfg!(feature = "klu_dyn") {
         f.push("klu_dyn");
     }
@@ -84,10 +90,14 @@ pub fn rustpower(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Register Solver as a submodule
     let solver_module = PyModule::new(py, "solver")?;
     solver_module.add_class::<solver::NewtonSolver>()?;
+    #[cfg(feature = "klu_ybus_amd")]
+    solver_module.add_class::<solver::AmdNewtonSolver>()?;
     m.add_submodule(&solver_module)?;
 
     // Also export NewtonSolver directly in root module for convenience
     m.add_class::<solver::NewtonSolver>()?;
+    #[cfg(feature = "klu_ybus_amd")]
+    m.add_class::<solver::AmdNewtonSolver>()?;
 
     // Register in sys.modules so 'import rustpower.solver' works
     let sys = py.import("sys")?;

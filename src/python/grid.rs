@@ -838,6 +838,45 @@ impl PowerGrid {
         crate::basic::ecs::powerflow::prepare::ensure_newton_cache(world);
     }
 
+    /// Explicitly install/configure the experimental AMD preparation plugin.
+    #[cfg(feature = "klu_ybus_amd")]
+    fn set_ybus_ordering_backend(&mut self, backend: &str) -> PyResult<()> {
+        use crate::basic::ybus_ordering::{AmdOrderingPlugin, AmdOrderingState};
+        if !["scalar", "c", "rust"].contains(&backend) {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Use scalar, c, or rust",
+            ));
+        }
+        if !self.inner.world().contains_resource::<AmdOrderingState>() {
+            if backend == "scalar" {
+                return Ok(());
+            }
+            self.inner.app_mut().add_plugins(AmdOrderingPlugin);
+        }
+        self.inner
+            .world_mut()
+            .resource_scope(|world, mut state: Mut<AmdOrderingState>| {
+                let mut solver =
+                    world.resource_mut::<crate::basic::ecs::network::PowerFlowSolver>();
+                super::solver::configure_ybus_ordering(
+                    &mut state.ordering,
+                    &mut solver.solver.0,
+                    backend,
+                )
+            })
+    }
+    #[cfg(feature = "klu_ybus_amd")]
+    fn ybus_ordering_stats<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let state = self
+            .inner
+            .world()
+            .get_resource::<crate::basic::ybus_ordering::AmdOrderingState>();
+        super::solver::ordering_stats(py, state.map(|s| &s.ordering))
+    }
+
     /// Clear numerical solver caches without disabling automatic caching.
     fn clear_cache(&mut self) {
         crate::basic::ecs::powerflow::prepare::clear_solver_caches(self.inner.world_mut());

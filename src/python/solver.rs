@@ -85,25 +85,19 @@ fn to_py_err<E: std::fmt::Display>(e: E) -> PyErr {
 
 use crate::native::solver::NewtonSolver as NativeNewtonSolver;
 
-/// High-performance Newton-Raphson power flow solver.
-///
-/// Direct wrapper around native Rust `crate::native::solver::NewtonSolver`.
-#[cfg(feature = "python")]
-#[pyclass(unsendable)]
-pub struct NewtonSolver {
-    inner: NativeNewtonSolver,
-}
+// Both Python classes share the existing argument/result adapters. Only the
+// explicitly named AMD class owns experimental state and overrides native solve.
+macro_rules! newton_bindings {
+    ($name:ident, $native:ty, { $($extra:item)* }) => {
+        #[pyclass(unsendable)]
+        pub struct $name { inner: $native }
+        #[pymethods]
+        impl $name {
 
-// ============================================================================
-// 1. 状态管理与初始化配置 (State Management & Setup Context)
-// ============================================================================
-#[cfg(feature = "python")]
-#[pymethods]
-impl NewtonSolver {
     #[new]
     fn new() -> Self {
         Self {
-            inner: NativeNewtonSolver::new(),
+            inner: <$native>::new(),
         }
     }
 
@@ -548,4 +542,78 @@ impl NewtonSolver {
 
         Ok(())
     }
+
+            $($extra)*
+        }
+    };
+}
+newton_bindings!(NewtonSolver, NativeNewtonSolver, {});
+#[cfg(feature = "klu_ybus_amd")]
+newton_bindings!(
+    AmdNewtonSolver,
+    crate::native::amd_solver::AmdNewtonSolver,
+    {
+        /// Select the backend on the experimental solver only.
+        fn set_ybus_ordering_backend(&mut self, backend: &str) -> PyResult<()> {
+            configure_ybus_ordering(
+                &mut self.inner.ordering,
+                &mut self.inner.inner.linear_solver.0,
+                backend,
+            )
+        }
+        fn ybus_ordering_stats<'py>(
+            &self,
+            py: Python<'py>,
+        ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+            ordering_stats(py, Some(&self.inner.ordering))
+        }
+    }
+);
+
+#[cfg(feature = "klu_ybus_amd")]
+pub(super) fn configure_ybus_ordering(
+    ordering: &mut rustpower_amd::klu::KluOrdering,
+    solver: &mut rustpower_sol_klu::KLUSolver,
+    backend: &str,
+) -> PyResult<()> {
+    use rustpower_amd::klu::YbusOrderingBackend;
+    let selected = match backend {
+        "scalar" => {
+            ordering.set_ybus_ordering(solver, false);
+            return Ok(());
+        }
+        "c" => YbusOrderingBackend::C,
+        "rust" => YbusOrderingBackend::Rust,
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Use scalar, c, or rust",
+            ));
+        }
+    };
+    ordering.set_ybus_ordering_backend(solver, selected);
+    ordering.set_ybus_ordering(solver, true);
+    Ok(())
+}
+#[cfg(feature = "klu_ybus_amd")]
+pub(super) fn ordering_stats<'py>(
+    py: Python<'py>,
+    ordering: Option<&rustpower_amd::klu::KluOrdering>,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    use pyo3::types::PyDictMethods;
+    let result = pyo3::types::PyDict::new(py);
+    let stats = ordering
+        .map(|o| o.ybus_ordering_stats())
+        .unwrap_or_default();
+    let backend = ordering
+        .filter(|o| o.ybus_ordering_enabled())
+        .map(|o| o.ybus_ordering_backend().as_str())
+        .unwrap_or("scalar");
+    result.set_item("backend", backend)?;
+    result.set_item("optimized", stats.optimized)?;
+    result.set_item("preparations", stats.preparations)?;
+    result.set_item(
+        "last_preparation_seconds",
+        stats.last_preparation.as_secs_f64(),
+    )?;
+    Ok(result)
 }

@@ -27,6 +27,27 @@ For repeated solves, reuse the solver context and NumPy output arrays. `extract_
 
 `PowerGrid.from_pandapower()` converts supported basic network elements into RustPower's own ECS model. Its AC power-flow results have been validated against pandapower on selected IEEE benchmark systems. This conversion does not provide full compatibility with every pandapower element model, parameter, option, controller, or analysis feature. Networks with switches require an explicit `switch_model="merge"` (Type A) or `"admittance"` (Type B); no model is chosen automatically. RustPower's primary focus is native Rust modeling and simulation; see the [Python API guide](docs/python_api.md#pandapower-integration-scope) for the distinction and current switch limitations.
 
+### Experimental AMD solver addon
+
+`klu_ybus_amd` makes the explicit `AmdNewtonSolver` and `AmdOrderingPlugin`
+available, defaulting to C seeded AMD. `klu_ybus_amd_rust` defaults the new solver
+to Rust seeded AMD. Existing `KLUSolver`, `DefaultSolver`, `NewtonSolver`, generic
+NR and default ECS schedules keep their original path even with these features.
+
+```sh
+cargo build --release --features klu_ybus_amd_rust,python
+```
+
+Python users opt in with `from rustpower.solver import AmdNewtonSolver`.
+For a `PowerGrid`, calling `set_ybus_ordering_backend("c" | "rust")` explicitly
+installs the experimental preparation plugin. Ordinary construction keeps the
+legacy path. Both backends remain selectable on the addon.
+
+C kernels, BSD notices, the optional compiler build and KLU preparation state
+are owned by `crates/rustpower-amd`; `rustpower-sol-klu` retains its original API.
+See [architecture and usage](docs/ybus_amd.md). This work remains an experimental
+branch, with performance reports under `docs/experiments/amd-ybus`.
+
 ### **Jacobian Assembly**
 
 Conventional slicing and reassembly versus single-pass direct sparse filling:
