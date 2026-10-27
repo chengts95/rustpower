@@ -219,6 +219,27 @@ cargo run --release --features experimental_n1 --bin bench_n1_scale -- case14 /p
 cargo run --release --features experimental_n1 --bin n1_memory_layout
 ```
 
+### 一键扫描：1 与 4 worker 的跨规模效率
+
+```sh
+cargo build --release --features experimental_n1 --bin bench_n1_scale
+# 使用安装了 pandapower 的 Python；缺失的案例 ZIP 会从本机 pandapower 导出。
+python tools/n1/scan_scale.py --cpus 0-7 --out /tmp/n1-scale-4
+```
+
+依次覆盖 14/30/57/89/300/1354/2869/9241 母线，比较 1 与 4 个 PF worker。
+两档共用 CPU 范围，默认 0–7 给生产者与 collector 留调度空间；严格限定四个
+物理核时传 `--cpus 0-3`，编号以本机拓扑为准。
+14/30/57/89/300 的重复数为 201/101/101/51/21；大案例默认一次，可用
+`--large-repeats 3` 增加重复。`--cases case14 case30 case300` 可缩小集合，
+`--case-dir PATH` 可复用输入 ZIP，`--binary PATH` 可指定已构建的二进制。
+
+终端逐案例输出中位耗时、加速比和效率；summary.csv/summary.json 保存汇总。
+每档原始 JSON 含准备时间、首次端到端成本、计时样本和实际亲和性。metadata.json
+记录二进制/输入哈希、CPU 拓扑、电源设置与命令；逐项校验两档场景判定和迭代数。
+电源快照中的 scaling_cur_freq 是瞬时读数。已有测量目录会被保留，请为新扫描
+指定新的输出目录。性能工具每次调用重建 worker，复用该进程内准备好的基态。
+
 另外保留 bench_acpf_floor 和 n1_bevy_memory 诊断工具。
 历史基准以共享收敛基态 AC、batch=8、CPU 0–3 的 P 核运行，执行计时包含发射、
 worker 初始化、求解/监测、收集及线程退出；一次性准备另计。原始 6515 结果：
