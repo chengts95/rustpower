@@ -97,12 +97,15 @@ def main():
     parser.add_argument('--out', type=Path, default=Path('/tmp/n1-scale-4'))
     parser.add_argument('--case-dir', type=Path, help='cached CSV ZIPs; default: OUT/cases')
     parser.add_argument('--cases', nargs='+', choices=CASES, default=list(CASES))
+    parser.add_argument('--max-candidates', type=int, help='select the first N active branches before topology screening; default: all')
     parser.add_argument('--large-repeats', type=int, default=1, help='whole-batch repeats for >=1000 buses')
     target = Path(os.environ.get('CARGO_TARGET_DIR', str(REPO / 'target')))
     if not target.is_absolute():
         target = REPO / target
     parser.add_argument('--binary', type=Path, default=target / 'release/bench_n1_scale')
     args = parser.parse_args()
+    if args.max_candidates is not None and args.max_candidates < 0:
+        parser.error('--max-candidates must be nonnegative')
     if args.large_repeats < 1:
         parser.error('--large-repeats must be positive')
     binary = args.binary.resolve()
@@ -115,6 +118,8 @@ def main():
     paths, pp_version = prepare_cases(args.cases, (args.case_dir or out / 'cases').resolve())
     metadata = {
         'binary': str(binary), 'binary_sha256': digest(binary), 'cpu_affinity': args.cpus,
+        'candidate_limit': args.max_candidates,
+        'candidate_selection': 'catalog_prefix_before_topology_screening' if args.max_candidates is not None else 'all_active_branches',
         'completed': False, 'workers': [1, 4], 'batch_size': 8, 'initialization': 'BaseAc',
         'reporting': 'StatusOnly', 'constraint_rules': 0, 'max_iter': 30, 'tolerance': 1e-10,
         'source_head': command_output(['git', 'rev-parse', 'HEAD']),
@@ -129,7 +134,7 @@ def main():
     }
     save(out / 'metadata.json', metadata)
     rows = []
-    print(f'PF workers=1,4; allowed CPUs={args.cpus}; batch=8; output={out}', flush=True)
+    print(f'PF workers=1,4; allowed CPUs={args.cpus}; batch=8; candidate_limit={args.max_candidates}; output={out}', flush=True)
     print('case              PF/island  reps       1w ms       4w ms   speedup   efficiency', flush=True)
     for name in args.cases:
         buses, repeats = CASES[name]
@@ -140,6 +145,8 @@ def main():
             result_path = out / f'{name}-workers{workers}.json'
             command = ['taskset', '-c', args.cpus, str(binary), name, str(paths[name]),
                        str(workers), str(repeats), str(result_path), '8']
+            if args.max_candidates is not None:
+                command.append(str(args.max_candidates))
             metadata['commands'].append(command)
             save(out / 'metadata.json', metadata)
             print(f'RUN {name} workers={workers} repeats={repeats}', flush=True)
@@ -149,17 +156,22 @@ def main():
             if result.returncode:
                 raise RuntimeError(f'{name}, workers={workers} failed; read {log.name}')
             result = json.loads(result_path.read_text())
+            selection_fields = ('available_candidates', 'candidate_limit', 'candidate_selection')
+            if (not all(key in result for key in selection_fields)
+                    or result['candidate_limit'] != args.max_candidates):
+                raise RuntimeError('benchmark ignored --max-candidates; rebuild bench_n1_scale')
             result['driver_process_wall_seconds'] = time.monotonic() - started
             save(result_path, result)
             results[workers] = result
         a, b = results[1], results[4]
-        keys = ('buses', 'candidates', 'numerically_solved', 'passed', 'violated', 'numerical_failed',
+        keys = ('available_candidates', 'candidate_limit', 'candidate_selection', 'buses', 'candidates', 'numerically_solved', 'passed', 'violated', 'numerical_failed',
                 'islanded', 'rejected_scenario_statuses', 'island_outage_indices',
                 'attempted_ac_iterations_samples', 'actual_cpu_binding')
         if any(a[key] != b[key] for key in keys):
             raise RuntimeError(f'{name}: worker counts changed decisions/iterations/affinity; inspect JSON files')
         speedup = a['run_wall_seconds_median'] / b['run_wall_seconds_median']
         row = {'case': name, 'buses': buses, 'candidates': a['candidates'],
+               'available_candidates': a['available_candidates'], 'candidate_limit': args.max_candidates,
                'numerically_solved': a['numerically_solved'], 'islanded': a['islanded'],
                'failed': a['numerical_failed'], 'repeats': repeats,
                'one_worker_ms': a['run_wall_seconds_median'] * 1000,

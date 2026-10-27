@@ -283,6 +283,42 @@ are instantaneous frequency readings. Choose a fresh output directory for each s
 Each benchmark process reuses its prepared baseline across repetitions and recreates
 workers for every whole-batch call.
 
+### Fixed-count runs: the first 1000 candidates
+
+Full sweeps measure sustained throughput. A fixed-count run exposes the effect of
+amortizing initialization, dispatch, and completion over fewer scenarios. The optional
+last argument to `bench_n1_scale` limits the active-branch selection before topology
+screening, in stable catalog order (branch kind, then device ID):
+
+```sh
+cargo build --release --features experimental_n1 --bin bench_n1_scale
+for workers in 1 4; do
+  taskset -c 0-7 target/release/bench_n1_scale \
+    case9241 cases/pegase9241/data.zip \
+    "$workers" 3 "/tmp/n1-prefix1000-workers${workers}.json" 8 1000
+done
+
+# Apply the same cap to the small-to-large scan.
+python tools/n1/scan_scale.py --cpus 0-7 --max-candidates 1000 --out /tmp/n1-prefix1000-scale
+```
+
+The default remains the entire set. A cap larger than the active catalog uses every
+candidate; zero measures the empty-run path. JSON includes `available_candidates`,
+`candidate_limit`, `candidate_selection`, the selected `candidates`, and the actual
+`numerically_solved`/`islanded` counts. Thus 1000 candidates may yield fewer than 1000
+numerical solves. Small networks retain their smaller complete set. Every repetition
+and worker configuration uses the same prefix; it is a deterministic subset with its
+own topology mix. Preparation still covers the entire network, and both execution
+and first-call end-to-end times remain available. Compare prefix and full-set runs
+as separate workloads.
+
+A local 288V validation used the first 1000 candidates of case9241, CPUs 0–3,
+batch=8, three repetitions per count. It selected 960 numerical scenarios and 40
+islands. Median execution was 6.551729 s with one worker and
+1.982064 s with four workers (82.6% efficiency).
+Scenario decisions and iteration totals agreed. These prefix results remain separate
+from the full-set history; local records are in the task's sibling n1-prefix1000/.
+
 `bench_acpf_floor` and `n1_bevy_memory` remain available for cost/memory diagnostics.
 
 ## Measurement history (2026-10-27)
