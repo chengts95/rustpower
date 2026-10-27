@@ -3,6 +3,8 @@
 #![allow(dead_code)]
 pub mod grid;
 pub mod handles;
+#[cfg(feature = "experimental_n1")]
+pub mod n1;
 pub mod network;
 pub mod solver;
 
@@ -39,6 +41,9 @@ pub fn features() -> Vec<&'static str> {
     if cfg!(feature = "python") {
         f.push("python");
     }
+    if cfg!(feature = "experimental_n1") {
+        f.push("experimental_n1");
+    }
     f
 }
 
@@ -57,6 +62,13 @@ pub fn rustpower(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<grid::PowerGrid>()?;
     m.add_class::<grid::GridEditor>()?;
     m.add_class::<grid::SolveReport>()?;
+
+    #[cfg(feature = "experimental_n1")]
+    {
+        m.add_class::<n1::Study>()?;
+        m.add_class::<n1::Faults>()?;
+        m.add_class::<n1::Report>()?;
+    }
 
     // IO classes
     m.add_class::<crate::io::pandapower::Network>()?;

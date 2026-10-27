@@ -161,6 +161,54 @@ cargo test --features experimental_n1 --test n1_study --test n1_execution --test
 cargo test --features experimental_n1 --example n1_run
 ```
 
+## Python 绑定
+
+编译同时开启 `python,experimental_n1`，例如在自己的 venv 中执行：
+
+```sh
+maturin develop --release --features python,experimental_n1
+```
+
+```python
+import rustpower as rp
+import pandas as pd
+
+grid = rp.PowerGrid("network.zip", qlim=False)
+# faults 可传 line/transformer handle 列表；省略时选择全部在役支路。
+study = grid.prepare_n1()
+report = study.run(workers=16, batch_size=8)
+print(report.summary)
+
+retry = study.run(report.numerical_failures, initialization="dc", workers=16)
+details = study.details(report.rejected_faults, workers=16)
+events = pd.DataFrame(details.events)
+hits = pd.DataFrame(details.hits)
+flows = pd.DataFrame(details.branch_results)
+```
+
+默认只检查数值收敛。准备时设置 `voltage_limits=True` 和/或
+`line_loading_limit=100.0` 启用对应监测；基准态需满足选定约束。
+配置规则在准备后恢复到源 World 原状，编译后的规则归共享快照持有。
+
+N1Faults 关联源 grid，可直接传回同源 study；重复设备去重，显式空集合保持为空。
+`report.numerical_failures` 选择数值失败，`rejected_faults` 选择数值失败或安全越界，
+`island_faults` 单独选择拓扑解列。跨 grid handle 与故障集合会报错。
+
+N1Study 持有 PreparedN1 快照与源 grid 引用。每轮通过 Rust 高层入口运行，重用
+共享结构和 Symbolic；本轮的高层验证、Entity 查询表构造及执行均计入
+summary.execution_seconds。summary.preparation_seconds 记录最初准备时间。
+run/details 整批释放 GIL，worker 与 collector 内处理 Rust 数据；返回后按需访问
+结果列时才生成 Python/NumPy 数据。源数据后续修改影响下一次准备，已有 study
+继续使用自己的固定快照。
+
+精简通过场景仅计入汇总；详细结果在本轮返回前保存在 Rust 结果容器。
+events 的数值列为 NumPy 数组，类别/错误列为列表。hits.event_row 关联事件行，
+hits.result_index 关联 flows 行（-1 表示无支路结果）；flows.event_row 也关联事件。
+缺少标量的命中值使用 NaN。Entity 列保留原 World 的 u64 标识，设备类型和 ID
+用于持久化关联。结果数组拥有自己的内存，可独立于 report 生命周期保留。
+
+Python 回归集中在 `scripts/test_n1_api.py`，需要 numpy 和 pandapower。
+
 ## 性能工具与历史结果
 
 研究入口位于 tools/n1，以 feature-gated binary 运行；参数保持原有顺序：
