@@ -18,6 +18,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -25,7 +28,7 @@ jobs:
           RUSTFLAGS: "-C target-cpu=x86-64-v3"
         with:
           target: x86_64
-          args: --release --out dist --no-default-features --features python,archive,klu,arrow
+          args: --release --out dist --no-default-features --features python,archive,klu,arrow,experimental_n1
           sccache: 'true'
           manylinux: 2_28
           before-script-linux: |
@@ -62,6 +65,13 @@ jobs:
           python -m pip install --upgrade auditwheel
           auditwheel show dist/*.whl || true
 
+      - name: Install and test N-1 Python API
+        shell: bash
+        run: |
+          python -m pip install --find-links dist rustpower==0.5.5 "pandapower==3.5.4"
+          python -c "import rustpower; print(rustpower.__file__); print(rustpower.features())"
+          python scripts/test_n1_api.py
+
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -74,6 +84,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Install SuiteSparse
         shell: bash
@@ -94,8 +107,15 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: x86_64
-          args: --release --out dist --no-default-features --features python,archive,klu,arrow
+          args: --release --out dist --no-default-features --features python,archive,klu,arrow,experimental_n1
           sccache: 'true'
+
+      - name: Install and test N-1 Python API
+        shell: bash
+        run: |
+          python -m pip install --find-links dist rustpower==0.5.5 "pandapower==3.5.4"
+          python -c "import rustpower; print(rustpower.__file__); print(rustpower.features())"
+          python scripts/test_n1_api.py
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -109,6 +129,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Install SuiteSparse
         shell: bash
@@ -122,8 +145,15 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: aarch64
-          args: --release --out dist --no-default-features --features python,archive,klu,arrow
+          args: --release --out dist --no-default-features --features python,archive,klu,arrow,experimental_n1
           sccache: 'true'
+
+      - name: Install and test N-1 Python API
+        shell: bash
+        run: |
+          python -m pip install --find-links dist rustpower==0.5.5 "pandapower==3.5.4"
+          python -c "import rustpower; print(rustpower.__file__); print(rustpower.features())"
+          python scripts/test_n1_api.py
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4

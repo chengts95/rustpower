@@ -27,11 +27,19 @@ For repeated solves, reuse the solver context and NumPy output arrays. `extract_
 
 `PowerGrid.from_pandapower()` converts supported basic network elements into RustPower's own ECS model. Its AC power-flow results have been validated against pandapower on selected IEEE benchmark systems. This conversion does not provide full compatibility with every pandapower element model, parameter, option, controller, or analysis feature. Networks with switches require an explicit `switch_model="merge"` (Type A) or `"admittance"` (Type B); no model is chosen automatically. RustPower's primary focus is native Rust modeling and simulation; see the [Python API guide](docs/python_api.md#pandapower-integration-scope) for the distinction and current switch limitations.
 
+### **Jacobian Assembly**
+
+Conventional slicing and reassembly versus single-pass direct sparse filling:
+
+![Conventional Jacobian slicing and reassembly compared with direct sparse filling](docs/images/block-sparse-prefix-ordering.gif)
+
+With the sparse structure prepared once, RustPower writes numerical values directly into the final compressed sparse column (CSC) Jacobian. The animation is schematic, not a timing comparison; independent columns are shown filling concurrently, while the current implementation is serial.
+
 ---
 
 ## **Performance Comparison**
 
-RustPower is designed for extreme performance and memory efficiency. Below is a comparison between established standards and RustPower on the hot loop (caches Ybus and solver data for an invariant topology).
+RustPower is a power flow calculation library implemented in Rust. Below is a comparison between established standards and RustPower on the hot loop (caches Ybus and solver data for an invariant topology).
 
 ### **Core Solve Time (Newton-Raphson, Hot Loop)**
  
@@ -242,3 +250,10 @@ Special thanks to:
 [T. Cheng, T. Duan, and V. Dinavahi, "ECS-Grid: Data-Oriented Real-Time Simulation Platform for Cyber-Physical Power Systems," IEEE Transactions on Industrial Informatics, vol. 19, no. 11, pp. 11128-11138, 2023.](https://era.library.ualberta.ca/items/5e45c2ff-9b92-41c7-b685-020110b77239)
 
 Although ECS-Grid is a more complex electromagnetic transient (EMT) simulation system, its design philosophy and methodologies greatly influenced the development of this steady-state power flow solver.
+
+## Experimental N−1 contingency studies
+
+The `experimental_n1` feature provides shared-baseline contingency screening with
+bounded task/result queues, private numerical workers, and source-Entity traceability.
+See the [Rust and Python usage guide](docs/N1_USAGE.md) and
+[parallel execution design](docs/design/n1_parallel_execution.md).
