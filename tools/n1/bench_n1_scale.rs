@@ -7,7 +7,7 @@ fn main() -> Result<(), String> {
     let args: Vec<_> = std::env::args().collect();
     if args.len() < 6 {
         return Err(
-            "usage: bench_n1_scale CASE_LABEL CSV_ZIP WORKERS REPEATS OUTPUT_JSON [BATCH=8]".into(),
+            "usage: bench_n1_scale CASE_LABEL CSV_ZIP WORKERS REPEATS OUTPUT_JSON [BATCH=8] [MAX_CANDIDATES=all]".into(),
         );
     }
     let workers = args[3].parse::<usize>().map_err(|e| e.to_string())?;
@@ -18,6 +18,11 @@ fn main() -> Result<(), String> {
         .transpose()
         .map_err(|e| e.to_string())?
         .unwrap_or(8);
+    let candidate_limit = args
+        .get(7)
+        .map(|s| s.parse::<usize>())
+        .transpose()
+        .map_err(|e| format!("max_candidates: {e}"))?;
     if repeats == 0 {
         return Err("repeats must be positive".into());
     }
@@ -37,7 +42,18 @@ fn main() -> Result<(), String> {
     // This sweep measures basic ACPF convergence with identical empty constraint
     // plans for every network. Original device limits are preserved in the World.
     let study = prepared.study().map_err(|e| e.to_string())?;
-    let faults = study.all_branch_outages();
+    let available_candidates = prepared.active_branches().count();
+    // Catalog order is stable by branch kind and device ID. Select the prefix
+    // before topology screening so every worker count receives the same faults.
+    let faults = match candidate_limit {
+        Some(limit) => N1FaultSet::out_of_service(
+            prepared
+                .active_branches()
+                .take(limit)
+                .map(|i| prepared.base().catalog().source_entities()[i]),
+        ),
+        None => study.all_branch_outages(),
+    };
     let study_seconds = api_started.elapsed().as_secs_f64();
     let options = N1RunOptions {
         config: N1Config {
@@ -118,7 +134,10 @@ fn main() -> Result<(), String> {
         "case": args[1], "input": args[2], "buses":buses, "workers":workers, "repeats":repeats,
         "actual_cpu_binding": std::fs::read_to_string("/proc/self/status").ok().and_then(|s|s.lines().find(|line|line.starts_with("Cpus_allowed_list:")).map(str::to_owned)),
         "batch_size":batch_size,"initialization":"BaseAc","reporting":"StatusOnly","watch_policy":"basic_acpf_convergence","constraint_rules":prepared.watch().rule_count(),
-        "max_iter":30,"tolerance":1e-10,"candidates":faults.len(),"numerically_solved":faults.len()-islanded,
+        "max_iter":30,"tolerance":1e-10,
+        "available_candidates":available_candidates,"candidate_limit":candidate_limit,
+        "candidate_selection":if candidate_limit.is_some() { "catalog_prefix_before_topology_screening" } else { "all_active_branches" },
+        "candidates":faults.len(),"numerically_solved":faults.len()-islanded,
         "passed":passed,"violated":violated,"numerical_failed":failed,"islanded":islanded,
         "model_load_and_world_init_seconds":model_seconds,"shared_preparation_seconds":prepare_seconds,
         "study_validation_and_fault_set_seconds":study_seconds,"first_call_end_to_end_seconds":first_call_seconds,
@@ -134,7 +153,7 @@ fn main() -> Result<(), String> {
     std::fs::write(output, serde_json::to_vec_pretty(&result).unwrap())
         .map_err(|e| e.to_string())?;
     println!(
-        "case={} buses={buses} workers={workers} repeats={repeats} scenarios={} solved={} islands={islanded} failed={failed} median={median:.6}s",
+        "case={} buses={buses} workers={workers} repeats={repeats} scenarios={} solved={} islands={islanded} failed={failed} median={median:.6}s available={available_candidates}",
         args[1],
         faults.len(),
         faults.len() - islanded
