@@ -2,6 +2,17 @@
 
 ## [0.5.5]
 
+### Added
+
+- Add opt-in `experimental_n1` studies for line and two-winding transformer outages, with shared symbolic analysis and base AC initialization, bounded parallel execution, topology screening, and sparse failure reporting.
+- Add entity-based Rust fault sets, detailed reruns, and DCPF retries. Expose N-1 studies and reusable fault selections in Python builds with `experimental_n1`.
+- Add usage and parallel execution guides, Rust examples, and reproducible scaling benchmarks with optional candidate limits.
+
+### Changed
+
+- Share the V4 Jacobian fill kernel between ordinary power flow and N-1 through borrowed CSC, state, and layout views; preserve the matrix-based entry point.
+- Include N-1 in the manually built Python wheels and add N-1 regression coverage to CI.
+
 ### Fixed
 
 - Allow legacy pandapower load tables to omit `const_i_percent` and `const_z_percent`; both fields default to `0.0`, preserving constant-power loads.

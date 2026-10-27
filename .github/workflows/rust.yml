@@ -20,3 +20,15 @@ jobs:
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
+
+  n1:
+    name: N-1 regression tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install KLU dependencies
+      run: sudo apt-get update && sudo apt-get install -y libsuitesparse-dev libclang-dev
+    - name: Test shared kernels and N-1 studies
+      run: cargo test --features experimental_n1 --lib --test n1_execution --test n1_study --test n1_outage_patches --test n1_postprocess --test n1_watch --test n1_topology --test klu_cache_reuse
+    - name: Check Python N-1 bindings
+      run: cargo check --no-default-features --features python,archive,klu_dyn,arrow,experimental_n1
