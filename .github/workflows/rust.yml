@@ -93,3 +93,18 @@ jobs:
 
       - name: Run tests with klu_dyn
         run: cargo test --verbose --features klu_dyn
+
+      - name: Run shared-kernel and N-1 regression tests
+        run: cargo test --features experimental_n1 --lib --test n1_execution --test n1_study --test n1_outage_patches --test n1_postprocess --test n1_watch --test n1_topology --test klu_cache_reuse
+
+      - name: Build release N-1 benchmark (static KLU)
+        run: cargo build --release --no-default-features --features archive,arrow,klu,experimental_n1 --bin bench_n1_scale
+
+      - name: Upload native N-1 benchmark
+        uses: actions/upload-artifact@v4
+        with:
+          name: n1-benchmark-${{ matrix.name }}
+          path: |
+            target/release/bench_n1_scale
+            target/release/bench_n1_scale.exe
+          if-no-files-found: error

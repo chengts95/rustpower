@@ -639,6 +639,27 @@ impl PowerGrid {
         Ok(())
     }
 
+    /// Prepare a fixed-partition N-1 snapshot; omitted faults select all active branches.
+    #[cfg(feature = "experimental_n1")]
+    #[pyo3(signature = (faults=None, *, initialization="base-ac", voltage_limits=false, line_loading_limit=None))]
+    fn prepare_n1(
+        slf: Py<Self>,
+        py: Python<'_>,
+        faults: Option<Bound<'_, PyAny>>,
+        initialization: &str,
+        voltage_limits: bool,
+        line_loading_limit: Option<f64>,
+    ) -> PyResult<super::n1::Study> {
+        super::n1::prepare(
+            py,
+            slf,
+            faults,
+            initialization,
+            voltage_limits,
+            line_loading_limit,
+        )
+    }
+
     /// Run the power flow. Fully event-driven: pending FullRebuildEvents
     /// (editor commits, in_service toggles) make structure_update run the
     /// PFInit schedule inside this same update; parameter changes flow

@@ -40,6 +40,44 @@ macro_rules! jslice {
     ($ptr:expr, $start:expr, $len:expr) => {{ unsafe { std::slice::from_raw_parts_mut($ptr.add($start), $len) } }};
 }
 
+/// Borrowed CSC storage; structure and values may have separate owners.
+#[derive(Clone, Copy)]
+pub struct CscView<'a, T> {
+    pub col_offsets: &'a [usize],
+    pub row_indices: &'a [usize],
+    pub values: &'a [T],
+}
+
+impl<'a, T> From<&'a CscMatrix<T>> for CscView<'a, T> {
+    #[inline(always)]
+    fn from(matrix: &'a CscMatrix<T>) -> Self {
+        Self {
+            col_offsets: matrix.col_offsets(),
+            row_indices: matrix.row_indices(),
+            values: matrix.values(),
+        }
+    }
+}
+
+/// Voltage and calculated bus powers at the current Newton iterate.
+#[derive(Clone, Copy)]
+pub struct JacobianState<'a> {
+    pub voltage: &'a [Complex64],
+    pub normalized_voltage: &'a [Complex64],
+    pub calculated_power: &'a [Complex64],
+}
+
+/// Borrowed V4 column layout for the fixed `[PQ | PV | slack]` partition.
+#[derive(Clone, Copy)]
+pub struct JacobianLayout<'a> {
+    pub col_ptrs: &'a [usize],
+    pub pq_ends: &'a [usize],
+    pub active_ends: &'a [usize],
+    pub diag_ptrs: &'a [usize],
+    pub npv: usize,
+    pub npq: usize,
+}
+
 /// V4 numeric fill. Same sweeps, same formulas, same write positions as V3;
 /// quadrant starts computed inline. See module docs for the two views.
 #[allow(non_snake_case, clippy::too_many_arguments)]
@@ -57,9 +95,55 @@ pub fn fill_jacobian_v4<const FLAT: bool>(
     npq: usize,
     j_values: &mut [f64],
 ) {
-    let y_col_offsets = Ybus.col_offsets();
-    let y_row_indices = Ybus.row_indices();
-    let y_vals = Ybus.values();
+    fill_jacobian_v4_view::<FLAT>(
+        Ybus.into(),
+        JacobianState {
+            voltage: v,
+            normalized_voltage: Vnorm,
+            calculated_power: scalc,
+        },
+        JacobianLayout {
+            col_ptrs: j_col_ptrs,
+            pq_ends,
+            active_ends,
+            diag_ptrs,
+            npv,
+            npq,
+        },
+        j_values,
+    );
+}
+
+/// Fill V4 Jacobian values from borrowed matrix, state and layout views.
+///
+/// All views must describe the same V4 layout required by [`fill_jacobian_v4`].
+/// The views borrow existing storage; this function allocates no storage.
+#[allow(non_snake_case)]
+#[inline(always)]
+pub fn fill_jacobian_v4_view<const FLAT: bool>(
+    ybus: CscView<'_, Complex64>,
+    state: JacobianState<'_>,
+    layout: JacobianLayout<'_>,
+    j_values: &mut [f64],
+) {
+    let CscView {
+        col_offsets: y_col_offsets,
+        row_indices: y_row_indices,
+        values: y_vals,
+    } = ybus;
+    let JacobianState {
+        voltage: v,
+        normalized_voltage: Vnorm,
+        calculated_power: scalc,
+    } = state;
+    let JacobianLayout {
+        col_ptrs: j_col_ptrs,
+        pq_ends,
+        active_ends,
+        diag_ptrs,
+        npv,
+        npq,
+    } = layout;
     let n_active = npv + npq;
 
     for k in 0..npq {

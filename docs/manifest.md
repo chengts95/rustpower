@@ -312,3 +312,8 @@ manifest.to_file("output.toml", None).unwrap();
 ```
 
 
+
+## Experimental contingency studies
+
+- [N−1 usage and measurements](N1_USAGE.md): Rust/Python APIs, examples, screening modes, and benchmark records.
+- [Parallel execution design](design/n1_parallel_execution.md): bounded task flow, shared data, sparse results, collector systems, and future recovery/heterogeneous execution.
