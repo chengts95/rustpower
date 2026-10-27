@@ -1,10 +1,10 @@
 //! Fixed-partition DCPF + Newton computation with parent-owned shared analysis.
 //! No worker owns or clones a sparse pattern or KLU Symbolic object.
-use super::numeric::fill_jacobian;
 use crate::basic::{
     dcpf::DcpfModel,
     ecs::powerflow::systems::PowerFlowMat,
     jacobian_cache::JacobianCache,
+    new_dsdvbus4::{CscView, JacobianLayout, JacobianState, fill_jacobian_v4_view},
     newtonpf::{csc_matvec_and_scalc, fill_f_from_scalc},
 };
 use nalgebra::DVector;
@@ -832,19 +832,25 @@ impl N1Worker {
         for it in 0..max_iter {
             let iteration_started = Instant::now();
             self.timings.attempted_iterations += 1;
-            fill_jacobian::<false>(
-                base.y_bus.col_offsets(),
-                base.y_bus.row_indices(),
-                &self.y_values,
-                &self.v,
-                &self.v_norm,
-                &self.s_calc,
-                &j.j_col_ptrs,
-                &j.pq_ends,
-                &j.active_ends,
-                &j.diag_ptrs,
-                base.npv,
-                base.npq,
+            fill_jacobian_v4_view::<false>(
+                CscView {
+                    col_offsets: base.y_bus.col_offsets(),
+                    row_indices: base.y_bus.row_indices(),
+                    values: &self.y_values,
+                },
+                JacobianState {
+                    voltage: &self.v,
+                    normalized_voltage: &self.v_norm,
+                    calculated_power: &self.s_calc,
+                },
+                JacobianLayout {
+                    col_ptrs: &j.j_col_ptrs,
+                    pq_ends: &j.pq_ends,
+                    active_ends: &j.active_ends,
+                    diag_ptrs: &j.diag_ptrs,
+                    npv: base.npv,
+                    npq: base.npq,
+                },
                 &mut self.j_values,
             );
             if let Err(e) =
