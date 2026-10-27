@@ -138,7 +138,9 @@ impl Gen {
 #[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 pub struct Load {
     pub bus: i64,
+    #[serde(default)]
     pub const_i_percent: f64,
+    #[serde(default)]
     pub const_z_percent: f64,
     pub controllable: Option<bool>,
     pub in_service: bool,
@@ -824,6 +826,20 @@ mod tests {
         let mut value = serde_json::to_value(Bus::default()).unwrap();
         value.as_object_mut().unwrap().remove("zone");
         assert_eq!(serde_json::from_value::<Bus>(value).unwrap().zone, None);
+    }
+
+    #[test]
+    fn test_legacy_load_csv_defaults_missing_voltage_dependent_percentages() {
+        let csv = "bus,in_service,p_mw,q_mvar,scaling\n3,true,12.0,4.0,1.0\n";
+        let mut map = std::collections::HashMap::new();
+        map.insert("load.csv".to_owned(), csv.to_owned());
+
+        let loads: Vec<Load> = csv_from_map(&map, "load.csv").unwrap();
+
+        assert_eq!(loads.len(), 1);
+        assert_eq!(loads[0].bus, 3);
+        assert_eq!(loads[0].const_i_percent, 0.0);
+        assert_eq!(loads[0].const_z_percent, 0.0);
     }
 
     #[test]

@@ -17,3 +17,6 @@ pub mod prelude {
     pub use crate::io::pandapower;
     pub use crate::native::solver::NewtonSolver;
 }
+
+#[cfg(feature = "experimental_n1")]
+pub mod n1;
