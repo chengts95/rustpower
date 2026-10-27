@@ -30,3 +30,17 @@ __pycache__/
 
 # Local reproductions for GitHub issues
 /issue solving/
+
+# Local AMD experiment outputs; keep implementation, scripts, and reports visible.
+/docs/experiments/**/*-results/
+/docs/experiments/**/results-*/
+/docs/experiments/**/ordering-correspondence/
+/docs/experiments/**/ordering-trace/
+/docs/experiments/**/*.log
+/docs/experiments/**/*.jsonl
+/docs/experiments/**/*.so
+/docs/experiments/**/*.a
+/docs/experiments/**/perf.data*
+/docs/experiments/**/latest.txt
+/docs/experiments/**/*-summary.json
+/docs/experiments/**/*-summary.txt

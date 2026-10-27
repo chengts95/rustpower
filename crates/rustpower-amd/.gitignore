@@ -1,0 +1,5 @@
+/experiments/**/*.so
+/experiments/**/*.a
+/experiments/**/*.log
+/experiments/**/*.jsonl
+/experiments/**/results-*/

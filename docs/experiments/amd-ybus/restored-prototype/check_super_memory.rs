@@ -1,0 +1,7 @@
+use rustpower::{prelude::*,io::pandapower::{Network,load_csv_zip},testcases::case_ieee39::IEEE_39};
+use rustpower::prelude::{ecs::powerflow::systems::PowerFlowMat,jacobian_cache::JacobianCache};
+use rustpower_sol_klu::KLUSolver as K;
+#[link(name="rpsuperamd")]unsafe extern "C"{fn rp_early_analyze(n:i64,ap:*const usize,ai:*const usize,c:*mut std::ffi::c_void)->*mut std::ffi::c_void;fn rp_ybus_analyze(n:i64,ap:*const usize,ai:*const usize,c:*mut std::ffi::c_void,path:i32)->*mut std::ffi::c_void;fn rp_set_ybus(p:*const usize,i:*const usize,a:i64,q:i64);}
+fn main(){for(case,net)in[("PEGASE9241",load_csv_zip("cases/pegase9241/data.zip").unwrap())]{let mut g=PowerGrid::default();g.world_mut().insert_resource(PPNetwork(net));g.init_pf_net();let m=g.world().resource::<PowerFlowMat>();let mut p=JacobianCache::build_from_permuted(m.y_bus.col_offsets(),m.y_bus.row_indices(),m.npv,m.npq);let n=p.j_col_ptrs.len()-1;
+unsafe{rp_set_ybus(m.y_bus.col_offsets().as_ptr(),m.y_bus.row_indices().as_ptr(),(m.npv+m.npq) as i64,m.npq as i64);}for path in 0..3{let mut k=K::default();unsafe{(*k.common).btf=0;k.symbolic=if path==0{rp_early_analyze(n as i64,p.j_col_ptrs.as_ptr(),p.j_row_indices.as_ptr(),k.common.cast())}else{rp_ybus_analyze(n as i64,p.j_col_ptrs.as_ptr(),p.j_row_indices.as_ptr(),k.common.cast(),path)}.cast();assert!(!k.symbolic.is_null());println!("{}",serde_json::json!({"case":case,"path":path,"symbolic_peak_bytes":(*k.common).mempeak,"symbolic_retained_bytes":(*k.common).memusage,"n":n,"nnz":p.j_row_indices.len()}));}}
+}}

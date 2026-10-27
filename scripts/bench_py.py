@@ -3,6 +3,7 @@ Official Performance Benchmark: Pandapower vs LightSim2Grid vs RustPower
 """
 
 import time
+import os
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -16,13 +17,20 @@ import lightsim2grid
 
 TOL = 1e-6
 MAX_ITER = 20
-NUM_TRIALS_COLD = 10
-NUM_TRIALS_HOT = 20
+NUM_TRIALS_COLD = int(os.environ.get("RUSTPOWER_COLD_TRIALS", "10"))
+NUM_TRIALS_HOT = int(os.environ.get("RUSTPOWER_HOT_TRIALS", "20"))
 
 
 print("Warming up Pandapower Numba JIT compiler...")
 dummy_net = pn.case39()
 pp.runpp(dummy_net)
+
+def select_ordering_backend(solver):
+    backend = os.environ.get("RUSTPOWER_YBUS_BACKEND")
+    if backend:
+        solver.set_ybus_ordering_backend(backend)
+    return solver
+
 
 def run_benchmark(net_name, net):
     print(f"\n=========================================================")
@@ -78,6 +86,8 @@ def run_benchmark(net_name, net):
 
     # RustPower NewtonSolver API (Pure Solver + Post-Processing scalc)
     from rustpower.solver import NewtonSolver
+    if os.environ.get("RUSTPOWER_YBUS_BACKEND"):
+        from rustpower.solver import AmdNewtonSolver as NewtonSolver
 
     # Extract PPC internal matrices from Pandapower
     ppci = net['_ppc']
@@ -92,7 +102,7 @@ def run_benchmark(net_name, net):
     p_inv = np.zeros(len(p_vec), dtype=np.int64)
     p_inv[p_vec] = np.arange(len(p_vec), dtype=np.int64)
 
-    rp_solver = NewtonSolver()
+    rp_solver = select_ordering_backend(NewtonSolver())
     rp_solver.setup_context(
         Ybus_csr.indptr,
         Ybus_csr.indices,
@@ -111,7 +121,7 @@ def run_benchmark(net_name, net):
 
     times_rp_cold = []
     for _ in range(NUM_TRIALS_COLD):
-        s = NewtonSolver()
+        s = select_ordering_backend(NewtonSolver())
         start = time.perf_counter()
         s.setup_context(
             Ybus_csr.indptr,
@@ -183,7 +193,7 @@ def run_benchmark(net_name, net):
     rp_hot_iters = rp_solver.get_iterations()
 
     # 4. RustPower PowerGrid (Full End-to-End GridModel: AC Solve + Vectorized Post-Processing)
-    rp_grid = rustpower.PowerGrid.from_pandapower(net)
+    rp_grid = select_ordering_backend(rustpower.PowerGrid.from_pandapower(net))
     rp_grid.enable_cache(True)
     # Warmup and explicit post-processing (primes cache, bus_calc, and ECS tables)
     rp_grid.solve(V_init_flat)
@@ -206,6 +216,16 @@ def run_benchmark(net_name, net):
     print(f"[LS2G (GridModel AC)]          Avg: {ls2g_hot_ms:>7.3f} ms | Min: {ls2g_hot_min:>7.3f} ms | Max: {ls2g_hot_max:>7.3f} ms")
     print(f"[RustPower (Grid+PostProcess)]  Avg: {rp_grid_hot_ms:>7.3f} ms | Min: {rp_grid_hot_min:>7.3f} ms | Max: {rp_grid_hot_max:>7.3f} ms")
     print(f"[RustPower (Solver Core)]      Avg: {rp_hot_ms:>7.3f} ms | Min: {rp_hot_min:>7.3f} ms | Max: {rp_hot_max:>7.3f} ms")
+
+    result = dict(case=net_name, cold_ms=rp_cold_ms, core_hot_ms=rp_hot_ms,
+                  grid_hot_ms=rp_grid_hot_ms, ls2g_cold_ms=ls2g_cold_ms,
+                  ls2g_grid_hot_ms=ls2g_hot_ms, iterations=rp_hot_iters)
+    if os.environ.get("RUSTPOWER_YBUS_BACKEND"):
+        result["ordering"] = rp_solver.ybus_ordering_stats()
+        result["grid_ordering"] = rp_grid.ybus_ordering_stats()
+        assert rp_solver.converged and r.converged
+        print("Ybus ordering:", result["ordering"], result["grid_ordering"])
+    return result
 
 
 if __name__ == "__main__":

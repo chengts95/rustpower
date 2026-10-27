@@ -1,0 +1,73 @@
+--- amd_2_original.c
++++ amd_super2.c
+@@ -39,7 +39,7 @@
+ /* === AMD_2 =============================================================== */
+ /* ========================================================================= */
+ 
+-void AMD_2
++void rp_super2
+ (
+     Int n,		/* A is n-by-n, where n > 0 */
+     Int Pe [ ],		/* Pe [0..n-1]: index in Iw of row i on input */
+@@ -60,7 +60,8 @@
+ 
+     /* control parameters and output statistics */
+     double Control [ ],	/* array of size AMD_CONTROL */
+-    double Info [ ]	/* array of size AMD_INFO */
++    double Info [ ],	/* array of size AMD_INFO */
++    Int rp_active, Int rp_npq
+ )
+ {
+ 
+@@ -615,10 +616,13 @@
+ 	/* if separate Hhead array is used for hash buckets: *
+ 	Hhead [i] = EMPTY ;
+ 	*/
+-	Nv [i] = 1 ;
+-	W [i] = 1 ;
+-	Elen [i] = 0 ;
+-	Degree [i] = Len [i] ;
++        if (i < rp_active) {
++            Nv[i] = i < rp_npq ? 2 : 1; W[i]=1; Elen[i]=0;
++            // Degree is externally weighted, initialized by caller.
++        } else {
++            Nv[i]=0; W[i]=0; Elen[i]=EMPTY; Degree[i]=0;
++            Pe[i]=FLIP(i-rp_active);
++        }
+     }
+ 
+ #ifndef NDEBUG
+@@ -639,9 +643,10 @@
+ 
+     for (i = 0 ; i < n ; i++)
+     {
++	if (Nv[i] == 0) continue;
+ 	deg = Degree [i] ;
+ 	ASSERT (deg >= 0 && deg < n) ;
+-	if (deg == 0)
++	if (deg == 0 && Nv[i] == 1)
+ 	{
+ 
+ 	    /* -------------------------------------------------------------
+@@ -657,7 +662,7 @@
+ 	    W [i] = 0 ;
+ 
+ 	}
+-	else if (deg > dense)
++	else if (deg + Nv[i] - 1 > dense)
+ 	{
+ 
+ 	    /* -------------------------------------------------------------
+@@ -668,10 +673,10 @@
+ 	     * ------------------------------------------------------------- */
+ 
+ 	    AMD_DEBUG1 (("Dense node "ID" degree "ID"\n", i, deg)) ;
+-	    ndense++ ;
++            ndense += Nv[i]; nel += Nv[i];
++            if (i < rp_npq) Pe[rp_active+i]=EMPTY;
+ 	    Nv [i] = 0 ;		/* do not postorder this node */
+ 	    Elen [i] = EMPTY ;
+-	    nel++ ;
+ 	    Pe [i] = EMPTY ;
+ 
+ 	}

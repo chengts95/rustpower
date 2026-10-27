@@ -1,0 +1,25 @@
+[package]
+name = "rustpower-amd"
+version = "0.1.0"
+edition = "2021"
+license = "BSD-3-Clause"
+description = "Experimental native Rust AMD and seeded supervariable ordering"
+exclude = ["experiments/**"]
+
+[dependencies]
+num-traits = "0.2"
+rustpower-sol-klu = { path = "../rustpower-sol-klu", version = "0.1.4", optional = true }
+rustpower-klu-sys = { path = "../rustpower-sol-klu/rustpower-klu-sys", version = "0.1.4", optional = true }
+
+[build-dependencies]
+cc = { version = "1", optional = true }
+
+[features]
+klu = ["dep:rustpower-sol-klu", "dep:rustpower-klu-sys"]
+c_amd = ["klu", "dep:cc"]
+profile_stages = []
+trace = []
+debug1 = []
+debug2 = ["debug1"]
+debug3 = ["debug2"]
+debug4 = ["debug3"]

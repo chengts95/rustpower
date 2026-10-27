@@ -32,3 +32,6 @@ mod bench_jacobian_fill;
 
 #[cfg(all(test, any(feature = "klu", feature = "klu_dyn")))]
 mod bench_symbolic_analysis;
+
+#[cfg(feature = "klu_ybus_amd")]
+pub mod ybus_ordering;
