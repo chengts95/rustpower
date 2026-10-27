@@ -1,5 +1,4 @@
 //! Experimental fixed-partition N-1 foundation. Shared analyses, private workers.
-mod numeric;
 pub mod postprocess;
 pub mod runner;
 pub mod solver;
