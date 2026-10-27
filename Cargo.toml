@@ -25,6 +25,8 @@ name = "rustpower"
 crate-type = ["rlib", "cdylib"]
 
 [features]
+# Fixed-partition shared-symbolic N-1 foundation; old solver paths unchanged.
+experimental_n1 = ["klu_dyn", "dep:crossbeam-channel", "dep:soa-rs"]
 # Experimental single-sweep Jacobian and calculated-power assembly.
 experimental_fused_scalc = []
 default=["rsparse", "arrow"] 
@@ -45,6 +47,8 @@ opt-level = 3
 debug=false
 
 [dependencies]
+soa-rs = { version = "1.0.1", optional = true }
+crossbeam-channel = { version = "0.5.15", optional = true }
 ordered-float = { version = ">3.0", default-features = false }
 nalgebra = { version = ">=0.32.0", features = ["serde-serialize"] }
 nalgebra-sparse = { version = ">=0.7.0", features = ["serde-serialize"] }
@@ -73,3 +77,35 @@ numpy = { version = "0.23", optional = true }
 path = "./crates/rustpower-sol-klu"
 version = "0.1.4"
 optional = true
+
+[[example]]
+name = "n1_base"
+required-features = ["experimental_n1"]
+
+[[example]]
+name = "n1_run"
+required-features = ["experimental_n1"]
+
+[[example]]
+name = "bench_n1"
+required-features = ["experimental_n1"]
+
+[[example]]
+name = "n1_memory_layout"
+required-features = ["experimental_n1"]
+
+[[example]]
+name = "n1_bevy_memory"
+required-features = ["experimental_n1"]
+
+[[example]]
+name = "n1_retry_dc"
+required-features = ["experimental_n1"]
+
+[[example]]
+name = "bench_n1_scale"
+required-features = ["experimental_n1"]
+
+[[example]]
+name = "bench_acpf_floor"
+required-features = ["experimental_n1"]
