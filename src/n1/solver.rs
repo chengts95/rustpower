@@ -442,6 +442,32 @@ pub struct CaseSolution {
     pub linear: LinearSolveStats,
 }
 
+/// Solver metadata for worker-local postprocessing; voltage stays in N1Worker.
+#[derive(Debug)]
+pub(super) struct CaseStatus {
+    pub converged: bool,
+    pub stage: SolveStage,
+    pub iterations: usize,
+    pub residual: f64,
+    pub error: Option<String>,
+    pub timings: SolveTimings,
+    pub linear: LinearSolveStats,
+}
+impl CaseStatus {
+    fn with_voltage(self, voltage: &[Complex64]) -> CaseSolution {
+        CaseSolution {
+            converged: self.converged,
+            stage: self.stage,
+            iterations: self.iterations,
+            residual: self.residual,
+            voltage: voltage.to_vec(),
+            error: self.error,
+            timings: self.timings,
+            linear: self.linear,
+        }
+    }
+}
+
 #[derive(Default, Clone, Copy, Debug)]
 pub struct KluAllocationStats {
     pub current_bytes: usize,
@@ -603,8 +629,42 @@ impl N1Worker {
     pub fn pattern_ids(&self) -> (usize, usize, usize, usize) {
         self.shared_patterns
     }
-    /// Copy base numerical values into existing buffers, then solve the base.
+    /// Solve and return an owned voltage snapshot for callers retaining the result.
     pub fn solve_base(&mut self, base: &SharedBaseline, max_iter: usize, tol: f64) -> CaseSolution {
+        self.solve_base_status(base, max_iter, tol)
+            .with_voltage(&self.v)
+    }
+    /// Solve patched AC/DC values and return an owned voltage snapshot.
+    pub fn solve_current(
+        &mut self,
+        base: &SharedBaseline,
+        max_iter: usize,
+        tol: f64,
+    ) -> CaseSolution {
+        self.solve_current_status(base, max_iter, tol)
+            .with_voltage(&self.v)
+    }
+    /// Solve from shared base AC and return an owned voltage snapshot.
+    pub fn solve_ac_current(
+        &mut self,
+        base: &SharedBaseline,
+        max_iter: usize,
+        tol: f64,
+    ) -> CaseSolution {
+        self.solve_ac_current_status(base, max_iter, tol)
+            .with_voltage(&self.v)
+    }
+    /// Current solver-order voltage, valid until the next mutable worker operation.
+    pub(super) fn voltage(&self) -> &[Complex64] {
+        &self.v
+    }
+    /// Copy base numerical values into existing buffers, then solve the base.
+    fn solve_base_status(
+        &mut self,
+        base: &SharedBaseline,
+        max_iter: usize,
+        tol: f64,
+    ) -> CaseStatus {
         self.reset_timings();
         if base.id != self.baseline_id {
             return self.failed(
@@ -630,16 +690,16 @@ impl N1Worker {
         self.dc_values.copy_from_slice(&base.dc_model.values);
         self.dc_shift
             .copy_from_slice(base.dc_model.p_shift.as_slice());
-        self.solve_current(base, max_iter, tol)
+        self.solve_current_status(base, max_iter, tol)
     }
     /// Solve the current private numerical values with unchanged shared patterns.
     /// Caller updates Ybus and DC numerical data consistently before invoking it.
-    pub fn solve_current(
+    pub(super) fn solve_current_status(
         &mut self,
         base: &SharedBaseline,
         max_iter: usize,
         tol: f64,
-    ) -> CaseSolution {
+    ) -> CaseStatus {
         self.reset_timings();
         if base.id != self.baseline_id {
             return self.failed(
@@ -706,12 +766,12 @@ impl N1Worker {
     }
     /// AC-only N-1 solve from the main system's base AC voltage. Current private
     /// Ybus values must represent this scenario; no DCPF arrays or solve are used.
-    pub fn solve_ac_current(
+    pub(super) fn solve_ac_current_status(
         &mut self,
         base: &SharedBaseline,
         max_iter: usize,
         tol: f64,
-    ) -> CaseSolution {
+    ) -> CaseStatus {
         self.reset_timings();
         if base.id != self.baseline_id {
             return self.failed(
@@ -749,7 +809,7 @@ impl N1Worker {
         self.v.copy_from_slice(start);
         self.solve_newton(base, max_iter, tol)
     }
-    fn solve_newton(&mut self, base: &SharedBaseline, max_iter: usize, tol: f64) -> CaseSolution {
+    fn solve_newton(&mut self, base: &SharedBaseline, max_iter: usize, tol: f64) -> CaseStatus {
         let active = base.npv + base.npq;
         for k in 0..self.v.len() {
             self.vm[k] = self.v[k].norm();
@@ -882,14 +942,13 @@ impl N1Worker {
                 .map_or_else(LinearSolveStats::default, |s| s.stats),
         )
     }
-    fn success(&mut self, iterations: usize, residual: f64) -> CaseSolution {
+    fn success(&mut self, iterations: usize, residual: f64) -> CaseStatus {
         self.finish_ac_timing();
-        CaseSolution {
+        CaseStatus {
             converged: true,
             stage: SolveStage::Converged,
             iterations,
             residual,
-            voltage: self.v.clone(),
             error: None,
             timings: self.timings,
             linear: self.linear_stats(),
@@ -901,14 +960,13 @@ impl N1Worker {
         iterations: usize,
         residual: f64,
         error: String,
-    ) -> CaseSolution {
+    ) -> CaseStatus {
         self.finish_ac_timing();
-        CaseSolution {
+        CaseStatus {
             converged: false,
             stage,
             iterations,
             residual,
-            voltage: self.v.clone(),
             error: Some(error),
             timings: self.timings,
             linear: self.linear_stats(),
@@ -1009,8 +1067,26 @@ mod timing_tests {
         assert_eq!(base_again.timings.dc, Duration::ZERO);
         assert_eq!(base_again.timings.attempted_iterations, 0);
         assert_eq!(base_again.voltage, solved.voltage);
+        // The execution path borrows this same working allocation on every case.
+        // A changed Ybus forces real Newton work, including the failure return path.
+        let voltage_ptr = worker.voltage().as_ptr();
+        let shared_start = base.ac_start().unwrap().to_vec();
         worker.y_values[0] *= 1.001;
+        let exhausted = worker.solve_ac_current_status(&base, 0, 1e-10);
+        assert!(!exhausted.converged);
+        assert_eq!(exhausted.stage, SolveStage::NewtonFailed);
+        assert_eq!(worker.voltage().as_ptr(), voltage_ptr);
+        let in_place = worker.solve_ac_current_status(&base, 50, 1e-10);
+        assert!(in_place.converged, "{:?}", in_place.error);
+        assert!(in_place.iterations > 0);
+        assert_eq!(worker.voltage().as_ptr(), voltage_ptr);
+        let expected_voltage = worker.voltage().to_vec();
+        assert_eq!(base.ac_start().unwrap(), shared_start.as_slice());
         let changed = worker.solve_ac_current(&base, 50, 1e-10);
+        assert_eq!(changed.voltage, expected_voltage);
+        assert_eq!(changed.iterations, in_place.iterations);
+        assert_eq!(changed.residual, in_place.residual);
+        assert_ne!(changed.voltage.as_ptr(), worker.voltage().as_ptr());
         assert!(changed.converged, "{:?}", changed.error);
         assert!(changed.timings.attempted_iterations > 0);
         assert_eq!(changed.timings.dc, Duration::ZERO);

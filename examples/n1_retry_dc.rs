@@ -46,18 +46,7 @@ fn main() -> Result<(), String> {
         return Err("input contains no numerical failure records".into());
     }
     let started = Instant::now();
-    let net = match case.as_str() {
-        "39" => serde_json::from_str::<rustpower::io::pandapower::Network>(
-            rustpower::testcases::case_ieee39::IEEE_39,
-        )
-        .map_err(|e| e.to_string())?,
-        "9241" => rustpower::io::pandapower::load_csv_zip(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/cases/pegase9241/data.zip"
-        ))
-        .map_err(|e| e.to_string())?,
-        _ => return Err("case must be 39 or 9241".into()),
-    };
+    let net = common_n1::load_case(case)?;
     let mut grid = PowerGrid::default();
     grid.world_mut().insert_resource(PPNetwork(net));
     grid.init_pf_net();
