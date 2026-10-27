@@ -314,3 +314,12 @@ Low-level stateful Newton-Raphson solver designed for high-throughput iterations
 - `rustpower.version() -> str`: Returns the crate/package version (e.g. `"0.5.2"`).
 - `rustpower.features() -> list[str]`: Returns list of compiled features (`"klu"`, `"faer"`, `"rsparse"`, `"arrow"`, etc.).
 - `rustpower.load_csv_zip(path: str) -> Network`: Parse a pandapower CSV-ZIP archive into a `Network` data structure.
+
+## Experimental N−1 studies
+
+Build with `python,experimental_n1` to use snapshot-based contingency studies through
+`PowerGrid.prepare_n1()`. Fault selections accept source line/transformer handles;
+`run()` provides sparse screening, and `details()` inspects selected cases. Native
+execution releases the GIL. See the [N−1 usage guide](N1_USAGE.md#python-bindings)
+and the [parallel execution design](design/n1_parallel_execution.md) for complete
+examples, memory lifetimes, result policies, and extension plans.
