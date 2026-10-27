@@ -250,3 +250,10 @@ Special thanks to:
 [T. Cheng, T. Duan, and V. Dinavahi, "ECS-Grid: Data-Oriented Real-Time Simulation Platform for Cyber-Physical Power Systems," IEEE Transactions on Industrial Informatics, vol. 19, no. 11, pp. 11128-11138, 2023.](https://era.library.ualberta.ca/items/5e45c2ff-9b92-41c7-b685-020110b77239)
 
 Although ECS-Grid is a more complex electromagnetic transient (EMT) simulation system, its design philosophy and methodologies greatly influenced the development of this steady-state power flow solver.
+
+## Experimental N−1 contingency studies
+
+The `experimental_n1` feature provides shared-baseline contingency screening with
+bounded task/result queues, private numerical workers, and source-Entity traceability.
+See the [Rust and Python usage guide](docs/N1_USAGE.md) and
+[parallel execution design](docs/design/n1_parallel_execution.md).

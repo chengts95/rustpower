@@ -1,12 +1,17 @@
-# Rust N−1：故障集合、筛选与详细复测
+# N−1 studies: fault sets, screening, and detailed reruns
 
-`experimental_n1` 开启固定 PQ/PV/Slack 分区的线路、两绕组变压器单设备退出。
-每个 Entity 表示一个独立退出场景；主 World 保持基态。当前路径支持共享基态 AC
-初值和逐场景 DCPF 初值，QLim 留待后续扩展。
+Enable `experimental_n1` for independent line and two-winding transformer outages
+with a fixed PQ/PV/Slack partition. Each selected Entity defines one scenario; the
+source World retains its base state. Initialization supports a shared converged
+base AC voltage or per-scenario DCPF. Q-limit enforcement is a future extension.
 
-## Rust 高层入口
+See [Parallel execution design](design/n1_parallel_execution.md) for the producer,
+worker, and collector model, memory budgets, result retention, and extension paths.
 
-主 World 初始化完成后，挂载需要的 N1Watch，再准备共享数据：
+## Rust entry points
+
+Initialize the source World, attach the required `N1Watch` components, and prepare
+the shared snapshot:
 
 ```rust,ignore
 use rustpower::n1::*;
@@ -26,18 +31,20 @@ let report = study.execute(options, |batch| {
 })?;
 ```
 
-- `prepare_n1_for(world, faults)` 绑定指定故障集合，重复 Entity 保留首次出现。
-- `prepare_n1(world)` 准备基态；未绑定集合的 `study.execute` 默认覆盖全部在役支路。
-- `prepared.load_faults(faults)` 验证后整体替换；显式空集合产生零场景。
-- `study.run(&faults, options, collect)` 运行所选集合；`all_branch_outages()` 提取全部候选。
-- `study.details(&faults, options, collect)` 为每个所选数值场景回传状态与配置的明细。
+- `prepare_n1_for(world, faults)` binds a selection. Duplicate Entities keep their first occurrence.
+- `prepare_n1(world)` prepares a baseline. An unbound `study.execute` selects all initially active branches.
+- `prepared.load_faults(faults)` validates and replaces the selection atomically. An explicit empty set executes zero scenarios.
+- `study.run(&faults, options, collect)` executes a selection; `all_branch_outages()` constructs the complete active-branch set.
+- `study.details(&faults, options, collect)` emits status and configured detail payloads for every selected numerical scenario.
 
-PreparedN1 拥有共享快照，N1Study 借用它。修改源 World 后重新准备，以取得新快照。
-`study()` 检查基准态的监测约束；基态已经越界时返回具体错误。
+`PreparedN1` owns the snapshot; `N1Study` borrows it. Prepare a new snapshot after
+changing the source model. `study()` checks the unchanged baseline against its
+monitoring rules and returns an error identifying an existing constraint violation.
 
-## 规则与输出
+## Monitoring and result modes
 
-规则挂在主 World 的设备或母线 Entity 上，准备阶段编译成共享只读 WatchPlan：
+Attach rules to source branch or bus Entities. Preparation compiles them into a
+shared immutable `WatchPlan`:
 
 ```rust,ignore
 world.entity_mut(line_entity).insert(N1Watch {
@@ -54,30 +61,36 @@ world.entity_mut(bus_entity).insert(N1Watch {
 });
 ```
 
-母线电压上下限来自该 Entity 的 `VmLimit<PerUnit>`。支路还支持电流阈值；
-`SolveFailed` 监测求解失败，`Always` 用于诊断。Always 命中独立于安全越界计数。
+Bus bounds come from `VmLimit<PerUnit>` on that Entity. Branch rules also support
+current thresholds. `SolveFailed` monitors numerical failures; `Always` is a
+diagnostic rule whose hits are separate from security-violation counts.
 
-| 运行方式 | 通过场景 | 异常场景 | 明细 |
+| Entry or mode | Passing scenarios | Rejected scenarios | Detail payload |
 | --- | --- | --- | --- |
-| 默认 StatusOnly | 仅更新本地统计 | 发送状态 | 首个越界即可结束检查 |
-| 配置 Detailed | 有规则命中时发送 | 有规则命中时发送 | 所有配置规则的命中结果 |
-| `study.details` | 发送所选场景状态 | 发送所选场景状态 | 配置规则的命中结果 |
+| Default `StatusOnly` | Update local aggregates | Emit status | Stop at the first violated constraint |
+| Configured `Detailed` | Emit when a rule matches | Emit when a rule matches | All configured rule hits |
+| `study.details` | Emit each selected numerical status | Emit each selected numerical status | Configured rule hits |
 
-`N1Event` 含 case_id、退出设备身份/Entity、求解阶段、结果类别、迭代数、残差、
-错误和 WatchHits。每条命中含规则 ID、source_entity、目标及标量值；同支路的
-多个规则共用一份 BranchFlowResult。详细模式按配置监测目标计算结果。
+`N1Event` carries scenario and outage identities, source Entity, solver stage,
+outcome, iteration count, residual, error, linear-solver statistics, and `WatchHits`.
+Hits carry the rule ID, source Entity, target, and scalar value. Multiple rules on
+a branch share one `BranchFlowResult`. Detail evaluation follows configured targets.
 
-数值场景分为 Passed、ConstraintViolation、NumericalFailure；解列记录保存在
-`N1StudyReport.islands`。报告的 processed/passed/violated/numerical_failed/islanded
-提供整体计数。默认通过场景只更新 worker 本地 N1Summary，结束时归并一次。
+Numerical outcomes are `Passed`, `ConstraintViolation`, and `NumericalFailure`.
+Predispatch topology rejections are returned in `N1StudyReport.islands`.
+`processed`, `passed`, `violated`, `numerical_failed`, and `islanded` provide totals.
+Passing scenarios in the default mode only update worker-local `N1Summary`;
+worker summaries are merged when the run finishes.
 
-worker 直接借用当前求解电压完成监测，然后继续下一个场景。共享基态由所有
-worker 只读访问；每次初值复制由 worker 写入自己的迭代电压区。场景结果省去
-完整电压 Vec 的分配与复制。公开 N1Worker 求解 API 仍返回独立电压快照。
+Monitoring borrows the worker's current voltage before the next scenario overwrites
+it. Each worker reads the shared AC start and copies it into its private writable
+iteration buffer. Per-scenario result-voltage allocations and copies are avoided.
+The public `N1Worker` solve methods still return owned voltage snapshots for callers
+that explicitly retain a solution.
 
-## 失败批次与详细补测
+## Failure selections and reruns
 
-同一个 study 可以继续执行：
+Reuse the same study for a DCPF-initialized retry or detailed inspection:
 
 ```rust,ignore
 let retry = N1FaultSet::out_of_service(failed);
@@ -85,75 +98,92 @@ let retry_report = study.run(&retry, N1RunOptions {
     initialization: Some(N1Initialization::DcPerCase),
     emit_all: true,
     ..options
-}, |batch| { /* 每个补测场景的状态 */ })?;
-study.details(&retry, options, |batch| { /* 保存明细 */ })?;
+}, |batch| { /* consume every retry status */ })?;
+study.details(&retry, options, |batch| { /* consume configured details */ })?;
 ```
 
-BaseAc 在主系统准备时求一次收敛基态 AC，各场景从相同电压开始。
-DcPerCase 在 worker 内对退出后的 DC 数值系统求解，再启动 Newton。
-两种路径复用准备好的 AC/DC Symbolic；每个 worker 独立拥有 Numeric 和可写缓冲。
-refactor/solve 失败或产生非有限输出时，保留原 RHS，对当前矩阵重新 factor 后重试。
+`BaseAc` solves the unchanged baseline during preparation and initializes every
+scenario from that converged voltage. `DcPerCase` solves the patched scenario's DC
+system before Newton. Both paths reuse the prepared AC/DC analyses; every worker
+owns its writable buffers and KLU Numeric/Common objects.
 
-## 调度、拓扑与内存
+An unusable refactor/solve, including non-finite output, triggers a full factorization
+of the current matrix and a solve retry with the original RHS. Follow-up assessment
+and requeue orchestration are described in the design document.
 
-调用线程发射任务，P 个 scoped worker 各持一个 App，另有一个 collector。
-任务与结果使用 Crossbeam 有界 MPMC，容量各为 2P 批。worker 按组接收任务，
-逐场景求解与监测，非空结果批交给 collector 的 `FnMut(N1EventBatch) + Send` 回调。
-结果到达顺序取决于完成顺序，case_id 和设备身份用于关联。回调可统计或批量写文件。
-当前 collector 为单线程；独立下游攒批及多个 collector 属于后续设计。
+## Scheduling, topology, and memory
 
-队列槽位已经预分配。任务 Vec 与非空事件批仍存在逐批分配；Auto/Full/Budget
-缓冲策略尚待实现。后续以池化任务块复用容量，worker 数值工作区继续独立复用。
+The calling thread produces tasks. Each of P scoped worker threads owns an App;
+a separate collector invokes `FnMut(N1EventBatch) + Send`. Both Crossbeam bounded
+MPMC queues hold up to 2P batches. Workers receive groups, solve and monitor each
+scenario, and send nonempty event batches. Delivery follows completion order;
+scenario and device identities associate results with their inputs.
 
-默认 workers=1、batch_size=8、max_iter=30、tolerance=1e-10。
-batch_size 范围 1..=32。max_batch_bytes 默认 64 MiB，约束单组任务/事件和配置
-明细的容量估计；worker 固定数值向量、KLU Numeric、线程栈及调用方留存另行核算。
+The collector callback can aggregate, forward, or write batches. The current
+collector is a single thread. Independent downstream batch sizes and multiple
+collectors are extension designs.
 
-准备阶段对支路多重图做一次 Tarjan DFS，保留桥边、DFS 子树区间和 Slack 计数。
-每个桥边退出的解列查询为 O(1)，并联边按设备身份区分。高层 study 将无 Slack
-的分区场景归入 islands，其他场景进入数值求解。固定结构的 Ybus patch 使用绝对
-CSC 槽位，每次先恢复上个场景的修改，再应用当前退出。
+Queue slots are preallocated. Task Vecs and nonempty event batches still allocate
+per group. Optional task-block recycling and Auto/Full/Budget policies are planned;
+the numerical workspaces already persist within a worker's run.
 
-设备名称与原始组件可通过结果 Entity 回查。跨 World 重建或持久化时，同时使用
-稳定设备类型和 ID；示例复测会核对记录索引对应的设备身份。
+Defaults: `workers=1`, `batch_size=8`, `max_iter=30`, `tolerance=1e-10`.
+Batch size is 1 through 32. `max_batch_bytes` defaults to 64 MiB and bounds the
+estimated task/event/detail scratch for a group. Worker numerical buffers, KLU
+Numeric, stacks, and retained consumer output have separate memory costs.
 
-## 两个 Rust examples
+Preparation runs one Tarjan DFS over the branch multigraph, retaining bridge
+information, subtree intervals, and Slack counts. A bridge-outage query is O(1),
+with parallel branches distinguished by device identity. High-level studies reject
+newly separated partitions lacking a fixed Slack before numerical dispatch and
+record them as islands. Each Ybus patch addresses absolute CSC slots; a worker
+restores the preceding patch before applying the next scenario.
+
+Entities trace results to source components and names. Persistent or cross-process
+results also use stable device type/ID and a baseline identity. The retry example
+checks that a recorded catalog index still identifies the expected device.
+
+## Two Rust examples
 
 ```sh
-# CASE 为 39、9241 或 pandapower CSV ZIP 路径。
-# 以下使用已经满足所配置基态监测约束的网络。
+# CASE accepts 39, 9241, or a pandapower CSV ZIP path.
+# Use a model whose baseline satisfies the selected monitoring rules.
 CASE=/path/network.zip
-# 精简：输出异常数值场景 JSON 数组，整体计数打印到终端。
+
+# Screening: write rejected numerical statuses; print aggregate counts.
 cargo run --release --features experimental_n1 --example n1_run -- "$CASE" 4 8 status events.json base-ac
 
-# 详细：全部所选数值场景状态与配置规则命中明细。
+# Details: write every selected numerical status and configured rule payloads.
 cargo run --release --features experimental_n1 --example n1_run -- "$CASE" 4 8 details details.json base-ac
 
-# 从精简文件提取 NumericalFailure，验证设备身份后用 DCPF 初值补测。
+# Extract NumericalFailure records and rerun with per-case DCPF initialization.
 cargo run --release --features experimental_n1 --example n1_retry_dc -- "$CASE" events.json retry.json 4 30
 ```
 
-示例监测线路加载率 >100% 和母线电压上下限；变压器参与退出候选。
-n1_run 参数顺序为 CASE、workers、batch、status/details、输出文件、base-ac/dc、
-可选 max_iter（默认 30）。数据加载及规则配置共用 `examples/common/n1.rs`。
-基态通过约束检查后才执行，
-请为自己的网络配置合适的监测规则。空失败集合会提示无需补测。
-筛选文件与复测文件来自同一网络快照；拓扑解列计数单独打印，保留在 Rust report 中。
+Example monitoring covers line loading above 100% and bus voltage bounds;
+transformers remain outage candidates. `n1_run` arguments are CASE, workers, batch,
+status/details, output file, base-ac/dc, and optional max_iter (default 30).
+`examples/common/n1.rs` shares loading and monitoring helpers. An empty retry
+selection produces a message explaining that the input contains no numerical failures.
+Use the same source snapshot for screening and file-based retries. Island totals
+are printed separately and remain available in the Rust report.
 
-## 源码与验证
+## Source map and checks
 
-| 文件 | 职责 |
+| File | Responsibility |
 | --- | --- |
-| src/n1/study.rs | 故障集合、Entity 解析、高层运行和复测 |
-| src/n1/execution.rs | worker App、队列、状态统计、借用电压监测及批输出 |
-| src/n1/solver.rs、numeric.rs | 共享分析、私有数值求解与 J 填充 |
-| src/n1/outage.rs、topology.rs | 数值 patch、桥边与分区信息 |
-| src/n1/postprocess.rs、watch.rs | 共享 SoA、portable/AVX2 后处理与规则 |
-| src/n1/runner.rs | 共享基态准备及早期底层 base-batch 接口 |
+| `src/n1/study.rs` | Fault selections, Entity resolution, high-level runs and reruns |
+| `src/n1/execution.rs` | Worker Apps, queues, aggregates, borrowed-voltage monitoring, event batches |
+| `src/n1/solver.rs`, `numeric.rs` | Shared analyses, private numerical solves, Jacobian fill |
+| `src/n1/outage.rs`, `topology.rs` | Numerical patches, bridges, and partition metadata |
+| `src/n1/postprocess.rs`, `watch.rs` | Shared SoA, portable/AVX2 kernels, and rules |
+| `src/n1/runner.rs` | Baseline preparation and the earlier low-level base-batch API |
 
-六个 N1 集成入口：study、execution、outage_patches、postprocess、watch、topology。
-分别覆盖故障集合、独立重建与跨线程 Symbolic 生命周期、独立盖章、AVX 一致性、
-精简/详细规则一致性以及拓扑映射。传统缓存复用保障在 `tests/klu_cache_reuse.rs`。
+Six integration entry points cover study, execution, outage patches, postprocessing,
+watches, and topology. They retain independent full-rebuild comparisons, cross-thread
+Symbolic lifetime checks, independent stamping, kernel agreement, output-mode
+agreement, and topology mapping. Traditional cache reuse is covered separately in
+`tests/klu_cache_reuse.rs`.
 
 ```sh
 cargo test --features experimental_n1 --lib n1::
@@ -161,9 +191,9 @@ cargo test --features experimental_n1 --test n1_study --test n1_execution --test
 cargo test --features experimental_n1 --example n1_run
 ```
 
-## Python 绑定
+## Python bindings
 
-编译同时开启 `python,experimental_n1`，例如在自己的 venv 中执行：
+Build with both `python` and `experimental_n1`, for example in your virtualenv:
 
 ```sh
 maturin develop --release --features python,experimental_n1
@@ -174,7 +204,7 @@ import rustpower as rp
 import pandas as pd
 
 grid = rp.PowerGrid("network.zip", qlim=False)
-# faults 可传 line/transformer handle 列表；省略时选择全部在役支路。
+# Pass line/transformer handles in faults, or omit it for all active branches.
 study = grid.prepare_n1()
 report = study.run(workers=16, batch_size=8)
 print(report.summary)
@@ -186,32 +216,40 @@ hits = pd.DataFrame(details.hits)
 flows = pd.DataFrame(details.branch_results)
 ```
 
-默认只检查数值收敛。准备时设置 `voltage_limits=True` 和/或
-`line_loading_limit=100.0` 启用对应监测；基准态需满足选定约束。
-配置规则在准备后恢复到源 World 原状，编译后的规则归共享快照持有。
+The default checks numerical convergence. Enable `voltage_limits=True` and/or
+`line_loading_limit=100.0` during preparation for security rules. The baseline must
+satisfy those rules. Temporary source-World watches used for preparation are restored;
+the snapshot owns the compiled plan.
 
-N1Faults 关联源 grid，可直接传回同源 study；重复设备去重，显式空集合保持为空。
-`report.numerical_failures` 选择数值失败，`rejected_faults` 选择数值失败或安全越界，
-`island_faults` 单独选择拓扑解列。跨 grid handle 与故障集合会报错。
+`N1Faults` retains its source grid and can be passed to a study of that grid.
+Selections deduplicate handles and preserve an explicit empty set.
+`report.numerical_failures` selects numerical failures; `rejected_faults` selects
+numerical or constraint failures; `island_faults` separately selects topology
+rejections. Foreign-grid handles or selections produce an error.
 
-N1Study 持有 PreparedN1 快照与源 grid 引用。每轮通过 Rust 高层入口运行，重用
-共享结构和 Symbolic；本轮的高层验证、Entity 查询表构造及执行均计入
-summary.execution_seconds。summary.preparation_seconds 记录最初准备时间。
-run/details 整批释放 GIL，worker 与 collector 内处理 Rust 数据；返回后按需访问
-结果列时才生成 Python/NumPy 数据。源数据后续修改影响下一次准备，已有 study
-继续使用自己的固定快照。
+The Python study owns `PreparedN1` and a reference to its source grid. Each run
+uses the Rust high-level entry, sharing patterns and analyses. High-level validation,
+Entity lookup construction, and execution are included in `summary.execution_seconds`.
+`summary.preparation_seconds` describes the original preparation.
 
-精简通过场景仅计入汇总；详细结果在本轮返回前保存在 Rust 结果容器。
-events 的数值列为 NumPy 数组，类别/错误列为列表。hits.event_row 关联事件行，
-hits.result_index 关联 flows 行（-1 表示无支路结果）；flows.event_row 也关联事件。
-缺少标量的命中值使用 NaN。Entity 列保留原 World 的 u64 标识，设备类型和 ID
-用于持久化关联。结果数组拥有自己的内存，可独立于 report 生命周期保留。
+`run` and `details` release the GIL for native execution. Workers and the collector
+handle Rust data; Python/NumPy columns are created on access after return. Existing
+studies keep their frozen snapshot when source data changes.
 
-Python 回归集中在 `scripts/test_n1_api.py`，需要 numpy 和 pandapower。
+Passing screening scenarios contribute only to aggregates. Reported events, including
+all selected numerical statuses from `details`, are retained in a Rust result container
+until Python consumes or drops the report. Numeric event columns are NumPy arrays;
+category/error columns are lists. `hits.event_row` links to event rows;
+`hits.result_index` links to branch-result rows, with -1 for no branch payload.
+`flows.event_row` also identifies the source event. Missing scalar values use NaN.
+Entity columns preserve source u64 identifiers; stable device type/ID supports
+persistent association. Returned arrays own their memory independently of the report.
 
-## 性能工具与历史结果
+Python checks are in `scripts/test_n1_api.py` and require NumPy and pandapower.
 
-研究入口位于 tools/n1，以 feature-gated binary 运行；参数保持原有顺序：
+## Performance tools
+
+Research binaries live in `tools/n1` and require the feature:
 
 ```sh
 cargo run --release --features experimental_n1 --bin bench_n1 -- 9241 4 8 /tmp/n1-results base-ac status bridges
@@ -219,93 +257,104 @@ cargo run --release --features experimental_n1 --bin bench_n1_scale -- case14 /p
 cargo run --release --features experimental_n1 --bin n1_memory_layout
 ```
 
-### 一键扫描：1 与 4 worker 的跨规模效率
+### One-versus-four-worker size sweep
 
 ```sh
 cargo build --release --features experimental_n1 --bin bench_n1_scale
-# 使用安装了 pandapower 的 Python；缺失的案例 ZIP 会从本机 pandapower 导出。
+# Use a Python environment with pandapower to export missing CSV ZIP inputs.
 python tools/n1/scan_scale.py --cpus 0-7 --out /tmp/n1-scale-4
 ```
 
-依次覆盖 14/30/57/89/300/1354/2869/9241 母线，比较 1 与 4 个 PF worker。
-两档共用 CPU 范围，默认 0–7 给生产者与 collector 留调度空间；严格限定四个
-物理核时传 `--cpus 0-3`，编号以本机拓扑为准。
-14/30/57/89/300 的重复数为 201/101/101/51/21；大案例默认一次，可用
-`--large-repeats 3` 增加重复。`--cases case14 case30 case300` 可缩小集合，
-`--case-dir PATH` 可复用输入 ZIP，`--binary PATH` 可指定已构建的二进制。
+The sweep covers 14/30/57/89/300/1354/2869/9241 buses with 1 and 4 PF workers.
+Both counts share the same CPU set. The default 0–7 leaves scheduling capacity
+for production and collection; use `--cpus 0-3` for a four-physical-core allowance
+when those IDs match your machine's topology.
 
-终端逐案例输出中位耗时、加速比和效率；summary.csv/summary.json 保存汇总。
-每档原始 JSON 含准备时间、首次端到端成本、计时样本和实际亲和性。metadata.json
-记录二进制/输入哈希、CPU 拓扑、电源设置与命令；逐项校验两档场景判定和迭代数。
-电源快照中的 scaling_cur_freq 是瞬时读数。已有测量目录会被保留，请为新扫描
-指定新的输出目录。性能工具每次调用重建 worker，复用该进程内准备好的基态。
+Repeat counts for 14/30/57/89/300 are 201/101/101/51/21. Large cases default to one
+run; `--large-repeats 3` increases this. `--cases case14 case30 case300` selects a
+subset, `--case-dir PATH` reuses ZIPs, and `--binary PATH` selects an executable.
 
-另外保留 bench_acpf_floor 和 n1_bevy_memory 诊断工具。
+The terminal reports median times, speedups, and efficiencies. `summary.csv` and
+`summary.json` retain the comparison. Individual JSON files retain preparation,
+first-call end-to-end time, samples, and actual affinity. Metadata records executable
+and input hashes, topology, power settings, and commands. The driver checks scenario
+decisions and iteration totals across worker counts. `scaling_cur_freq` snapshots
+are instantaneous frequency readings. Choose a fresh output directory for each sweep.
+Each benchmark process reuses its prepared baseline across repetitions and recreates
+workers for every whole-batch call.
 
-### N−1 性能记录总览（2026-10-27）
+`bench_acpf_floor` and `n1_bevy_memory` remain available for cost/memory diagnostics.
 
-完整机器可读记录见 [performance-history.json](../tools/n1/results/performance-history.json)，
-包括 AMD 各轮结果、Intel 跨规模数据、功耗来源、旧实验和时间边界。
-以下现代9241记录均为16049候选、14384数值求解、1665解列、10数值失败。
-执行时间包含分类、任务发射、worker初始化、PF、监测、收集和线程退出；共享准备
-另计。端到端从模型加载前算到首批返回。能耗估算统一使用执行时间。
+## Measurement history (2026-10-27)
 
-#### AMD AI Max 395：默认频率与SMT
+[performance-history.json](../tools/n1/results/performance-history.json) preserves
+all series, power provenance, earlier observations, and archived experiments.
+Modern case9241 runs have 16049 candidates, 14384 numerical solves, 1665 islands,
+and 10 numerical failures. Execution includes the full pipeline through thread joins;
+shared preparation is separate. First-call end-to-end fields begin before model loading.
+Energy estimates below use execution time.
 
-初始1/2/4/8/16 worker各重复三次，CPU亲和性和二进制哈希未随终端记录提供。
-32 worker为随后报告的约9.5 s。效率按本组单worker84.257541 s计算。
+### AMD AI Max 395: default frequency and SMT
 
-| Worker | 执行 s | 加速比 | 效率 |
+The initial 1/2/4/8/16-worker series used three repetitions per configuration.
+The reported terminal lines omit affinity and binary hashes. The later 32-worker
+result is approximate. This series uses its own 84.257541-second single-worker baseline.
+
+| Workers | Execution s | Speedup | Efficiency |
 | ---: | ---: | ---: | ---: |
-| 1 | 84.257541 | 1.000× | 100.0% |
-| 2 | 42.832640 | 1.967× | 98.4% |
-| 4 | 22.997484 | 3.664× | 91.6% |
-| 8 | 15.193549 | 5.546× | 69.3% |
-| 16 | 8.559683 | 9.844× | 61.5% |
-| 32 | ≈9.500000 | 8.869× | 27.7% |
+| 1 | 84.257541 | 1.000x | 100.0% |
+| 2 | 42.832640 | 1.967x | 98.4% |
+| 4 | 22.997484 | 3.664x | 91.6% |
+| 8 | 15.193549 | 5.546x | 69.3% |
+| 16 | 8.559683 | 9.844x | 61.5% |
+| 32 | ~9.500000 | 8.869x | 27.7% |
 
-32 worker使用16个物理核的SMT资源。对应满载讨论中用户报告约120 W和约4.6 GHz，
-这些是观察值；各轮持续有效频率尚未提供。
+32 workers use SMT on 16 physical cores. The associated full-load discussion reports
+approximately 120 W and 4.6 GHz. Sustained effective clocks for each run were not supplied.
 
-#### AMD：CPU 0–7亲和性补测
+### AMD: CPU 0–7 affinity trials
 
-| PF worker | CPU范围 | 执行 s | 重复 |
+| PF workers | Allowed CPUs | Execution s | Repeats |
 | ---: | --- | ---: | ---: |
 | 4 | 0-7 | 23.181788 | 3 |
 | 5 | 0-7 | 20.045501 | 1 |
 | 6 | 0-7 | 17.999506 | 1 |
 | 8 | 0-7 | 15.380010 | 1 |
 
-另有四worker约23.3 s、约5.0 GHz的观察。CPU范围约束整个进程，生产者和collector
-也共享此范围，每个worker仍可在范围内迁移。
+A separate four-worker observation was approximately 23.3 seconds at 5.0 GHz.
+The CPU allowance applies to the producer and collector too; individual workers
+can migrate within it.
 
-#### AMD：3 GHz固定频率
+### AMD: fixed 3 GHz
 
-基线单worker145.29 s；四worker38.483238 s；五worker约32 s，以上重复数未提供。
-8–16 worker最新一组各重复三次。效率使用本组3 GHz单worker基线。
+The prior single-worker baseline is 145.29 seconds; earlier four/five-worker times
+are 38.483238/about 32 seconds, with repetition counts unspecified. The latest
+8–16-worker configurations each used three repetitions.
 
-| Worker | 执行 s | 加速比 | 效率 | 重复 |
+| Workers | Execution s | Speedup | Efficiency | Repeats |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | ≈145.290000 | 1.000× | 100.0% | 未提供 |
-| 4 | 38.483238 | 3.775× | 94.4% | 未提供 |
-| 5 | ≈32.000000 | 4.540× | 90.8% | 未提供 |
-| 8 | 19.980268 | 7.272× | 90.9% | 3 |
-| 10 | 16.842420 | 8.626× | 86.3% | 3 |
-| 12 | 13.859751 | 10.483× | 87.4% | 3 |
-| 14 | 12.140084 | 11.968× | 85.5% | 3 |
-| 16 | 11.087117 | 13.104× | 81.9% | 3 |
+| 1 | ~145.290000 | 1.000x | 100.0% | unspecified |
+| 4 | 38.483238 | 3.775x | 94.4% | unspecified |
+| 5 | ~32.000000 | 4.540x | 90.8% | unspecified |
+| 8 | 19.980268 | 7.272x | 90.9% | 3 |
+| 10 | 16.842420 | 8.626x | 86.3% | 3 |
+| 12 | 13.859751 | 10.483x | 87.4% | 3 |
+| 14 | 12.140084 | 11.968x | 85.5% | 3 |
+| 16 | 11.087117 | 13.104x | 81.9% | 3 |
 
-功耗：四worker约26 W（修正早先约30 W估计）；10–12 worker约48–50 W，14 worker
-约60 W；先前16 worker约11.3 s的一轮也报告约60 W。旧的四worker约38 s、16 worker
-约11.3 s在历史记录中保留，最新精确时间用于主表。
-原始8–16 worker终端行见 [ai-max395-3ghz.json](../tools/n1/results/ai-max395-3ghz.json)。
+Reported power is about 26 W at four workers, 48–50 W across 10–12 workers, and 60 W
+at 14 workers. An earlier 16-worker/11.3-second run also reported 60 W. The four-worker
+26 W figure replaces the earlier 30 W estimate. Rounded 38-second and 11.3-second
+observations remain in the history; the table uses the newer precise times.
+The latest raw terminal lines are in [ai-max395-3ghz.json](../tools/n1/results/ai-max395-3ghz.json).
 
-#### Intel 288V：历史四P核规模扫描
+### Intel 288V: historical four-P-core sweep
 
-共享基态AC、batch=8、StatusOnly空约束规则、max_iter30、tol1e-10；CPU0–3。
-这些数据早于结果电压clone移除；各案例逐场景判定在1/2/4 worker间一致。
+BaseAc, batch=8, StatusOnly, empty rule plan, max_iter=30, tolerance=1e-10; CPUs 0–3.
+This code stage precedes removal of per-case result-voltage snapshots. Per-scenario
+decisions agreed across 1/2/4 workers in every case.
 
-| 母线 | 候选/求解 | 重复 | 1 worker ms | 2 worker ms | 4 worker ms | 四worker效率 |
+| Buses | Candidates/solves | Repeats | 1 worker ms | 2 workers ms | 4 workers ms | Four-worker efficiency |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 14 | 20/19 | 201 | 0.242 | 0.194 | 0.281 | 21.5% |
 | 30 | 41/38 | 101 | 0.530 | 0.355 | 0.371 | 35.7% |
@@ -316,45 +365,55 @@ python tools/n1/scan_scale.py --cpus 0-7 --out /tmp/n1-scale-4
 | 2869 | 4582/3804 | 3 | 5866.724 | 3000.912 | 1684.674 | 87.1% |
 | 9241 | 16049/14384 | 1 | 92753.212 | 48054.057 | 28259.399 | 82.1% |
 
-6515 RTE另测9037候选、6474数值求解、2563解列、2数值失败，21385次AC尝试；
-1/2/4 worker各完整一次，执行25.512806/13.231136/7.722467 s，四worker效率82.6%。
-14母线batch=1的201次补测：1/2/4 worker为0.295512/0.215572/0.312129 ms。
+The separate 6515 RTE run had 9037 candidates, 6474 numerical solves, 2563 islands,
+2 numerical failures, and 21385 AC attempts. One complete run per 1/2/4 workers took
+25.512806/13.231136/7.722467 seconds; four-worker efficiency was 82.6%.
+A case14 batch=1 supplement used 201 repetitions: 1/2/4 workers took
+0.295512/0.215572/0.312129 ms.
 
-#### Intel：当前代码的四P核与全八核端到端
+### Intel: current four-P-core versus all-eight-core end-to-end run
 
-提交a3a4375，release默认参数。系统识别Core Ultra9 288V；CPU0–3为P核，4–7为E核。
-governor=powersave、EPP=performance、Turbo开启。每档完整一次，依次执行。
+Commit a3a4375, release defaults, one full run per configuration, executed sequentially.
+The system identifies Core Ultra 9 288V: CPUs 0–3 are P cores; 4–7 are E cores.
+Governor powersave, EPP performance, turbo enabled; settings were retained.
 
-| 配置 | 执行 s | 加载到返回 s | 平均使用核数 | 峰值RSS MiB |
+| Configuration | Execution s | Load-to-return s | Average busy cores | Peak RSS MiB |
 | --- | ---: | ---: | ---: | ---: |
-| 4 worker，CPU 0-3 | 30.386957 | 30.486794 | 3.84 | 106.85 |
-| 8 worker，CPU 0-7 | 21.641621 | 21.740990 | 7.48 | 129.54 |
+| 4 workers, CPUs 0-3 | 30.386957 | 30.486794 | 3.84 | 106.85 |
+| 8 workers, CPUs 0-7 | 21.641621 | 21.740990 | 7.48 | 129.54 |
 
-两档逐项判定与43709次尝试迭代一致。平均使用核数为子进程user+system CPU时间
-除以进程墙钟，含生产者和collector。全核端到端吞吐提高40.2%。
-本轮包能量计数读取不可用；用户确认此Lunar机器约30 W，以下据此估算能耗。
+Per-scenario decisions and 43709 attempted iterations agree. Average busy cores is
+child-process user+system CPU time divided by process wall time, including production
+and collection. All-core end-to-end throughput increased 40.2%.
+Hardware package-energy reads were unavailable. The owner reports this Lunar machine
+at approximately 30 W; the energy estimates below use that observation.
 
-#### 每批能耗粗估
+### Approximate energy per batch
 
-功耗按用户报告近似为整轮平均值，以下为P×T估算；10–12 worker的48–50 W为
-两档合并观察范围，16 worker约60 W来自先前11.3 s的一轮。
+Power observations are treated as approximate whole-run averages in P times T.
+The 48–50 W range covers the 10–12-worker group. The 16-worker 60 W estimate comes
+from the earlier 11.3-second run.
 
-| 配置 | 执行 s | 功耗 W | 每批能耗 J |
+| Configuration | Execution s | Approximate power W | Estimated energy J |
 | --- | ---: | ---: | ---: |
-| Lunar全八核，当前 | 21.642 | ≈30 | ≈649 |
-| AMD3GHz四worker | 38.483 | ≈26 | ≈1001 |
-| AMD3GHz十worker | 16.842 | ≈48–50 | ≈808–842 |
-| AMD3GHz十二worker | 13.860 | ≈48–50 | ≈665–693 |
-| AMD3GHz十四worker | 12.140 | ≈60 | ≈728 |
-| AMD3GHz十六worker，借用此前功耗 | 11.087 | ≈60 | ≈665 |
-| AMD高频四worker，CPU0–7 | 23.182 | ≈70–72 | ≈1623–1669 |
+| all8 current | 21.642 | 30 | 649 |
+| 3GHz four workers | 38.483 | 26 | 1001 |
+| 3GHz ten workers | 16.842 | 48–50 | 808–842 |
+| 3GHz twelve workers | 13.860 | 48–50 | 665–693 |
+| 3GHz fourteen workers | 12.140 | 60 | 728 |
+| 3GHz sixteen workers latest time | 11.087 | 60 | 665 |
+| high-frequency four workers affinity0-7 | 23.182 | 70–72 | 1623–1669 |
 
-#### 归档与后续方向
+### Archives and next steps
 
-历史记录JSON另外保留：早期四P核16 worker超订阅、四worker开放两个E核、已撤回
-SPSC对照。它们的初始化、监测和代码阶段单独标注。清理前报告与源码在本任务
-工作区旁n1-cleanup-archive；本地完整测量在n1-scalability、n1-6515、n1-all-cores、
-n1-acpf-estimate、n1-spsc-performance。当前总览同时保存准备与首次端到端字段。
+The history JSON also retains the early 16-worker/four-P-core oversubscription test,
+the four-worker/two-extra-E-core allowance, and the withdrawn SPSC experiment.
+Their initialization, monitoring, and implementation stages are tagged separately.
+Pre-cleanup reports and sources remain in the local task's sibling n1-cleanup-archive;
+full local measurements remain in n1-scalability, n1-6515, n1-all-cores,
+n1-acpf-estimate, and n1-spsc-performance. The consolidated record retains preparation
+and first-call end-to-end fields.
 
-GPU方向暂缓：用户报告J填充约100 μs，分解成本远高于J。GPU实验优先验证批量
-稀疏factor/refactor/solve后端，再决定整体迁移。
+Jacobian-only GPU offload is deferred. The owner reports about 100 microseconds for
+Jacobian fill while factorization dominates. A suitable batched sparse factor/refactor/
+solve backend is the next prerequisite for evaluating a complete GPU executor.
