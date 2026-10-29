@@ -30,3 +30,10 @@ __pycache__/
 
 # Local reproductions for GitHub issues
 /issue solving/
+
+# Local CUDA SDK packages, benchmark binaries and generated results
+/gpu-benchmarks/**/python-packages/
+/gpu-benchmarks/**/tools/
+/gpu-benchmarks/**/results/
+/gpu-benchmarks/**/cudss-jit-cache/
+/native/acpf_cuda/reference-attachment.txt
