@@ -27,6 +27,8 @@ crate-type = ["rlib", "cdylib"]
 [features]
 # Fixed-partition shared-symbolic N-1 foundation; old solver paths unchanged.
 experimental_n1 = ["klu_dyn", "dep:crossbeam-channel", "dep:soa-rs"]
+# Native FP64 CUDA/cuDSS executor; the default N-1 backend remains CPU KLU.
+experimental_n1_cuda = ["experimental_n1"]
 # Experimental single-sweep Jacobian and calculated-power assembly.
 experimental_fused_scalc = []
 default=["rsparse", "arrow"] 
@@ -110,3 +112,8 @@ required-features = ["experimental_n1"]
 name = "bench_acpf_floor"
 path = "tools/n1/bench_acpf_floor.rs"
 required-features = ["experimental_n1"]
+
+[[bin]]
+name = "bench_cuda_base"
+path = "tools/n1/bench_cuda_base.rs"
+required-features = ["experimental_n1_cuda"]
