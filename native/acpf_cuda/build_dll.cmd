@@ -8,11 +8,11 @@ if not exist "%OUT%" mkdir "%OUT%"
 call "%VCVARS%" >nul
 if errorlevel 1 exit /b 1
 rem Keep NVCC's device frontend independent of the Windows console code page.
-powershell -NoProfile -Command "$e = New-Object System.Text.UTF8Encoding($true); [IO.File]::WriteAllText('%OUT%\executor_utf8.cu', [IO.File]::ReadAllText('%ROOT%\native\acpf_cuda\src\executor.cu', [Text.Encoding]::UTF8), $e); [IO.File]::WriteAllText('%OUT%\newton_kernels_utf8.cu', [IO.File]::ReadAllText('%ROOT%\native\acpf_cuda\src\newton_kernels.cu', [Text.Encoding]::UTF8), $e)"
+powershell -NoProfile -Command "$e = New-Object System.Text.UTF8Encoding($true); [IO.File]::WriteAllText('%OUT%\executor_utf8.cu', [IO.File]::ReadAllText('%ROOT%\native\acpf_cuda\src\executor.cu', [Text.Encoding]::UTF8), $e); [IO.File]::WriteAllText('%OUT%\newton_kernels_utf8.cu', [IO.File]::ReadAllText('%ROOT%\native\acpf_cuda\src\newton_kernels.cu', [Text.Encoding]::UTF8), $e); [IO.File]::WriteAllText('%OUT%\branch_kernels_utf8.cu', [IO.File]::ReadAllText('%ROOT%\native\acpf_cuda\src\branch_kernels.cu', [Text.Encoding]::UTF8), $e)"
 if errorlevel 1 exit /b 1
 "%CUDA_PATH%\bin\nvcc.exe" -shared -arch=%RUSTPOWER_CUDA_ARCH% -std=c++17 -O2 -Xcompiler /EHsc,/MD,/utf-8 ^
   -I"%ROOT%\native\acpf_cuda\include" -I"%CUDSS_DIR%\include" -L"%CUDSS_DIR%\lib" ^
-  "%OUT%\executor_utf8.cu" "%OUT%\newton_kernels_utf8.cu" ^
+  "%OUT%\executor_utf8.cu" "%OUT%\newton_kernels_utf8.cu" "%OUT%\branch_kernels_utf8.cu" ^
   -lcudss -Xlinker /IMPLIB:"%OUT%\acpf_cuda.lib" -o "%OUT%\acpf_cuda.dll"
 if errorlevel 1 exit /b 1
 rem Cargo copies these runtime dependencies beside the selected profile's binaries.

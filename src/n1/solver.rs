@@ -847,10 +847,10 @@ impl N1Worker {
                 base.npq,
                 &mut self.j_values,
             );
-            if let Err(e) =
+            let linear =
                 self.ac_numeric
-                    .solve(&base.ac_analysis, &mut self.j_values, &mut self.mismatch)
-            {
+                    .solve(&base.ac_analysis, &mut self.j_values, &mut self.mismatch);
+            if let Err(e) = linear {
                 self.timings.ac_iterations += iteration_started.elapsed();
                 let (min_bus, min_v) = self
                     .v

@@ -402,6 +402,20 @@ impl BranchCatalog {
             in_service: *branch.in_service,
         })
     }
+    /// Terminal current multipliers, shared read-only with native backends.
+    pub fn base_currents_ka(&self) -> [&[f64]; 2] {
+        [self.branches.base_i_from_ka(), self.branches.base_i_to_ka()]
+    }
+    /// Precomputed line and transformer loading multipliers.
+    pub fn loading_scales(&self) -> [&[f64]; 2] {
+        [
+            self.branches.inv_line_rating(),
+            self.branches.transformer_loading_scale(),
+        ]
+    }
+    pub fn solver_bus_count(&self) -> usize {
+        self.n_bus
+    }
     pub fn sbase(&self) -> f64 {
         self.sbase
     }

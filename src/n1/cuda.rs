@@ -1,6 +1,11 @@
 //! Experimental FP64 CUDA executor. One instance owns one stream and one cuDSS queue.
 //! Multiple instances are the intended multi-stream experiment; no global device state.
-use super::SharedBaseline;
+use super::{
+    BranchCatalog, BranchKind, LinearSolveStats, N1Event, N1EventBatch, N1FaultSet,
+    N1Initialization, N1Outcome, N1Reporting, N1Study, N1StudyError, N1StudyReport, N1Summary,
+    PreparedN1, SharedBaseline, SolveStage, outage::OutageTask, watch::WatchHits,
+};
+use crate::basic::branch::BranchFlowResult;
 use num_complex::Complex64;
 use std::{
     cell::Cell,
@@ -8,6 +13,7 @@ use std::{
     marker::PhantomData,
     mem,
     ptr::{self, NonNull},
+    time::Instant,
 };
 
 const ABI_VERSION: u32 = 1;
@@ -50,6 +56,51 @@ struct FfiSolveOptions {
     tolerance: f64,
 }
 
+#[repr(C)]
+struct FfiOutageBatch {
+    struct_size: u32,
+    patch_counts: *const i32,
+    slots: *const i32,
+    y_re: *const f64,
+    y_im: *const f64,
+}
+
+#[repr(C)]
+struct FfiBranchCatalog {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+struct FfiBranchCatalogInput {
+    struct_size: u32,
+    nbus: i32,
+    branch_count: i32,
+    from: *const i32,
+    to: *const i32,
+    y_ff_re: *const f64,
+    y_ff_im: *const f64,
+    y_tf_re: *const f64,
+    y_tf_im: *const f64,
+    y_ft_re: *const f64,
+    y_ft_im: *const f64,
+    y_tt_re: *const f64,
+    y_tt_im: *const f64,
+    base_i_from_ka: *const f64,
+    base_i_to_ka: *const f64,
+    inv_line_rating: *const f64,
+    transformer_loading_scale: *const f64,
+    in_service: *const u8,
+    kind: *const u8,
+    sbase: f64,
+}
+
+#[repr(C)]
+struct FfiPostprocessStats {
+    struct_size: u32,
+    kernel_milliseconds: f64,
+    download_milliseconds: f64,
+}
+
 unsafe extern "C" {
     fn rp_cuda_create(
         baseline: *const FfiBaseline,
@@ -65,6 +116,29 @@ unsafe extern "C" {
         residuals: *mut f64,
         voltage_re: *mut f64,
         voltage_im: *mut f64,
+    ) -> i32;
+    fn rp_cuda_solve_outage_batch(
+        executor: *mut FfiExecutor,
+        batch: i32,
+        outages: *const FfiOutageBatch,
+        options: *const FfiSolveOptions,
+        case_status: *mut i32,
+        iterations: *mut i32,
+        residuals: *mut f64,
+        voltage_re: *mut f64,
+        voltage_im: *mut f64,
+    ) -> i32;
+    fn rp_cuda_branch_catalog_create(
+        catalog: *const FfiBranchCatalogInput,
+        out_catalog: *mut *mut FfiBranchCatalog,
+    ) -> i32;
+    fn rp_cuda_branch_catalog_destroy(catalog: *mut FfiBranchCatalog);
+    fn rp_cuda_postprocess_branches(
+        executor: *mut FfiExecutor,
+        catalog: *const FfiBranchCatalog,
+        outage_indices: *const i32,
+        output: *mut f64,
+        stats: *mut FfiPostprocessStats,
     ) -> i32;
     fn rp_cuda_last_error(executor: *const FfiExecutor) -> *const c_char;
     fn rp_cuda_destroy(executor: *mut FfiExecutor);
@@ -102,6 +176,113 @@ pub struct CudaBatchResult {
     pub cases: Vec<CudaCaseSolution>,
 }
 
+/// Immutable two-port constants uploaded once and shared by all postprocessing calls.
+pub struct CudaBranchCatalog {
+    handle: NonNull<FfiBranchCatalog>,
+    nbus: usize,
+    branch_count: usize,
+    _not_sync: PhantomData<Cell<()>>,
+}
+unsafe impl Send for CudaBranchCatalog {}
+impl CudaBranchCatalog {
+    pub fn new(catalog: &BranchCatalog) -> Result<Self, String> {
+        let branch_count = catalog.len();
+        if branch_count == 0 {
+            return Err("CUDA branch catalog must not be empty".into());
+        }
+        let nbus = catalog.solver_bus_count();
+        let from = to_i32(catalog.from_buses(), "branch from-bus indices")?;
+        let to = to_i32(catalog.to_buses(), "branch to-bus indices")?;
+        if from
+            .iter()
+            .chain(&to)
+            .any(|&bus| bus < 0 || bus as usize >= nbus)
+        {
+            return Err("branch endpoint exceeds solver bus count".into());
+        }
+        let [y_ff, y_tf, y_ft, y_tt] = catalog.admittances();
+        let (y_ff_re, y_ff_im) = split_complex(y_ff);
+        let (y_tf_re, y_tf_im) = split_complex(y_tf);
+        let (y_ft_re, y_ft_im) = split_complex(y_ft);
+        let (y_tt_re, y_tt_im) = split_complex(y_tt);
+        let [base_i_from_ka, base_i_to_ka] = catalog.base_currents_ka();
+        let [inv_line_rating, transformer_loading_scale] = catalog.loading_scales();
+        let in_service: Vec<u8> = catalog
+            .in_service()
+            .iter()
+            .map(|&value| value.into())
+            .collect();
+        let kind: Vec<u8> = catalog
+            .identities()
+            .iter()
+            .map(|identity| match identity.kind {
+                BranchKind::Line => 0,
+                BranchKind::Transformer => 1,
+            })
+            .collect();
+        let ffi = FfiBranchCatalogInput {
+            struct_size: mem::size_of::<FfiBranchCatalogInput>() as u32,
+            nbus: i32::try_from(nbus).map_err(|_| "branch bus count exceeds i32")?,
+            branch_count: i32::try_from(branch_count).map_err(|_| "branch count exceeds i32")?,
+            from: from.as_ptr(),
+            to: to.as_ptr(),
+            y_ff_re: y_ff_re.as_ptr(),
+            y_ff_im: y_ff_im.as_ptr(),
+            y_tf_re: y_tf_re.as_ptr(),
+            y_tf_im: y_tf_im.as_ptr(),
+            y_ft_re: y_ft_re.as_ptr(),
+            y_ft_im: y_ft_im.as_ptr(),
+            y_tt_re: y_tt_re.as_ptr(),
+            y_tt_im: y_tt_im.as_ptr(),
+            base_i_from_ka: base_i_from_ka.as_ptr(),
+            base_i_to_ka: base_i_to_ka.as_ptr(),
+            inv_line_rating: inv_line_rating.as_ptr(),
+            transformer_loading_scale: transformer_loading_scale.as_ptr(),
+            in_service: in_service.as_ptr(),
+            kind: kind.as_ptr(),
+            sbase: catalog.sbase(),
+        };
+        let mut handle = ptr::null_mut();
+        let status = unsafe { rp_cuda_branch_catalog_create(&ffi, &mut handle) };
+        if status != SUCCESS {
+            return Err(format!(
+                "CUDA branch catalog creation failed ({status}): {}",
+                last_error(None)
+            ));
+        }
+        let handle = NonNull::new(handle).ok_or("CUDA returned a null branch catalog")?;
+        Ok(Self {
+            handle,
+            nbus,
+            branch_count,
+            _not_sync: PhantomData,
+        })
+    }
+
+    pub fn len(&self) -> usize {
+        self.branch_count
+    }
+}
+impl Drop for CudaBranchCatalog {
+    fn drop(&mut self) {
+        unsafe { rp_cuda_branch_catalog_destroy(self.handle.as_ptr()) }
+    }
+}
+
+#[derive(Debug)]
+pub struct CudaBranchResults {
+    pub flows: Vec<BranchFlowResult>,
+    branch_count: usize,
+    pub kernel_seconds: f64,
+    pub download_seconds: f64,
+}
+impl CudaBranchResults {
+    pub fn scenario(&self, scenario: usize) -> Option<&[BranchFlowResult]> {
+        let start = scenario.checked_mul(self.branch_count)?;
+        self.flows.get(start..start + self.branch_count)
+    }
+}
+
 /// A fixed-batch, single-stream executor. It can move to a worker thread, but &mut
 /// is required for every solve; separate instances own independent cuDSS queues.
 pub struct CudaExecutor {
@@ -116,6 +297,15 @@ pub struct CudaExecutor {
 unsafe impl Send for CudaExecutor {}
 impl CudaExecutor {
     pub fn new(base: &SharedBaseline, batch: usize) -> Result<Self, String> {
+        Self::new_inner(base, batch, false)
+    }
+
+    /// N-1 executor: every scenario starts from the prepared converged AC base.
+    pub fn new_ac(base: &SharedBaseline, batch: usize) -> Result<Self, String> {
+        Self::new_inner(base, batch, true)
+    }
+
+    fn new_inner(base: &SharedBaseline, batch: usize, use_ac_start: bool) -> Result<Self, String> {
         let batch_i32 = i32::try_from(batch).map_err(|_| "CUDA batch exceeds i32".to_string())?;
         if batch == 0 {
             return Err("CUDA batch must be positive".into());
@@ -150,7 +340,13 @@ impl CudaExecutor {
         let mirror = mirror_positions(&y_col_ptr, &y_row_indices)?;
         let (y_re, y_im) = split_complex(base.y_bus().values());
         let (sbus_re, sbus_im) = split_complex(base.s_bus());
-        let (initial_v_re, initial_v_im) = split_complex(base.v_init());
+        let initial = if use_ac_start {
+            base.ac_start()
+                .ok_or("CUDA N-1 requires a prepared converged base AC voltage")?
+        } else {
+            base.v_init()
+        };
+        let (initial_v_re, initial_v_im) = split_complex(initial);
         let ffi = FfiBaseline {
             struct_size: mem::size_of::<FfiBaseline>() as u32,
             abi_version: ABI_VERSION,
@@ -250,11 +446,423 @@ impl CudaExecutor {
             .collect();
         Ok(CudaBatchResult { cases })
     }
+
+    pub fn solve_outages(
+        &mut self,
+        tasks: &[super::outage::OutageTask],
+        max_iter: usize,
+        tolerance: f64,
+    ) -> Result<CudaBatchResult, String> {
+        if tasks.len() != self.batch {
+            return Err("CUDA outage task count must equal executor batch".into());
+        }
+        let mut counts = Vec::with_capacity(self.batch);
+        let mut slots = vec![0_i32; self.batch * 4];
+        let mut y_re = vec![0.0; self.batch * 4];
+        let mut y_im = vec![0.0; self.batch * 4];
+        for (scenario, task) in tasks.iter().enumerate() {
+            let patch = task.y_patch();
+            counts.push(i32::try_from(patch.len()).map_err(|_| "outage patch count exceeds i32")?);
+            for k in 0..patch.len() {
+                let offset = scenario * 4 + k;
+                slots[offset] =
+                    i32::try_from(patch.slots()[k]).map_err(|_| "outage Ybus slot exceeds i32")?;
+                y_re[offset] = patch.values()[k].re;
+                y_im[offset] = patch.values()[k].im;
+            }
+        }
+        let outages = FfiOutageBatch {
+            struct_size: mem::size_of::<FfiOutageBatch>() as u32,
+            patch_counts: counts.as_ptr(),
+            slots: slots.as_ptr(),
+            y_re: y_re.as_ptr(),
+            y_im: y_im.as_ptr(),
+        };
+        let options = FfiSolveOptions {
+            struct_size: mem::size_of::<FfiSolveOptions>() as u32,
+            max_iterations: i32::try_from(max_iter).map_err(|_| "max_iter exceeds i32")?,
+            tolerance,
+        };
+        let count = self
+            .batch
+            .checked_mul(self.nbus)
+            .ok_or("CUDA output size overflow")?;
+        let mut status = vec![0; self.batch];
+        let mut iterations = vec![0; self.batch];
+        let mut residuals = vec![0.0; self.batch];
+        let mut voltage_re = vec![0.0; count];
+        let mut voltage_im = vec![0.0; count];
+        let code = unsafe {
+            rp_cuda_solve_outage_batch(
+                self.handle.as_ptr(),
+                self.batch as i32,
+                &outages,
+                &options,
+                status.as_mut_ptr(),
+                iterations.as_mut_ptr(),
+                residuals.as_mut_ptr(),
+                voltage_re.as_mut_ptr(),
+                voltage_im.as_mut_ptr(),
+            )
+        };
+        if code != SUCCESS {
+            return Err(format!(
+                "CUDA outage batch failed ({code}): {}",
+                last_error(Some(self.handle))
+            ));
+        }
+        let cases = (0..self.batch)
+            .map(|scenario| {
+                let start = scenario * self.nbus;
+                CudaCaseSolution {
+                    status: CudaCaseStatus::from_raw(status[scenario]),
+                    iterations: iterations[scenario] as usize,
+                    residual: residuals[scenario],
+                    voltage: (0..self.nbus)
+                        .map(|k| Complex64::new(voltage_re[start + k], voltage_im[start + k]))
+                        .collect(),
+                }
+            })
+            .collect();
+        Ok(CudaBatchResult { cases })
+    }
+
+    /// Postprocess the last device-side solutions without another voltage upload.
+    pub fn postprocess_branches(
+        &mut self,
+        catalog: &CudaBranchCatalog,
+        outages: &[Option<usize>],
+    ) -> Result<CudaBranchResults, String> {
+        if outages.len() != self.batch {
+            return Err("CUDA outage count must equal executor batch".into());
+        }
+        if catalog.nbus != self.nbus {
+            return Err("CUDA branch catalog and executor bus counts differ".into());
+        }
+        let outage_indices: Vec<i32> = outages
+            .iter()
+            .map(|outage| match outage {
+                None => Ok(-1),
+                Some(index) if *index < catalog.branch_count => {
+                    i32::try_from(*index).map_err(|_| "CUDA outage index exceeds i32".to_string())
+                }
+                Some(_) => Err("CUDA branch outage index is out of bounds".to_string()),
+            })
+            .collect::<Result<_, String>>()?;
+        let count = self
+            .batch
+            .checked_mul(catalog.branch_count)
+            .and_then(|value| value.checked_mul(14))
+            .ok_or("CUDA branch output size overflow")?;
+        let mut raw = vec![0.0; count];
+        let mut stats = FfiPostprocessStats {
+            struct_size: mem::size_of::<FfiPostprocessStats>() as u32,
+            kernel_milliseconds: 0.0,
+            download_milliseconds: 0.0,
+        };
+        let code = unsafe {
+            rp_cuda_postprocess_branches(
+                self.handle.as_ptr(),
+                catalog.handle.as_ptr(),
+                outage_indices.as_ptr(),
+                raw.as_mut_ptr(),
+                &mut stats,
+            )
+        };
+        if code != SUCCESS {
+            return Err(format!(
+                "CUDA branch postprocessing failed ({code}): {}",
+                last_error(Some(self.handle))
+            ));
+        }
+        let flows = raw
+            .chunks_exact(14)
+            .map(|v| BranchFlowResult {
+                p_from_mw: v[0],
+                q_from_mvar: v[1],
+                p_to_mw: v[2],
+                q_to_mvar: v[3],
+                pl_mw: v[4],
+                ql_mvar: v[5],
+                i_from_ka: v[6],
+                i_to_ka: v[7],
+                i_ka: v[8],
+                vm_from_pu: v[9],
+                vm_to_pu: v[10],
+                va_from_degree: v[11],
+                va_to_degree: v[12],
+                loading_percent: v[13],
+            })
+            .collect();
+        Ok(CudaBranchResults {
+            flows,
+            branch_count: catalog.branch_count,
+            kernel_seconds: stats.kernel_milliseconds / 1000.0,
+            download_seconds: stats.download_milliseconds / 1000.0,
+        })
+    }
 }
 impl Drop for CudaExecutor {
     fn drop(&mut self) {
         unsafe { rp_cuda_destroy(self.handle.as_ptr()) }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CudaN1Config {
+    pub batch_size: usize,
+    pub streams: usize,
+    pub max_iter: usize,
+    pub tolerance: f64,
+    pub reporting: N1Reporting,
+}
+impl Default for CudaN1Config {
+    fn default() -> Self {
+        Self {
+            batch_size: 64,
+            streams: 1,
+            max_iter: 30,
+            tolerance: 1e-10,
+            reporting: N1Reporting::StatusOnly,
+        }
+    }
+}
+
+/// Entity-oriented entry point: both executors share the study's island screening.
+pub fn run_n1_study_cuda<F>(
+    study: &N1Study,
+    faults: &N1FaultSet,
+    config: CudaN1Config,
+    collect: F,
+) -> Result<N1StudyReport, N1StudyError>
+where
+    F: FnMut(N1EventBatch) + Send,
+{
+    let (candidates, islands) = study.partition(faults)?;
+    let solve = run_n1_cuda(study.prepared(), config, candidates, collect)
+        .map_err(N1StudyError::Execution)?;
+    Ok(N1StudyReport { solve, islands })
+}
+
+/// Full single-branch N-1 sweep. Extra streams own independent executors and
+/// consume contiguous partitions; single-stream execution keeps the original path.
+pub fn run_n1_cuda<I, F>(
+    prepared: &PreparedN1,
+    config: CudaN1Config,
+    candidates: I,
+    mut collect: F,
+) -> Result<N1Summary, String>
+where
+    I: IntoIterator<Item = usize>,
+    F: FnMut(N1EventBatch) + Send,
+{
+    if config.streams == 0 {
+        return Err("CUDA N-1 stream count must be positive".into());
+    }
+    if config.streams == 1 {
+        return run_n1_cuda_single(prepared, config, candidates, collect);
+    }
+    let candidates: Vec<_> = candidates.into_iter().collect();
+    if candidates.is_empty() {
+        return run_n1_cuda_single(prepared, config, candidates, collect);
+    }
+    let stream_count = config.streams.min(candidates.len());
+    let chunk_size = candidates.len().div_ceil(stream_count);
+    let (result_tx, result_rx) = crossbeam_channel::bounded(stream_count * 2);
+    std::thread::scope(|scope| {
+        let collector = std::thread::Builder::new()
+            .name("n1-cuda-collector".into())
+            .spawn_scoped(scope, move || {
+                while let Ok(batch) = result_rx.recv() {
+                    collect(batch);
+                }
+            })
+            .map_err(|e| format!("start CUDA N-1 collector: {e}"))?;
+        let mut handles = Vec::new();
+        let mut error = None;
+        for (worker_id, chunk) in candidates.chunks(chunk_size).enumerate() {
+            let tx = result_tx.clone();
+            let worker_config = CudaN1Config {
+                streams: 1,
+                ..config
+            };
+            match std::thread::Builder::new()
+                .name(format!("n1-cuda-worker-{worker_id}"))
+                .spawn_scoped(scope, move || {
+                    let mut disconnected = false;
+                    let summary = run_n1_cuda_single(
+                        prepared,
+                        worker_config,
+                        chunk.iter().copied(),
+                        |batch| {
+                            let events = batch
+                                .events
+                                .into_iter()
+                                .map(|mut event| {
+                                    event.worker_id = worker_id;
+                                    event
+                                })
+                                .collect();
+                            disconnected |= tx.send(N1EventBatch { events }).is_err();
+                        },
+                    )?;
+                    if disconnected {
+                        Err("CUDA N-1 collector disconnected".into())
+                    } else {
+                        Ok(summary)
+                    }
+                }) {
+                Ok(handle) => handles.push(handle),
+                Err(e) => {
+                    error = Some(format!("start CUDA N-1 worker: {e}"));
+                    break;
+                }
+            }
+        }
+        drop(result_tx);
+        let mut summary = N1Summary::default();
+        for handle in handles {
+            match handle.join() {
+                Ok(Ok(part)) => summary.add(part),
+                Ok(Err(e)) => error = Some(e),
+                Err(_) => error = Some("CUDA N-1 worker panicked".into()),
+            }
+        }
+        if collector.join().is_err() {
+            error = Some("CUDA N-1 collector panicked".into());
+        }
+        if let Some(error) = error {
+            Err(error)
+        } else {
+            Ok(summary)
+        }
+    })
+}
+
+fn run_n1_cuda_single<I, F>(
+    prepared: &PreparedN1,
+    config: CudaN1Config,
+    candidates: I,
+    mut collect: F,
+) -> Result<N1Summary, String>
+where
+    I: IntoIterator<Item = usize>,
+    F: FnMut(N1EventBatch),
+{
+    if prepared.initialization() != N1Initialization::BaseAc {
+        return Err("CUDA N-1 currently supports BaseAc initialization only".into());
+    }
+    if config.batch_size == 0 || !config.tolerance.is_finite() || config.tolerance <= 0.0 {
+        return Err("CUDA N-1 batch must be positive and tolerance finite and positive".into());
+    }
+    let base = prepared.base().baseline();
+    let catalog = prepared.base().catalog();
+    let mut executor = CudaExecutor::new_ac(base, config.batch_size)?;
+    let mut input = candidates.into_iter();
+    let mut case_id = 0_usize;
+    let mut summary = N1Summary {
+        workers_started: 1,
+        ..Default::default()
+    };
+    loop {
+        let mut tasks = Vec::with_capacity(config.batch_size);
+        while tasks.len() < config.batch_size {
+            let Some(branch_index) = input.next() else {
+                break;
+            };
+            tasks.push(OutageTask::for_ac_branch(
+                base,
+                catalog,
+                branch_index,
+                case_id,
+            )?);
+            case_id += 1;
+        }
+        if tasks.is_empty() {
+            break;
+        }
+        let actual = tasks.len();
+        summary.submitted += actual;
+        while tasks.len() < config.batch_size {
+            tasks.push(tasks[0]);
+        }
+        let solve_started = Instant::now();
+        let solved = executor.solve_outages(&tasks, config.max_iter, config.tolerance)?;
+        summary.ac_time += solve_started.elapsed();
+        let mut events = Vec::new();
+        for scenario in 0..actual {
+            let task = tasks[scenario];
+            let case = &solved.cases[scenario];
+            let converged = case.status == CudaCaseStatus::Converged;
+            summary.processed += 1;
+            summary.total_iterations += case.iterations;
+            summary.attempted_iterations += case.iterations;
+            summary.failed += usize::from(!converged);
+            summary.newton_failed += usize::from(!converged);
+            let watch_started = Instant::now();
+            let (hits, violated) = match config.reporting {
+                N1Reporting::Detailed => {
+                    let hits = prepared.watch().evaluate(
+                        catalog,
+                        &case.voltage,
+                        Some(task.branch_index),
+                        converged,
+                    )?;
+                    let violated = hits.violation_count() > 0;
+                    (hits, violated)
+                }
+                N1Reporting::StatusOnly if converged => {
+                    let violated = prepared.watch().is_violated(
+                        catalog,
+                        &case.voltage,
+                        Some(task.branch_index),
+                    )?;
+                    (WatchHits::default(), violated)
+                }
+                N1Reporting::StatusOnly => (WatchHits::default(), false),
+            };
+            summary.watch_time += watch_started.elapsed();
+            summary.violated_cases += usize::from(violated);
+            summary.violation_hits += hits.violation_count();
+            let outcome = if !converged {
+                N1Outcome::NumericalFailure
+            } else if violated {
+                N1Outcome::ConstraintViolation
+            } else {
+                N1Outcome::Passed
+            };
+            let emit = match config.reporting {
+                N1Reporting::Detailed => !hits.is_empty(),
+                N1Reporting::StatusOnly => outcome != N1Outcome::Passed,
+            };
+            if emit {
+                summary.emitted_cases += 1;
+                summary.emitted_hits += hits.len();
+                events.push(N1Event {
+                    case_id: task.case_id,
+                    outage_index: task.branch_index,
+                    outage: catalog.identities()[task.branch_index],
+                    outage_entity: catalog.source_entities()[task.branch_index],
+                    worker_id: 0,
+                    stage: if converged {
+                        SolveStage::Converged
+                    } else {
+                        SolveStage::NewtonFailed
+                    },
+                    outcome,
+                    iterations: case.iterations,
+                    residual: case.residual,
+                    error: (!converged).then(|| format!("CUDA Newton status: {:?}", case.status)),
+                    hits,
+                    linear: LinearSolveStats::default(),
+                });
+            }
+        }
+        if !events.is_empty() {
+            collect(N1EventBatch { events });
+        }
+    }
+    Ok(summary)
 }
 
 fn to_i32(values: &[usize], name: &str) -> Result<Vec<i32>, String> {

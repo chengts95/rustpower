@@ -7,6 +7,7 @@ fn main() {
         "native/acpf_cuda/include/acpf_cuda.h",
         "native/acpf_cuda/src/executor.cu",
         "native/acpf_cuda/src/newton_kernels.cu",
+        "native/acpf_cuda/src/branch_kernels.cu",
     ] {
         println!("cargo:rerun-if-changed={file}");
     }
@@ -44,7 +45,9 @@ fn main() {
     // acpf_cuda.dll is linked through its import library. Its CUDA/cuDSS runtime
     // dependencies were collected by build_dll.cmd and travel with our binary.
     for entry in fs::read_dir(&output).expect("failed to inspect acpf_cuda build output") {
-        let path = entry.expect("failed to inspect acpf_cuda runtime file").path();
+        let path = entry
+            .expect("failed to inspect acpf_cuda runtime file")
+            .path();
         if path.extension().is_some_and(|ext| ext == "dll") {
             let name = path.file_name().expect("runtime DLL has no file name");
             fs::copy(&path, profile_dir.join(name))
