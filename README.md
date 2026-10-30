@@ -95,7 +95,7 @@ Add RustPower to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rustpower = "0.5.2"
+rustpower = "0.6.0"
 ```
 
 Available features:
@@ -104,11 +104,21 @@ Available features:
 - `faer`: High-performance portable linear algebra solver.
 - `klu`: SuiteSparse KLU direct sparse solver (statically or dynamically linked).
 - `python`: Python C-extension module bindings (PyO3).
+- `experimental_n1`: Fixed-partition N-1 screening with shared analysis and parallel CPU workers.
+- `experimental_n1_cuda`: Experimental Windows CUDA/cuDSS N-1 executor with runtime loading and CPU fallback. Ordinary Cargo builds remain CPU-only.
 
 ### Python Package
 ```bash
 pip install rustpower
 ```
+
+Windows wheels include the small CUDA bridge. To enable the experimental GPU N-1 backend, install the optional NVIDIA runtime packages (no CUDA Toolkit installation is required at runtime):
+
+```bash
+pip install "rustpower[cuda]"
+```
+
+Without those packages or a compatible GPU, `backend="auto"` uses the CPU. See the [CUDA N-1 guide](docs/n1_cuda.md) for backend selection, current limitations, and native builds.
 
 ---
 

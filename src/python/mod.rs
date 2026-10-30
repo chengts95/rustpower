@@ -44,7 +44,27 @@ pub fn features() -> Vec<&'static str> {
     if cfg!(feature = "experimental_n1") {
         f.push("experimental_n1");
     }
+    if cfg!(feature = "experimental_n1_cuda") {
+        f.push("experimental_n1_cuda");
+    }
     f
+}
+
+/// Return (available, diagnostic) without selecting a backend or raising on a
+/// missing GPU. Setting RUSTPOWER_N1_DISABLE_CUDA exercises the CPU fallback.
+#[pyfunction]
+pub fn n1_cuda_status() -> (bool, String) {
+    #[cfg(feature = "experimental_n1_cuda")]
+    {
+        match crate::n1::cuda::cuda_status() {
+            Ok(()) => (true, "CUDA device 0 is available".into()),
+            Err(error) => (false, error),
+        }
+    }
+    #[cfg(not(feature = "experimental_n1_cuda"))]
+    {
+        (false, "CUDA N-1 is not included in this build".into())
+    }
 }
 
 /// Load a pandapower network from a CSV-ZIP file.
@@ -108,6 +128,7 @@ pub fn rustpower(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_function(wrap_pyfunction!(version, m)?)?;
     m.add_function(wrap_pyfunction!(features, m)?)?;
+    m.add_function(wrap_pyfunction!(n1_cuda_status, m)?)?;
     m.add_function(wrap_pyfunction!(load_csv_zip, m)?)?;
     Ok(())
 }

@@ -25,6 +25,11 @@ classifiers = [
 ]
 dynamic = ["version"]
 
+[project.optional-dependencies]
+# Small default wheel with the native CUDA bridge; heavyweight NVIDIA runtime
+# components remain optional pip packages and pull their own matching dependencies.
+cuda = ["nvidia-cudss-cu12==1.0.0.35; platform_system == 'Windows'"]
+
 [project.urls]
 Homepage = "https://github.com/chengts95/rustpower"
 Repository = "https://github.com/chengts95/rustpower.git"

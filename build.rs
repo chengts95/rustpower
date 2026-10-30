@@ -36,8 +36,8 @@ fn main() {
         .expect("failed to launch the acpf_cuda DLL build");
     assert!(status.success(), "acpf_cuda DLL build failed: {status}");
 
-    println!("cargo:rustc-link-search=native={}", output.display());
-    println!("cargo:rustc-link-lib=dylib=acpf_cuda");
+    // The Rust module loads acpf_cuda.dll on demand. A missing CUDA runtime must
+    // never prevent the Python extension or ordinary CPU binaries from starting.
     let profile_dir = out_dir
         .ancestors()
         .nth(3)

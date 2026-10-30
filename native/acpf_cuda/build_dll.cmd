@@ -10,7 +10,9 @@ if errorlevel 1 exit /b 1
 rem Keep NVCC's device frontend independent of the Windows console code page.
 powershell -NoProfile -Command "$e = New-Object System.Text.UTF8Encoding($true); [IO.File]::WriteAllText('%OUT%\executor_utf8.cu', [IO.File]::ReadAllText('%ROOT%\native\acpf_cuda\src\executor.cu', [Text.Encoding]::UTF8), $e); [IO.File]::WriteAllText('%OUT%\newton_kernels_utf8.cu', [IO.File]::ReadAllText('%ROOT%\native\acpf_cuda\src\newton_kernels.cu', [Text.Encoding]::UTF8), $e); [IO.File]::WriteAllText('%OUT%\branch_kernels_utf8.cu', [IO.File]::ReadAllText('%ROOT%\native\acpf_cuda\src\branch_kernels.cu', [Text.Encoding]::UTF8), $e)"
 if errorlevel 1 exit /b 1
-"%CUDA_PATH%\bin\nvcc.exe" -shared -arch=%RUSTPOWER_CUDA_ARCH% -std=c++17 -O2 -Xcompiler /EHsc,/MD,/utf-8 ^
+set "CUDA_GENCODE=-arch=%RUSTPOWER_CUDA_ARCH%"
+if defined RUSTPOWER_CUDA_PTX set "CUDA_GENCODE=%CUDA_GENCODE% -gencode arch=%RUSTPOWER_CUDA_PTX%,code=%RUSTPOWER_CUDA_PTX%"
+"%CUDA_PATH%\bin\nvcc.exe" -shared %CUDA_GENCODE% -std=c++17 -O2 -Xcompiler /EHsc,/MD,/utf-8 ^
   -I"%ROOT%\native\acpf_cuda\include" -I"%CUDSS_DIR%\include" -L"%CUDSS_DIR%\lib" ^
   "%OUT%\executor_utf8.cu" "%OUT%\newton_kernels_utf8.cu" "%OUT%\branch_kernels_utf8.cu" ^
   -lcudss -Xlinker /IMPLIB:"%OUT%\acpf_cuda.lib" -o "%OUT%\acpf_cuda.dll"

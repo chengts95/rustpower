@@ -102,47 +102,305 @@ struct FfiPostprocessStats {
     download_milliseconds: f64,
 }
 
-unsafe extern "C" {
-    fn rp_cuda_create(
-        baseline: *const FfiBaseline,
-        batch: i32,
-        executor: *mut *mut FfiExecutor,
-    ) -> i32;
-    fn rp_cuda_solve_base_batch(
-        executor: *mut FfiExecutor,
-        batch: i32,
-        options: *const FfiSolveOptions,
-        case_status: *mut i32,
-        iterations: *mut i32,
-        residuals: *mut f64,
-        voltage_re: *mut f64,
-        voltage_im: *mut f64,
-    ) -> i32;
-    fn rp_cuda_solve_outage_batch(
-        executor: *mut FfiExecutor,
-        batch: i32,
-        outages: *const FfiOutageBatch,
-        options: *const FfiSolveOptions,
-        case_status: *mut i32,
-        iterations: *mut i32,
-        residuals: *mut f64,
-        voltage_re: *mut f64,
-        voltage_im: *mut f64,
-    ) -> i32;
-    fn rp_cuda_branch_catalog_create(
-        catalog: *const FfiBranchCatalogInput,
-        out_catalog: *mut *mut FfiBranchCatalog,
-    ) -> i32;
-    fn rp_cuda_branch_catalog_destroy(catalog: *mut FfiBranchCatalog);
-    fn rp_cuda_postprocess_branches(
-        executor: *mut FfiExecutor,
-        catalog: *const FfiBranchCatalog,
-        outage_indices: *const i32,
-        output: *mut f64,
-        stats: *mut FfiPostprocessStats,
-    ) -> i32;
-    fn rp_cuda_last_error(executor: *const FfiExecutor) -> *const c_char;
-    fn rp_cuda_destroy(executor: *mut FfiExecutor);
+struct CudaApi {
+    // Keep the library alive until process exit; executors may live on any worker.
+    _library: libloading::Library,
+    probe: unsafe extern "C" fn() -> i32,
+    create: unsafe extern "C" fn(*const FfiBaseline, i32, *mut *mut FfiExecutor) -> i32,
+    solve_base_batch: unsafe extern "C" fn(
+        *mut FfiExecutor,
+        i32,
+        *const FfiSolveOptions,
+        *mut i32,
+        *mut i32,
+        *mut f64,
+        *mut f64,
+        *mut f64,
+    ) -> i32,
+    solve_outage_batch: unsafe extern "C" fn(
+        *mut FfiExecutor,
+        i32,
+        *const FfiOutageBatch,
+        *const FfiSolveOptions,
+        *mut i32,
+        *mut i32,
+        *mut f64,
+        *mut f64,
+        *mut f64,
+    ) -> i32,
+    branch_catalog_create:
+        unsafe extern "C" fn(*const FfiBranchCatalogInput, *mut *mut FfiBranchCatalog) -> i32,
+    branch_catalog_destroy: unsafe extern "C" fn(*mut FfiBranchCatalog),
+    postprocess_branches: unsafe extern "C" fn(
+        *mut FfiExecutor,
+        *const FfiBranchCatalog,
+        *const i32,
+        *mut f64,
+        *mut FfiPostprocessStats,
+    ) -> i32,
+    last_error: unsafe extern "C" fn(*const FfiExecutor) -> *const c_char,
+    destroy: unsafe extern "C" fn(*mut FfiExecutor),
+}
+
+impl CudaApi {
+    fn load() -> Result<Self, String> {
+        unsafe fn symbol<T: Copy>(
+            library: &libloading::Library,
+            name: &'static [u8],
+        ) -> Result<T, String> {
+            let name_text = String::from_utf8_lossy(&name[..name.len() - 1]);
+            unsafe { library.get::<T>(name) }
+                .map(|value| *value)
+                .map_err(|error| format!("load CUDA symbol {name_text}: {error}"))
+        }
+        let library = open_cuda_library()?;
+        Ok(Self {
+            probe: unsafe { symbol(&library, b"rp_cuda_probe\0")? },
+            create: unsafe { symbol(&library, b"rp_cuda_create\0")? },
+            solve_base_batch: unsafe { symbol(&library, b"rp_cuda_solve_base_batch\0")? },
+            solve_outage_batch: unsafe { symbol(&library, b"rp_cuda_solve_outage_batch\0")? },
+            branch_catalog_create: unsafe { symbol(&library, b"rp_cuda_branch_catalog_create\0")? },
+            branch_catalog_destroy: unsafe {
+                symbol(&library, b"rp_cuda_branch_catalog_destroy\0")?
+            },
+            postprocess_branches: unsafe { symbol(&library, b"rp_cuda_postprocess_branches\0")? },
+            last_error: unsafe { symbol(&library, b"rp_cuda_last_error\0")? },
+            destroy: unsafe { symbol(&library, b"rp_cuda_destroy\0")? },
+            _library: library,
+        })
+    }
+}
+
+fn cuda_api() -> Result<&'static CudaApi, String> {
+    static API: std::sync::OnceLock<Result<CudaApi, String>> = std::sync::OnceLock::new();
+    API.get_or_init(CudaApi::load)
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+#[cfg(windows)]
+fn open_cuda_library() -> Result<libloading::Library, String> {
+    use libloading::os::windows::Library;
+    use std::{
+        ffi::c_void,
+        os::windows::ffi::{OsStrExt, OsStringExt},
+        path::{Path, PathBuf},
+    };
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetModuleHandleExW(flags: u32, address: *const u16, module: *mut *mut c_void) -> i32;
+        fn GetModuleFileNameW(module: *mut c_void, path: *mut u16, size: u32) -> u32;
+        fn AddDllDirectory(directory: *const u16) -> *mut c_void;
+    }
+    const FROM_ADDRESS: u32 = 0x0000_0004;
+    const UNCHANGED_REFCOUNT: u32 = 0x0000_0002;
+    const LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x0000_0100;
+    const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x0000_1000;
+    // Resolve beside this .pyd/.dll, not beside python.exe.
+    let mut module = ptr::null_mut();
+    if unsafe {
+        GetModuleHandleExW(
+            FROM_ADDRESS | UNCHANGED_REFCOUNT,
+            open_cuda_library as *const () as usize as *const u16,
+            &mut module,
+        )
+    } == 0
+    {
+        return Err(format!(
+            "locate the RustPower native module: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let mut wide = vec![0_u16; 32_768];
+    let length = unsafe { GetModuleFileNameW(module, wide.as_mut_ptr(), wide.len() as u32) };
+    if length == 0 || length as usize == wide.len() {
+        return Err("read the RustPower native module path".into());
+    }
+    wide.truncate(length as usize);
+    let mut module_dir = PathBuf::from(std::ffi::OsString::from_wide(&wide));
+    module_dir.pop();
+
+    fn add_search_directory(path: &Path) -> Result<(), String> {
+        if !path.is_dir() {
+            return Ok(());
+        }
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        // Cookies are deliberately retained for process lifetime. Removing one
+        // while a worker owns a CUDA executor could invalidate dependency lookup.
+        if unsafe { AddDllDirectory(wide.as_ptr()) }.is_null() {
+            return Err(format!(
+                "register CUDA dependency directory {}: {}",
+                path.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(())
+    }
+    add_search_directory(&module_dir)?;
+    // Development uses a merged nvidia/cu12 directory; pip installs each
+    // component separately beside the rustpower package. Neither layout
+    // requires mutating process PATH.
+    let mut search_roots = vec![module_dir.clone()];
+    if let Some(site_packages) = module_dir.parent() {
+        search_roots.push(site_packages.to_path_buf());
+    }
+    for root in search_roots {
+        for relative in [
+            "nvidia/cu12/bin",
+            "nvidia/cuda_runtime/bin",
+            "nvidia/cublas/bin",
+            "nvidia/cuda_nvrtc/bin",
+            "nvidia/nvrtc/bin",
+            "nvidia/nvjitlink/bin",
+            "nvidia/cudss/bin",
+        ] {
+            add_search_directory(&root.join(relative))?;
+        }
+    }
+    let path = module_dir.join("acpf_cuda.dll");
+    unsafe {
+        Library::load_with_flags(
+            &path,
+            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+        )
+    }
+    .map(libloading::Library::from)
+    .map_err(|error| {
+        format!(
+            "load {}: {error}; install the 'cuda' Python extra for the required runtime libraries",
+            path.display()
+        )
+    })
+}
+
+#[cfg(not(windows))]
+fn open_cuda_library() -> Result<libloading::Library, String> {
+    Err("the experimental CUDA N-1 backend currently supports Windows only".into())
+}
+
+/// Probe before choosing a backend. This never changes a partially completed run.
+pub fn cuda_status() -> Result<(), String> {
+    if std::env::var_os("RUSTPOWER_N1_DISABLE_CUDA").is_some() {
+        return Err("CUDA was disabled by RUSTPOWER_N1_DISABLE_CUDA".into());
+    }
+    let status = unsafe { (cuda_api()?.probe)() };
+    if status == SUCCESS {
+        Ok(())
+    } else {
+        Err(format!(
+            "CUDA device probe failed ({status}): {}",
+            last_error(None)
+        ))
+    }
+}
+
+// These narrow wrappers preserve the original FFI call sites while turning a
+// missing runtime into an ordinary executor error instead of a loader failure.
+unsafe fn rp_cuda_create(
+    baseline: *const FfiBaseline,
+    batch: i32,
+    executor: *mut *mut FfiExecutor,
+) -> i32 {
+    match cuda_api() {
+        Ok(api) => unsafe { (api.create)(baseline, batch, executor) },
+        Err(_) => 4,
+    }
+}
+#[allow(clippy::too_many_arguments)]
+unsafe fn rp_cuda_solve_base_batch(
+    executor: *mut FfiExecutor,
+    batch: i32,
+    options: *const FfiSolveOptions,
+    case_status: *mut i32,
+    iterations: *mut i32,
+    residuals: *mut f64,
+    voltage_re: *mut f64,
+    voltage_im: *mut f64,
+) -> i32 {
+    match cuda_api() {
+        Ok(api) => unsafe {
+            (api.solve_base_batch)(
+                executor,
+                batch,
+                options,
+                case_status,
+                iterations,
+                residuals,
+                voltage_re,
+                voltage_im,
+            )
+        },
+        Err(_) => 4,
+    }
+}
+#[allow(clippy::too_many_arguments)]
+unsafe fn rp_cuda_solve_outage_batch(
+    executor: *mut FfiExecutor,
+    batch: i32,
+    outages: *const FfiOutageBatch,
+    options: *const FfiSolveOptions,
+    case_status: *mut i32,
+    iterations: *mut i32,
+    residuals: *mut f64,
+    voltage_re: *mut f64,
+    voltage_im: *mut f64,
+) -> i32 {
+    match cuda_api() {
+        Ok(api) => unsafe {
+            (api.solve_outage_batch)(
+                executor,
+                batch,
+                outages,
+                options,
+                case_status,
+                iterations,
+                residuals,
+                voltage_re,
+                voltage_im,
+            )
+        },
+        Err(_) => 4,
+    }
+}
+unsafe fn rp_cuda_branch_catalog_create(
+    catalog: *const FfiBranchCatalogInput,
+    out_catalog: *mut *mut FfiBranchCatalog,
+) -> i32 {
+    match cuda_api() {
+        Ok(api) => unsafe { (api.branch_catalog_create)(catalog, out_catalog) },
+        Err(_) => 4,
+    }
+}
+unsafe fn rp_cuda_branch_catalog_destroy(catalog: *mut FfiBranchCatalog) {
+    if let Ok(api) = cuda_api() {
+        unsafe { (api.branch_catalog_destroy)(catalog) }
+    }
+}
+unsafe fn rp_cuda_postprocess_branches(
+    executor: *mut FfiExecutor,
+    catalog: *const FfiBranchCatalog,
+    outage_indices: *const i32,
+    output: *mut f64,
+    stats: *mut FfiPostprocessStats,
+) -> i32 {
+    match cuda_api() {
+        Ok(api) => unsafe {
+            (api.postprocess_branches)(executor, catalog, outage_indices, output, stats)
+        },
+        Err(_) => 4,
+    }
+}
+unsafe fn rp_cuda_last_error(executor: *const FfiExecutor) -> *const c_char {
+    match cuda_api() {
+        Ok(api) => unsafe { (api.last_error)(executor) },
+        Err(_) => ptr::null(),
+    }
+}
+unsafe fn rp_cuda_destroy(executor: *mut FfiExecutor) {
+    if let Ok(api) = cuda_api() {
+        unsafe { (api.destroy)(executor) }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1070,7 +1328,7 @@ impl<'a> CudaN1Runner<'a> {
                 N1Outcome::Passed
             };
             let emit = match config.reporting {
-                N1Reporting::Detailed => !hits.is_empty(),
+                N1Reporting::Detailed => true,
                 N1Reporting::StatusOnly => outcome != N1Outcome::Passed,
             };
             if emit {
@@ -1204,6 +1462,9 @@ fn mirror_positions(y_col_ptr: &[i32], y_row_indices: &[i32]) -> Result<Vec<i32>
 }
 
 fn last_error(handle: Option<NonNull<FfiExecutor>>) -> String {
+    if let Err(error) = cuda_api() {
+        return error;
+    }
     let pointer = unsafe { rp_cuda_last_error(handle.map_or(ptr::null(), |h| h.as_ptr())) };
     if pointer.is_null() {
         return "no diagnostic".into();

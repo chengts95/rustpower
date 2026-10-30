@@ -25,6 +25,35 @@ fn initialization(value: &str) -> PyResult<N1Initialization> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Backend {
+    Auto,
+    Cpu,
+    Cuda,
+    Hybrid,
+}
+impl Backend {
+    fn parse(value: &str) -> PyResult<Self> {
+        match value {
+            "auto" => Ok(Self::Auto),
+            "cpu" => Ok(Self::Cpu),
+            "cuda" => Ok(Self::Cuda),
+            "hybrid" => Ok(Self::Hybrid),
+            _ => Err(value_error(
+                "backend must be 'auto', 'cpu', 'cuda' or 'hybrid'",
+            )),
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Cpu => "cpu",
+            Self::Cuda => "cuda",
+            Self::Hybrid => "hybrid",
+        }
+    }
+}
+
 /// A reusable selection tied to its source PowerGrid.
 #[pyclass(name = "N1Faults", unsendable)]
 pub struct Faults {
@@ -84,25 +113,109 @@ pub struct Study {
 // The prepared snapshot stays borrowed until all native scoped workers join.
 struct ReleasedStudy<'a>(&'a PreparedN1);
 impl ReleasedStudy<'_> {
+    #[allow(clippy::too_many_arguments, unused_variables)]
     fn run(
         self,
         faults: &N1FaultSet,
         options: N1RunOptions,
         detailed: bool,
-    ) -> Result<(N1StudyReport, Vec<N1Event>), String> {
+        backend: Backend,
+        cuda_batch_size: usize,
+        cuda_streams: usize,
+        cuda_queue_batches: usize,
+    ) -> Result<(N1StudyReport, Vec<N1Event>, &'static str), String> {
         let study = self.0.study().map_err(|e| e.to_string())?;
+        let base_ac = matches!(
+            options.initialization.unwrap_or(self.0.initialization()),
+            N1Initialization::BaseAc
+        );
+        let selected = match backend {
+            Backend::Auto => {
+                #[cfg(feature = "experimental_n1_cuda")]
+                {
+                    if base_ac && crate::n1::cuda::cuda_status().is_ok() {
+                        Backend::Cuda
+                    } else {
+                        Backend::Cpu
+                    }
+                }
+                #[cfg(not(feature = "experimental_n1_cuda"))]
+                {
+                    Backend::Cpu
+                }
+            }
+            explicit => explicit,
+        };
         let mut events = Vec::new();
         let collect = |batch: N1EventBatch| events.extend(batch.events);
-        let report = if detailed {
-            study.details(faults, options, collect)
+        let reporting = if detailed {
+            N1Reporting::Detailed
         } else {
-            study.run(faults, options, collect)
-        }
-        .map_err(|e| e.to_string())?;
-        Ok((report, events))
+            N1Reporting::StatusOnly
+        };
+        let report = match selected {
+            Backend::Cpu => if detailed {
+                study.details(faults, options, collect)
+            } else {
+                study.run(faults, options, collect)
+            }
+            .map_err(|e| e.to_string())?,
+            Backend::Cuda => {
+                #[cfg(feature = "experimental_n1_cuda")]
+                {
+                    crate::n1::cuda::cuda_status()?;
+                    crate::n1::cuda::run_n1_study_cuda(
+                        &study,
+                        faults,
+                        crate::n1::cuda::CudaN1Config {
+                            batch_size: cuda_batch_size,
+                            streams: cuda_streams,
+                            max_iter: options.config.max_iter,
+                            tolerance: options.config.tolerance,
+                            reporting,
+                        },
+                        collect,
+                    )
+                    .map_err(|e| e.to_string())?
+                }
+                #[cfg(not(feature = "experimental_n1_cuda"))]
+                {
+                    return Err("CUDA N-1 is not included in this build".into());
+                }
+            }
+            Backend::Hybrid => {
+                #[cfg(feature = "experimental_n1_cuda")]
+                {
+                    crate::n1::cuda::cuda_status()?;
+                    crate::n1::cuda::run_n1_study_hybrid(
+                        &study,
+                        faults,
+                        crate::n1::cuda::HybridN1Config {
+                            cpu_workers: options.config.workers,
+                            cpu_batch_size: options.config.batch_size,
+                            cuda_batch_size,
+                            cuda_streams,
+                            cuda_queue_batches,
+                            max_iter: options.config.max_iter,
+                            tolerance: options.config.tolerance,
+                            reporting,
+                        },
+                        collect,
+                    )
+                    .map_err(|e| e.to_string())?
+                }
+                #[cfg(not(feature = "experimental_n1_cuda"))]
+                {
+                    return Err("hybrid N-1 requires a CUDA-enabled build".into());
+                }
+            }
+            Backend::Auto => unreachable!("auto backend was resolved before execution"),
+        };
+        Ok((report, events, selected.name()))
     }
 }
 impl Study {
+    #[allow(clippy::too_many_arguments)]
     fn execute(
         &self,
         py: Python<'_>,
@@ -113,7 +226,12 @@ impl Study {
         max_iter: usize,
         tolerance: f64,
         detailed: bool,
+        backend: &str,
+        cuda_batch_size: usize,
+        cuda_streams: usize,
+        cuda_queue_batches: usize,
     ) -> PyResult<Report> {
+        let backend = Backend::parse(backend)?;
         let faults = match faults {
             Some(faults) => resolve_faults(&self.owner, &faults)?,
             None => self.faults.clone(),
@@ -131,13 +249,24 @@ impl Study {
         };
         let started = Instant::now();
         let released = ReleasedStudy(&self.prepared);
-        let (report, events) = py
-            .allow_threads(move || released.run(&faults, options, detailed))
+        let (report, events, backend) = py
+            .allow_threads(move || {
+                released.run(
+                    &faults,
+                    options,
+                    detailed,
+                    backend,
+                    cuda_batch_size,
+                    cuda_streams,
+                    cuda_queue_batches,
+                )
+            })
             .map_err(PyRuntimeError::new_err)?;
         Ok(Report {
             owner: self.owner.clone_ref(py),
             report,
             events,
+            backend,
             preparation_seconds: self.preparation_seconds,
             execution_seconds: started.elapsed().as_secs_f64(),
         })
@@ -145,7 +274,7 @@ impl Study {
 }
 #[pymethods]
 impl Study {
-    #[pyo3(signature = (faults=None, *, workers=1, batch_size=8, initialization=None, max_iter=30, tolerance=1e-10))]
+    #[pyo3(signature = (faults=None, *, workers=1, batch_size=8, initialization=None, max_iter=30, tolerance=1e-10, backend="auto", cuda_batch_size=64, cuda_streams=1, cuda_queue_batches=2))]
     fn run(
         &self,
         py: Python<'_>,
@@ -155,6 +284,10 @@ impl Study {
         initialization: Option<&str>,
         max_iter: usize,
         tolerance: f64,
+        backend: &str,
+        cuda_batch_size: usize,
+        cuda_streams: usize,
+        cuda_queue_batches: usize,
     ) -> PyResult<Report> {
         self.execute(
             py,
@@ -165,10 +298,14 @@ impl Study {
             max_iter,
             tolerance,
             false,
+            backend,
+            cuda_batch_size,
+            cuda_streams,
+            cuda_queue_batches,
         )
     }
 
-    #[pyo3(signature = (faults=None, *, workers=1, batch_size=8, initialization=None, max_iter=30, tolerance=1e-10))]
+    #[pyo3(signature = (faults=None, *, workers=1, batch_size=8, initialization=None, max_iter=30, tolerance=1e-10, backend="auto", cuda_batch_size=64, cuda_streams=1, cuda_queue_batches=2))]
     fn details(
         &self,
         py: Python<'_>,
@@ -178,6 +315,10 @@ impl Study {
         initialization: Option<&str>,
         max_iter: usize,
         tolerance: f64,
+        backend: &str,
+        cuda_batch_size: usize,
+        cuda_streams: usize,
+        cuda_queue_batches: usize,
     ) -> PyResult<Report> {
         self.execute(
             py,
@@ -188,6 +329,10 @@ impl Study {
             max_iter,
             tolerance,
             true,
+            backend,
+            cuda_batch_size,
+            cuda_streams,
+            cuda_queue_batches,
         )
     }
 
@@ -209,6 +354,7 @@ pub struct Report {
     owner: Py<PowerGrid>,
     report: N1StudyReport,
     events: Vec<N1Event>,
+    backend: &'static str,
     preparation_seconds: f64,
     execution_seconds: f64,
 }
@@ -234,6 +380,7 @@ impl Report {
         ] {
             d.set_item(name, n)?;
         }
+        d.set_item("backend", self.backend)?;
         d.set_item("preparation_seconds", self.preparation_seconds)?;
         d.set_item("execution_seconds", self.execution_seconds)?;
         d.set_item("ac_seconds", s.ac_time.as_secs_f64())?;
