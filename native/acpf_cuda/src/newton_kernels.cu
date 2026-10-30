@@ -32,6 +32,7 @@ extern "C" __global__ void newton_power_mismatch_kernel(
     if (mask[scenario] == 0) return;
     const unsigned long long k = warp - scenario * nbus;
     const unsigned long long vector_base = scenario * nbus;
+    const unsigned long long ybase = scenario * static_cast<unsigned long long>(y_col_ptr[nbus]);
     double current_re = 0.0;
     double current_im = 0.0;
     for (int p = y_col_ptr[k] + lane; p < y_col_ptr[k + 1]; p += warp_size) {
@@ -39,8 +40,8 @@ extern "C" __global__ void newton_power_mismatch_kernel(
         const int q = mirror[p];
         const double vr = v_re[vector_base + i];
         const double vi = v_im[vector_base + i];
-        current_re += y_re[q] * vr - y_im[q] * vi;
-        current_im += y_re[q] * vi + y_im[q] * vr;
+        current_re += y_re[ybase + q] * vr - y_im[ybase + q] * vi;
+        current_im += y_re[ybase + q] * vi + y_im[ybase + q] * vr;
     }
     for (int offset = warp_size / 2; offset > 0; offset /= 2) {
         current_re += __shfl_down_sync(0xffffffffu, current_re, offset);
@@ -305,12 +306,13 @@ extern "C" __global__ void newton_jacobian_csr_mapped_kernel(
         const unsigned long long i = static_cast<unsigned long long>(y_row_indices[p]);
         const int q = mirror[p];
         const unsigned long long vbase = scenario * nbus;
+        const unsigned long long ybase = scenario * static_cast<unsigned long long>(y_col_ptr[nbus]);
         const double ek = v_re[vbase + k];
         const double fk = -v_im[vbase + k];
         const double vi_re = v_re[vbase + i];
         const double fi = -v_im[vbase + i];
-        const double va_re = y_re[q] * ek - y_im[q] * fk;
-        const double va_im = y_re[q] * fk + y_im[q] * ek;
+        const double va_re = y_re[ybase + q] * ek - y_im[ybase + q] * fk;
+        const double va_im = y_re[ybase + q] * fk + y_im[ybase + q] * ek;
         const double j11 = fi * va_re - vi_re * va_im;
         const double j21 = -(vi_re * va_re + fi * va_im);
         const double inv = inv_vmag[vbase + i];

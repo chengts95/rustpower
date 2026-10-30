@@ -3,6 +3,7 @@ mod numeric;
 pub mod postprocess;
 pub mod runner;
 pub mod solver;
+pub use crate::basic::branch::BranchFlowResult;
 pub use postprocess::{BranchCatalog, BranchIdentity, BranchKind};
 pub use runner::{
     BaseBatch, BaseResult, BaseTask, PreparedBase, RunSummary, prepare_base, run_base_batches,
@@ -11,9 +12,9 @@ pub use solver::{
     CaseSolution, LinearSolveStats, N1Worker, SharedBaseline, SolveStage, SolveTimings,
 };
 
-pub mod execution;
 #[cfg(feature = "experimental_n1_cuda")]
 pub mod cuda;
+pub mod execution;
 pub mod outage;
 pub mod study;
 pub mod topology;

@@ -117,3 +117,13 @@ required-features = ["experimental_n1"]
 name = "bench_cuda_base"
 path = "tools/n1/bench_cuda_base.rs"
 required-features = ["experimental_n1_cuda"]
+
+[[bin]]
+name = "bench_cuda_postprocess"
+path = "tools/n1/bench_cuda_postprocess.rs"
+required-features = ["experimental_n1_cuda"]
+
+[[bin]]
+name = "bench_cuda_n1"
+path = "tools/n1/bench_cuda_n1.rs"
+required-features = ["experimental_n1_cuda"]

@@ -168,17 +168,12 @@ impl<'base> N1Study<'base> {
         }
     }
 
-    /// Resolve the entity set before dispatch, classify bridge outages, and run
-    /// the remaining independent scenarios on the existing scoped workers.
-    pub fn run<F>(
+    /// Resolve entities and partition numerical candidates from slackless islands.
+    /// CPU and experimental GPU executors share this exact dispatch decision.
+    pub fn partition(
         &self,
         faults: &N1FaultSet,
-        options: N1RunOptions,
-        collect: F,
-    ) -> Result<N1StudyReport, N1StudyError>
-    where
-        F: FnMut(N1EventBatch) + Send,
-    {
+    ) -> Result<(Vec<usize>, Vec<N1Island>), N1StudyError> {
         let catalog = self.prepared.base().catalog();
         let mut candidates = Vec::with_capacity(faults.len());
         let mut islands = Vec::new();
@@ -203,6 +198,21 @@ impl<'base> N1Study<'base> {
             }
             candidates.push(index);
         }
+        Ok((candidates, islands))
+    }
+
+    /// Resolve the entity set before dispatch, classify bridge outages, and run
+    /// the remaining independent scenarios on the existing scoped workers.
+    pub fn run<F>(
+        &self,
+        faults: &N1FaultSet,
+        options: N1RunOptions,
+        collect: F,
+    ) -> Result<N1StudyReport, N1StudyError>
+    where
+        F: FnMut(N1EventBatch) + Send,
+    {
+        let (candidates, islands) = self.partition(faults)?;
         let initialization = options
             .initialization
             .unwrap_or(self.prepared.initialization());

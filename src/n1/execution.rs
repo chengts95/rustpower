@@ -244,7 +244,7 @@ impl N1Summary {
     pub fn passed(&self) -> usize {
         self.processed - self.rejected()
     }
-    fn add(&mut self, r: Self) {
+    pub(crate) fn add(&mut self, r: Self) {
         self.processed += r.processed;
         self.failed += r.failed;
         self.emitted_cases += r.emitted_cases;
@@ -443,15 +443,16 @@ fn worker(
 ) -> Result<N1Summary, String> {
     let mut app = App::new();
     app.insert_resource(Input(prepared));
+    let engine = match initialization {
+        N1Initialization::BaseAc => N1Worker::new_ac(prepared.base.baseline()),
+        N1Initialization::DcPerCase => N1Worker::new(prepared.base.baseline()),
+    };
     app.insert_resource(State {
         id,
         config,
         initialization,
         emit_all,
-        engine: match initialization {
-            N1Initialization::BaseAc => N1Worker::new_ac(prepared.base.baseline()),
-            N1Initialization::DcPerCase => N1Worker::new(prepared.base.baseline()),
-        },
+        engine,
         patches: WorkerPatchState::default(),
         inbox: None,
         events: vec![],

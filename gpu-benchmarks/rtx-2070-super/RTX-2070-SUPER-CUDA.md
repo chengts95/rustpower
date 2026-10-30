@@ -1,5 +1,7 @@
 # RTX 2070 SUPER CUDA 性能档案
 
+[English version](RTX-2070-SUPER-CUDA.en.md) · [RTX 5070 英文对比报告](../rtx-5070/RTX-5070-CUDA.en.md)
+
 测试日期：2026-10-29
 状态：完整测试，所有计算结果均通过校验
 
