@@ -1,6 +1,6 @@
 [package]
 name = "rustpower"
-version = "0.5.4"
+version = "0.6.0"
 edition = "2024"
 authors = ["cts chengts95@msn.cn"]
 description = "An experimental ECS world snapshot system built on Bevy, featuring structured archetype storage and manifest-based serialization."
@@ -27,8 +27,8 @@ crate-type = ["rlib", "cdylib"]
 [features]
 # Fixed-partition shared-symbolic N-1 foundation; old solver paths unchanged.
 experimental_n1 = ["klu_dyn", "dep:crossbeam-channel", "dep:soa-rs"]
-# Native FP64 CUDA/cuDSS executor; the default N-1 backend remains CPU KLU.
-experimental_n1_cuda = ["experimental_n1"]
+# Native FP64 CUDA/cuDSS executor, loaded only when explicitly selected or auto-detected.
+experimental_n1_cuda = ["experimental_n1", "dep:libloading"]
 # Experimental single-sweep Jacobian and calculated-power assembly.
 experimental_fused_scalc = []
 default=["rsparse", "arrow"] 
@@ -74,6 +74,7 @@ rustpower_proc_marco = {path = "crates/rustpower_proc_marco", version = "0.4.0"}
 bumpalo = "^3.20.0"
 pyo3 = { version = "0.23", features = ["extension-module", "abi3-py310"], optional = true }
 numpy = { version = "0.23", optional = true }
+libloading = { version = "0.8", optional = true }
 
 [dependencies.rustpower-sol-klu]
 path = "./crates/rustpower-sol-klu"

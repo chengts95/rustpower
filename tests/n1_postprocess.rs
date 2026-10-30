@@ -9,12 +9,12 @@ use rustpower::{
         branch::BranchFlowResult,
         ecs::{
             elements::{
+                BusMatrixIndex, FromBusMatrixIndex, PFCommonData, ToBusMatrixIndex,
                 bus::{OutOfService, VNominal},
                 line::{LineID, LineParams},
                 switch::NodeAggRes,
                 trans::{Port4MatPatch, TransformerDevice, TransformerID},
                 units::Pair,
-                BusMatrixIndex, FromBusMatrixIndex, PFCommonData, ToBusMatrixIndex,
             },
             powerflow::systems::PowerFlowMat,
         },
@@ -111,10 +111,12 @@ fn parallel_identity_outage_mask_and_reuse_preserve_shared_catalog() {
             .collect::<Vec<_>>(),
         [100, 103, 700]
     );
-    assert!(catalog
-        .identities()
-        .iter()
-        .all(|id| id.kind == BranchKind::Line));
+    assert!(
+        catalog
+            .identities()
+            .iter()
+            .all(|id| id.kind == BranchKind::Line)
+    );
     assert_eq!(
         (
             catalog.branch(0).unwrap().from_bus,
@@ -197,12 +199,16 @@ fn merged_bus_mapping_and_input_errors_are_explicit() {
     );
     let mut out = vec![];
     assert!(catalog.compute(&[], None, 100., &mut out).is_err());
-    assert!(catalog
-        .compute(&[Complex64::new(1., 0.); 2], Some(1), 100., &mut out)
-        .is_err());
-    assert!(catalog
-        .compute(&[Complex64::new(1., 0.); 2], None, 200., &mut out)
-        .is_err());
+    assert!(
+        catalog
+            .compute(&[Complex64::new(1., 0.); 2], Some(1), 100., &mut out)
+            .is_err()
+    );
+    assert!(
+        catalog
+            .compute(&[Complex64::new(1., 0.); 2], None, 200., &mut out)
+            .is_err()
+    );
 }
 
 fn assert_results_close(a: &BranchFlowResult, b: &BranchFlowResult) {

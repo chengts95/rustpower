@@ -492,6 +492,24 @@ struct RpCudaExecutor {
     }
 };
 
+extern "C" int32_t rp_cuda_probe() {
+    try {
+        cuda_check(cudaSetDevice(0), "cudaSetDevice");
+        cuda_check(cudaFree(nullptr), "initialize CUDA context");
+        creation_error.clear();
+        return RP_CUDA_SUCCESS;
+    } catch (const Failure& error) {
+        creation_error = error.what();
+        return error.code;
+    } catch (const std::exception& error) {
+        creation_error = error.what();
+        return RP_CUDA_INTERNAL_ERROR;
+    } catch (...) {
+        creation_error = "unknown C++ exception";
+        return RP_CUDA_INTERNAL_ERROR;
+    }
+}
+
 extern "C" int32_t rp_cuda_create(
     const RpCudaBaselineV1* baseline, int32_t batch, RpCudaExecutor** out_executor) {
     if (out_executor) *out_executor = nullptr;

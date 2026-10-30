@@ -3,6 +3,7 @@
 Build with python,experimental_n1 and run with the desired extension on PYTHONPATH.
 """
 import gc
+import os
 import threading
 import unittest
 
@@ -101,11 +102,52 @@ class N1ApiTests(unittest.TestCase):
             g.prepare_n1(initialization='invalid')
         study = g.prepare_n1([first_line(g)])
         with self.assertRaisesRegex(RuntimeError, 'worker'):
-            study.run(workers=0)
+            study.run(workers=0, backend='cpu')
         with self.assertRaisesRegex(ValueError, 'another grid'):
             study.run(other.prepare_n1().faults)
         with self.assertRaisesRegex(ValueError, 'qlim=False'):
             rp.PowerGrid.from_pandapower(networks.case14(), qlim=True).prepare_n1()
+        with self.assertRaisesRegex(ValueError, 'backend'):
+            study.run(backend='invalid')
+
+    def test_auto_cpu_fallback_and_explicit_cuda_error(self):
+        previous = os.environ.get('RUSTPOWER_N1_DISABLE_CUDA')
+        os.environ['RUSTPOWER_N1_DISABLE_CUDA'] = '1'
+        try:
+            available, diagnostic = rp.n1_cuda_status()
+            self.assertFalse(available)
+            self.assertIn('disabled', diagnostic)
+            g = grid()
+            study = g.prepare_n1([first_line(g)])
+            report = study.run(backend='auto')
+            self.assertEqual(report.summary['backend'], 'cpu')
+            self.assertEqual(report.summary['processed'], 1)
+            with self.assertRaises(RuntimeError):
+                study.run(backend='cuda')
+            with self.assertRaises(RuntimeError):
+                study.run(backend='hybrid')
+        finally:
+            if previous is None:
+                os.environ.pop('RUSTPOWER_N1_DISABLE_CUDA', None)
+            else:
+                os.environ['RUSTPOWER_N1_DISABLE_CUDA'] = previous
+
+    def test_cuda_and_hybrid_match_cpu_when_available(self):
+        available, diagnostic = rp.n1_cuda_status()
+        if not available:
+            self.skipTest(diagnostic)
+        g = grid()
+        study = g.prepare_n1()
+        cpu = study.run(workers=2, backend='cpu')
+        cuda = study.run(backend='cuda')
+        hybrid = study.run(workers=2, backend='hybrid')
+        for accelerated in [cuda, hybrid]:
+            for key in ['processed', 'passed', 'violated', 'numerical_failed', 'islanded', 'total_iterations']:
+                self.assertEqual(accelerated.summary[key], cpu.summary[key])
+        self.assertEqual(cuda.summary['backend'], 'cuda')
+        self.assertEqual(hybrid.summary['backend'], 'hybrid')
+        details = study.details(backend='cuda')
+        self.assertEqual(len(details.events['case_id']), details.summary['numerically_solved'])
 
     def test_native_run_releases_gil(self):
         # A Python thread blocked before the native call must run during it.

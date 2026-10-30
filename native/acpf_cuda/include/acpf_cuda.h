@@ -96,6 +96,10 @@ typedef struct RpCudaOutageBatchV1 {
     const double* y_im;
 } RpCudaOutageBatchV1;
 
+/* Initialize device zero without allocating an executor. Safe to call during
+ * backend selection; diagnostics are returned by rp_cuda_last_error(NULL). */
+RP_CUDA_API int32_t rp_cuda_probe(void);
+
 RP_CUDA_API int32_t rp_cuda_create(
     const RpCudaBaselineV1* baseline,
     int32_t batch,

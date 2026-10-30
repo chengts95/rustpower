@@ -2,10 +2,24 @@ name: Python Wheels
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "ci/**"
+    paths:
+      - ".github/workflows/python-wheels.yml"
+      - "crates/**"
+      - "native/**"
+      - "src/**"
+      - "scripts/test_n1_api.py"
+      - "scripts/bundle_windows_cuda.py"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "pyproject.toml"
 
 jobs:
   build_linux_wheels:
-    name: Build Linux wheels
+    name: Build Linux wheels (statically linked KLU)
     runs-on: ubuntu-latest
 
     steps:
@@ -13,27 +27,155 @@ jobs:
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
+        env:
+          RUSTFLAGS: "-C target-cpu=x86-64-v3"
         with:
           target: x86_64
-          args: --release --out dist --no-default-features --features python,archive,klu_dyn,arrow
+          args: --release --out dist --no-default-features --features python,archive,klu,arrow,experimental_n1
           sccache: 'true'
           manylinux: 2_28
           before-script-linux: |
             if command -v dnf >/dev/null 2>&1; then
-              dnf install -y epel-release || true
-              dnf install -y suitesparse-devel clang
+              dnf install -y cmake clang libgomp openblas-devel || true
             elif command -v yum >/dev/null 2>&1; then
-              yum install -y epel-release || true
-              yum install -y suitesparse-devel clang
+              yum install -y cmake clang libgomp openblas-devel || true
             fi
 
-      - name: Inspect wheel dependencies
+            # Build KLU static library directly inside container with x86-64-v3 (AVX2 + FMA)
+            curl -sL https://github.com/DrTimothyAldenDavis/SuiteSparse/archive/refs/tags/v7.14.1.tar.gz -o /tmp/ss.tar.gz
+            mkdir -p /tmp/ss_src /tmp/ss_build /opt/suitesparse
+            tar -xzf /tmp/ss.tar.gz -C /tmp/ss_src --strip-components=1
+
+            cmake -S /tmp/ss_src -B /tmp/ss_build \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_C_FLAGS="-O3 -march=x86-64-v3 -fPIC" \
+              -DCMAKE_INSTALL_PREFIX=/opt/suitesparse \
+              -DSUITESPARSE_ENABLE_PROJECTS="klu" \
+              -DBUILD_STATIC_LIBS=ON \
+              -DBUILD_SHARED_LIBS=OFF \
+              -DSUITESPARSE_USE_CUDA=OFF
+            cmake --build /tmp/ss_build -j$(nproc)
+            cmake --install /tmp/ss_build
+
+            mkdir -p /usr/include/suitesparse
+            cp -r /opt/suitesparse/include/suitesparse/* /usr/include/suitesparse/ 2>/dev/null || cp -r /opt/suitesparse/include/* /usr/include/suitesparse/
+            cp /opt/suitesparse/lib*/*.a /usr/lib64/ 2>/dev/null || cp /opt/suitesparse/lib*/*.a /usr/lib/
+
+            export SUITESPARSE_DIR=/opt/suitesparse
+
+      - name: Inspect and repair wheel dependencies
         run: |
           python -m pip install --upgrade auditwheel
           auditwheel show dist/*.whl || true
+
+      - name: Test installed wheel with CPU N-1
+        shell: bash
+        run: |
+          python -m pip install --force-reinstall dist/*.whl pandapower
+          RUSTPOWER_N1_DISABLE_CUDA=1 python scripts/test_n1_api.py
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
           name: wheels-linux-x86_64
+          path: dist/*.whl
+
+  build_windows_wheels:
+    name: Build Windows wheels (KLU + optional CUDA)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CUDA compiler
+        uses: Jimver/cuda-toolkit@v0.2.29
+        with:
+          cuda: '12.9.1'
+          method: network
+
+      - name: Install SuiteSparse
+        shell: bash
+        run: |
+          mkdir -p "C:/suitesparse"
+          curl -sL "https://github.com/chengts95/suitesparse-build/releases/download/v7.14.1/suitesparse-v7.14.1-windows-x86_64-klu.zip" -o ss.zip
+          mkdir -p "C:/suitesparse_tmp"
+          unzip -q -o ss.zip -d "C:/suitesparse_tmp"
+          if [ -d "C:/suitesparse_tmp/suitesparse-v7.14.1-windows-x86_64-klu" ]; then
+            cp -r "C:/suitesparse_tmp/suitesparse-v7.14.1-windows-x86_64-klu/"* "C:/suitesparse/"
+          else
+            cp -r "C:/suitesparse_tmp/"* "C:/suitesparse/"
+          fi
+          echo "SUITESPARSE_DIR=C:/suitesparse" >> "$GITHUB_ENV"
+          echo "C:/suitesparse/bin" >> "$GITHUB_PATH"
+
+      - name: Download cuDSS headers and import library
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/cudss"
+          python -m pip download --no-deps --only-binary=:all: \
+            --dest "$RUNNER_TEMP/cudss" nvidia-cudss-cu12==1.0.0.35
+          WHEEL=$(ls "$RUNNER_TEMP"/cudss/*.whl)
+          python -m zipfile -e "$WHEEL" "$RUNNER_TEMP/cudss/package"
+          echo "CUDSS_DIR=$RUNNER_TEMP/cudss/package/nvidia/cu12" >> "$GITHUB_ENV"
+          echo "RUSTPOWER_CUDA_ARCH=sm_75" >> "$GITHUB_ENV"
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64
+          args: --release --out dist --no-default-features --features python,archive,klu,arrow,experimental_n1_cuda
+          sccache: 'true'
+
+      - name: Add the small CUDA bridge to the wheel
+        shell: bash
+        run: |
+          WHEEL=$(ls dist/*.whl)
+          python scripts/bundle_windows_cuda.py --wheel "$WHEEL" --native-dir target/release
+
+      - name: Test installed wheel without CUDA runtime or GPU
+        shell: bash
+        run: |
+          WHEEL=$(ls dist/*.whl)
+          python -m pip install --force-reinstall "$WHEEL" pandapower
+          python -c "import rustpower as rp; print(rp.features()); print(rp.n1_cuda_status())"
+          RUSTPOWER_N1_DISABLE_CUDA=1 python scripts/test_n1_api.py
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-x86_64
+          path: dist/*.whl
+
+  build_macos_wheels:
+    name: Build macOS wheels (statically linked KLU)
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SuiteSparse
+        shell: bash
+        run: |
+          mkdir -p "$HOME/suitesparse"
+          curl -sL "https://github.com/chengts95/suitesparse-build/releases/download/v7.14.1/suitesparse-v7.14.1-macos-arm64-klu.tar.gz" -o ss.tar.gz
+          tar -xzf ss.tar.gz -C "$HOME/suitesparse" --strip-components=1
+          echo "SUITESPARSE_DIR=$HOME/suitesparse" >> "$GITHUB_ENV"
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: aarch64
+          args: --release --out dist --no-default-features --features python,archive,klu,arrow,experimental_n1
+          sccache: 'true'
+
+      - name: Test installed wheel with CPU N-1
+        shell: bash
+        run: |
+          python -m pip install --force-reinstall dist/*.whl pandapower
+          RUSTPOWER_N1_DISABLE_CUDA=1 python scripts/test_n1_api.py
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-arm64
           path: dist/*.whl
