@@ -2,7 +2,10 @@
 use bevy_ecs::prelude::{Entity, Has, Or, With, Without};
 use rustpower::n1::{
     N1Config, N1FaultSet, N1RunOptions, N1Watch, N1Worker, WatchCondition, WatchRule,
-    cuda::{CudaCaseStatus, CudaExecutor, CudaN1Config, run_n1_cuda, run_n1_study_cuda},
+    cuda::{
+        CudaCaseStatus, CudaExecutor, CudaN1Config, HybridN1Config, run_n1_cuda, run_n1_hybrid,
+        run_n1_study_cuda,
+    },
     outage::{OutageTask, WorkerPatchState},
     prepare_n1, run_n1,
 };
@@ -222,6 +225,49 @@ fn main() -> Result<(), String> {
             )
         ));
     }
+
+    let hybrid_config = HybridN1Config {
+        cpu_workers: workers,
+        cpu_batch_size: batch.min(32),
+        cuda_batch_size: batch,
+        cuda_streams: streams,
+        ..Default::default()
+    };
+    let hybrid_started = Instant::now();
+    let hybrid = run_n1_hybrid(&prepared, hybrid_config, work.iter().copied(), |_| {})?;
+    let hybrid_seconds = hybrid_started.elapsed().as_secs_f64();
+    let hybrid_summary = hybrid.summary;
+    if (
+        hybrid_summary.processed,
+        hybrid_summary.failed,
+        hybrid_summary.violated_cases,
+        islands.len(),
+    ) != (
+        cpu_summary.processed,
+        cpu_summary.failed,
+        cpu_summary.violated_cases,
+        cpu_islanded,
+    ) || hybrid_summary.submitted != work.len()
+        || hybrid_summary.processed != hybrid.cpu.processed + hybrid.cuda.processed
+    {
+        return Err(format!(
+            "hybrid summary mismatch: hybrid {:?}, CPU reference {:?}",
+            (
+                hybrid_summary.submitted,
+                hybrid_summary.processed,
+                hybrid_summary.failed,
+                hybrid_summary.violated_cases,
+                hybrid.cpu.processed,
+                hybrid.cuda.processed,
+            ),
+            (
+                work.len(),
+                cpu_summary.processed,
+                cpu_summary.failed,
+                cpu_summary.violated_cases,
+            )
+        ));
+    }
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
@@ -266,7 +312,25 @@ fn main() -> Result<(), String> {
                 "solve_seconds_sum_over_workers": cpu_summary.ac_time.as_secs_f64(),
                 "watch_seconds_sum_over_workers": cpu_summary.watch_time.as_secs_f64()
             },
+            "hybrid": {
+                "seconds_including_executor_creation": hybrid_seconds,
+                "numerical_scenarios_per_second": work.len() as f64 / hybrid_seconds,
+                "submitted": hybrid_summary.submitted,
+                "processed": hybrid_summary.processed,
+                "failed": hybrid_summary.failed,
+                "violated": hybrid_summary.violated_cases,
+                "islanded": islands.len(),
+                "workers_started": hybrid_summary.workers_started,
+                "mean_newton_iterations": hybrid_summary.total_iterations as f64 / hybrid_summary.processed as f64,
+                "cpu_scenarios": hybrid.cpu.processed,
+                "cuda_scenarios": hybrid.cuda.processed,
+                "cpu_solve_seconds_sum_over_workers": hybrid.cpu.ac_time.as_secs_f64(),
+                "cuda_solve_seconds_sum_over_streams": hybrid.cuda.ac_time.as_secs_f64(),
+                "watch_seconds_sum_over_workers": hybrid_summary.watch_time.as_secs_f64()
+            },
             "gpu_over_cpu_end_to_end": cpu_seconds / gpu_seconds,
+            "hybrid_over_cpu_end_to_end": cpu_seconds / hybrid_seconds,
+            "hybrid_over_gpu_end_to_end": gpu_seconds / hybrid_seconds,
             "initialization": "BaseAc",
             "reporting": "StatusOnly with the same prepared WatchPlan and N1Study island screening"
         }))

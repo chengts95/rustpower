@@ -90,12 +90,32 @@ B=1 最初连续两次以 `NonFinite` 失败。诊断确认初始 mismatch 正�
 
 旧档案中的 C++ benchmark 使用人为电压扰动，而 Rust executor 使用统一的 Rust 初始电压，因此只有 Rust FFI 同路径结果用于这里的定量加速比。其他旧数据仅用于观察批次趋势，不混合计算加速比。
 
+## CPU + CUDA 异构 N-1
+
+`run_n1_hybrid` 和 `run_n1_study_hybrid` 使用两条相互独立的有界队列。分发器优先以非阻塞方式写入 CUDA 专用队列；只有该队列写满时，任务才溢出到 CPU 队列。`cuda_queue_batches` 控制每个 stream 的队列深度，默认保留 2 批。这不是静态场景划分：CUDA 忙时由 CPU 持续消化溢出任务，CUDA 空闲时则重新优先获得任务。
+
+两条队列的求解批大小完全独立：CPU 仍按小批领取，CUDA 独立凑满自己的固定大批，末尾补齐槽位不重复计数。主线程只编译一次 `OutageTask`，两个后端复用相同的基态 AC 电压、孤岛筛选、WatchPlan、事件和收敛语义。`HybridN1Summary` 分别保留 CPU、CUDA 和合并统计。
+
+PEGASE 9241 全量真实 N-1，B=64、单 CUDA stream、4 个 CPU worker，同一次三方对照：
+
+| 路径 | 数值场景 | 壁钟 | 数值吞吐 | 失败 | 越限 | 孤岛 |
+|---|---:|---:|---:|---:|---:|---:|
+| 纯 CPU | 14,384 | 58.765 s | 244.77/s | 10 | 485 | 1,665 |
+| 纯 CUDA | 14,384 | 23.036 s | 624.42/s | 10 | 485 | 1,665 |
+| 异构联合 | 14,384 | **19.544 s** | **735.98/s** | 10 | 485 | 1,665 |
+
+联合路径由 CUDA 完成 9,967 个场景、CPU 完成 4,417 个，提交和处理总数均为 14,384。此轮联合相对纯 CPU 为 **3.007×**，相对纯 CUDA 为 **1.179×**，获得明确的端到端联合收益。三条路径的失败、越限和孤岛统计一致，验证子集的最大电压绝对误差为 `1.481e-12`。
+
+CPU worker 数也不能盲目增加：其余配置相同的 8-worker 对照耗时 26.500 秒，联合路径仅为纯 CUDA 的 **0.883×**。当前机器和 B=64 配置下，4-worker 的写满溢出策略优于该 8-worker 配置；队列深度和 CPU worker 数仍应随 GPU 型号与电网规模复测。
+
+IEEE118 的 8 轮重复场景补测共 1,416 个数值场景，其中 CPU 完成 1,089 个、CUDA 完成 327 个，联合耗时 0.034432 秒。小系统联合相对纯 CPU 只有 **1.008×**，但相对纯 CUDA 为 **2.675×**，说明轻负载下没有必要强制启用 CUDA。
+
 ## 未测得与限制
 
 - `nvidia-smi` 仍返回 `Failed to initialize NVML: Unknown Error`，因此没有可靠的温度、功耗和实时频率记录。
-- 微基准不是实际 ACPF 性能；完整 Newton 吞吐也不是已经接入 N-1 调度后的故障扫描吞吐。
+- 微基准不是实际 ACPF 性能；完整 Newton 批次吞吐与真实 N-1 故障扫描吞吐分别记录。
 - 本轮只测单流 FP64 executor；没有重新宣称 multi-stream 加速，也没有测混合精度路径。
-- 当前结果属于同一拓扑、相同初始状态的批量基态潮流实验，不能直接外推到所有病态电网或不同拓扑批次。
+- 完整 Newton 批次结果属于同一拓扑、相同初始状态的实验，不能直接外推到所有病态电网或不同拓扑批次。
 
 ## 复现
 
@@ -113,6 +133,12 @@ $env:RUSTPOWER_CUDA_ARCH = "sm_120"
 cargo run --release --features experimental_n1_cuda --bin bench_cuda_base -- cases/pegase9241/data.zip 256 1 3
 ```
 
+运行纯 CPU、纯 CUDA 和异构联合的三方 N-1 对照：
+
+```powershell
+cargo run --release --features experimental_n1_cuda --bin bench_cuda_n1 -- cases/pegase9241/data.zip 64 4 16049 1 1
+```
+
 ## 原始文件
 
 - `results/cuda-results.json`：第三轮微基准完整逐轮数据。
@@ -121,3 +147,6 @@ cargo run --release --features experimental_n1_cuda --bin bench_cuda_base -- cas
 - `results/cuda-benchmark.log`：第三轮控制台日志。
 - `results/acpf-batch-{1,2,4,8,16,32,64,128,256,512,768,1024}.json`：完整 Newton 批次扫描原始结果。
 - `results/acpf-regression-{1,2,64,256}.json`：B=1 修复后的回归结果。
+- `results/n1-pegase9241-hybrid-priority-b64-s1-c4.json`：4 个 CPU worker 的写满溢出全量 PEGASE 9241 三方对照。
+- `results/n1-pegase9241-hybrid-priority-b64-s1-c8.json`：8 个 CPU worker 的写满溢出对照。
+- `results/n1-ieee118-hybrid-priority-repeat8-b64-s1-c2.json`：IEEE118 重复 8 轮的写满溢出对照。

@@ -1,9 +1,10 @@
 //! Experimental FP64 CUDA executor. One instance owns one stream and one cuDSS queue.
 //! Multiple instances are the intended multi-stream experiment; no global device state.
 use super::{
-    BranchCatalog, BranchKind, LinearSolveStats, N1Event, N1EventBatch, N1FaultSet,
+    BranchCatalog, BranchKind, LinearSolveStats, N1Config, N1Event, N1EventBatch, N1FaultSet,
     N1Initialization, N1Outcome, N1Reporting, N1Study, N1StudyError, N1StudyReport, N1Summary,
-    PreparedN1, SharedBaseline, SolveStage, outage::OutageTask, watch::WatchHits,
+    PreparedN1, SharedBaseline, SolveStage, execution::worker_shared, outage::OutageTask,
+    watch::WatchHits,
 };
 use crate::basic::branch::BranchFlowResult;
 use num_complex::Complex64;
@@ -628,6 +629,81 @@ impl Default for CudaN1Config {
     }
 }
 
+/// CUDA receives tasks first; only a full CUDA queue overflows into the CPU queue.
+/// Either backend can be disabled by setting its worker/stream count to zero.
+#[derive(Clone, Copy, Debug)]
+pub struct HybridN1Config {
+    pub cpu_workers: usize,
+    pub cpu_batch_size: usize,
+    pub cuda_batch_size: usize,
+    pub cuda_streams: usize,
+    /// Number of CUDA batches retained per stream before tasks overflow to the CPU.
+    pub cuda_queue_batches: usize,
+    pub max_iter: usize,
+    pub tolerance: f64,
+    pub reporting: N1Reporting,
+}
+impl Default for HybridN1Config {
+    fn default() -> Self {
+        Self {
+            cpu_workers: 1,
+            cpu_batch_size: 8,
+            cuda_batch_size: 64,
+            cuda_streams: 1,
+            cuda_queue_batches: 2,
+            max_iter: 30,
+            tolerance: 1e-10,
+            reporting: N1Reporting::StatusOnly,
+        }
+    }
+}
+impl HybridN1Config {
+    fn cpu(self) -> N1Config {
+        N1Config {
+            workers: self.cpu_workers.max(1),
+            batch_size: self.cpu_batch_size,
+            max_iter: self.max_iter,
+            tolerance: self.tolerance,
+            reporting: self.reporting,
+            ..Default::default()
+        }
+    }
+    fn cuda(self) -> CudaN1Config {
+        CudaN1Config {
+            batch_size: self.cuda_batch_size,
+            streams: self.cuda_streams,
+            max_iter: self.max_iter,
+            tolerance: self.tolerance,
+            reporting: self.reporting,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HybridN1Summary {
+    pub summary: N1Summary,
+    pub cpu: N1Summary,
+    pub cuda: N1Summary,
+}
+
+/// Entity-oriented hybrid entry point with exactly the same island screening as
+/// the CPU-only and CUDA-only study runners.
+pub fn run_n1_study_hybrid<F>(
+    study: &N1Study,
+    faults: &N1FaultSet,
+    config: HybridN1Config,
+    collect: F,
+) -> Result<N1StudyReport, N1StudyError>
+where
+    F: FnMut(N1EventBatch) + Send,
+{
+    let (candidates, islands) = study.partition(faults)?;
+    let solve = run_n1_hybrid(study.prepared(), config, candidates, collect)
+        .map_err(N1StudyError::Execution)?
+        .summary;
+    Ok(N1StudyReport { solve, islands })
+}
+
 /// Entity-oriented entry point: both executors share the study's island screening.
 pub fn run_n1_study_cuda<F>(
     study: &N1Study,
@@ -739,66 +815,228 @@ where
     })
 }
 
-fn run_n1_cuda_single<I, F>(
+/// Keep the CUDA queue full before overflowing work into the CPU queue. This gives
+/// batch creation priority over CPU prefetching without statically partitioning cases.
+pub fn run_n1_hybrid<I, F>(
     prepared: &PreparedN1,
-    config: CudaN1Config,
+    config: HybridN1Config,
     candidates: I,
     mut collect: F,
-) -> Result<N1Summary, String>
+) -> Result<HybridN1Summary, String>
 where
     I: IntoIterator<Item = usize>,
-    F: FnMut(N1EventBatch),
+    F: FnMut(N1EventBatch) + Send,
 {
+    if config.cpu_workers == 0 && config.cuda_streams == 0 {
+        return Err("hybrid N-1 requires at least one CPU worker or CUDA stream".into());
+    }
+    if prepared.initialization() != N1Initialization::BaseAc {
+        return Err("hybrid N-1 currently supports BaseAc initialization only".into());
+    }
+    if config.cpu_workers > 0 {
+        config.cpu().validate(prepared)?;
+    }
+    if config.cuda_streams > 0 {
+        validate_cuda_n1(prepared, config.cuda())?;
+        if config.cuda_queue_batches == 0 {
+            return Err("hybrid CUDA queue depth must be positive".into());
+        }
+    }
+    let cpu_depth = config
+        .cpu_workers
+        .checked_mul(config.cpu_batch_size)
+        .and_then(|depth| depth.max(1).checked_mul(2))
+        .ok_or("hybrid CPU queue size overflow")?;
+    let cuda_depth = config
+        .cuda_streams
+        .checked_mul(config.cuda_batch_size)
+        .and_then(|depth| depth.checked_mul(config.cuda_queue_batches))
+        .map(|depth| depth.max(1))
+        .ok_or("hybrid CUDA queue size overflow")?;
+    let (cpu_tx, cpu_rx) = crossbeam_channel::bounded::<OutageTask>(cpu_depth);
+    let (cuda_tx, cuda_rx) = crossbeam_channel::bounded::<OutageTask>(cuda_depth);
+    let (result_tx, result_rx) = crossbeam_channel::bounded::<N1EventBatch>(
+        (config.cpu_workers + config.cuda_streams).max(1) * 2,
+    );
+    std::thread::scope(|scope| {
+        let collector = std::thread::Builder::new()
+            .name("n1-hybrid-collector".into())
+            .spawn_scoped(scope, move || {
+                while let Ok(batch) = result_rx.recv() {
+                    collect(batch);
+                }
+            })
+            .map_err(|e| format!("start hybrid N-1 collector: {e}"))?;
+        let mut cpu_handles = Vec::new();
+        let mut cuda_handles = Vec::new();
+        let mut error = None;
+        for id in 0..config.cpu_workers {
+            let rx = cpu_rx.clone();
+            let tx = result_tx.clone();
+            match std::thread::Builder::new()
+                .name(format!("n1-hybrid-cpu-{id}"))
+                .spawn_scoped(scope, move || {
+                    worker_shared(prepared, config.cpu(), N1Initialization::BaseAc, id, rx, tx)
+                }) {
+                Ok(handle) => cpu_handles.push(handle),
+                Err(e) => {
+                    error = Some(format!("start hybrid CPU worker: {e}"));
+                    break;
+                }
+            }
+        }
+        if error.is_none() {
+            for stream in 0..config.cuda_streams {
+                let rx = cuda_rx.clone();
+                let tx = result_tx.clone();
+                match std::thread::Builder::new()
+                    .name(format!("n1-hybrid-cuda-{stream}"))
+                    .spawn_scoped(scope, move || {
+                        run_n1_cuda_shared(
+                            prepared,
+                            config.cuda(),
+                            config.cpu_workers + stream,
+                            rx,
+                            tx,
+                        )
+                    }) {
+                    Ok(handle) => cuda_handles.push(handle),
+                    Err(e) => {
+                        error = Some(format!("start hybrid CUDA worker: {e}"));
+                        break;
+                    }
+                }
+            }
+        }
+        drop(cpu_rx);
+        drop(cuda_rx);
+        drop(result_tx);
+        if error.is_none() {
+            for (case_id, branch_index) in candidates.into_iter().enumerate() {
+                let task = match OutageTask::for_ac_branch(
+                    prepared.base().baseline(),
+                    prepared.base().catalog(),
+                    branch_index,
+                    case_id,
+                ) {
+                    Ok(task) => task,
+                    Err(e) => {
+                        error = Some(e);
+                        break;
+                    }
+                };
+                let routed = if config.cuda_streams > 0 && config.cpu_workers > 0 {
+                    match cuda_tx.try_send(task) {
+                        Ok(()) => Ok(()),
+                        Err(crossbeam_channel::TrySendError::Full(task))
+                        | Err(crossbeam_channel::TrySendError::Disconnected(task)) => {
+                            cpu_tx.send(task)
+                        }
+                    }
+                } else if config.cuda_streams > 0 {
+                    cuda_tx.send(task)
+                } else {
+                    cpu_tx.send(task)
+                };
+                if routed.is_err() {
+                    error = Some("hybrid N-1 workers stopped before submission completed".into());
+                    break;
+                }
+            }
+        }
+        drop(cpu_tx);
+        drop(cuda_tx);
+        let mut combined = HybridN1Summary::default();
+        for handle in cpu_handles {
+            match handle.join() {
+                Ok(Ok(part)) => {
+                    combined.summary.add(part);
+                    combined.cpu.add(part);
+                }
+                Ok(Err(e)) => error = Some(e),
+                Err(_) => error = Some("hybrid CPU worker panicked".into()),
+            }
+        }
+        for handle in cuda_handles {
+            match handle.join() {
+                Ok(Ok(part)) => {
+                    combined.summary.add(part);
+                    combined.cuda.add(part);
+                }
+                Ok(Err(e)) => error = Some(e),
+                Err(_) => error = Some("hybrid CUDA worker panicked".into()),
+            }
+        }
+        if collector.join().is_err() {
+            error = Some("hybrid N-1 collector panicked".into());
+        }
+        if let Some(error) = error {
+            Err(error)
+        } else {
+            Ok(combined)
+        }
+    })
+}
+
+fn validate_cuda_n1(prepared: &PreparedN1, config: CudaN1Config) -> Result<(), String> {
     if prepared.initialization() != N1Initialization::BaseAc {
         return Err("CUDA N-1 currently supports BaseAc initialization only".into());
     }
     if config.batch_size == 0 || !config.tolerance.is_finite() || config.tolerance <= 0.0 {
         return Err("CUDA N-1 batch must be positive and tolerance finite and positive".into());
     }
-    let base = prepared.base().baseline();
-    let catalog = prepared.base().catalog();
-    let mut executor = CudaExecutor::new_ac(base, config.batch_size)?;
-    let mut input = candidates.into_iter();
-    let mut case_id = 0_usize;
-    let mut summary = N1Summary {
-        workers_started: 1,
-        ..Default::default()
-    };
-    loop {
-        let mut tasks = Vec::with_capacity(config.batch_size);
-        while tasks.len() < config.batch_size {
-            let Some(branch_index) = input.next() else {
-                break;
-            };
-            tasks.push(OutageTask::for_ac_branch(
-                base,
-                catalog,
-                branch_index,
-                case_id,
-            )?);
-            case_id += 1;
-        }
-        if tasks.is_empty() {
-            break;
-        }
+    Ok(())
+}
+
+struct CudaN1Runner<'a> {
+    prepared: &'a PreparedN1,
+    config: CudaN1Config,
+    executor: CudaExecutor,
+    worker_id: usize,
+    summary: N1Summary,
+}
+impl<'a> CudaN1Runner<'a> {
+    fn new(
+        prepared: &'a PreparedN1,
+        config: CudaN1Config,
+        worker_id: usize,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            prepared,
+            config,
+            executor: CudaExecutor::new_ac(prepared.base().baseline(), config.batch_size)?,
+            worker_id,
+            summary: N1Summary {
+                workers_started: 1,
+                ..Default::default()
+            },
+        })
+    }
+
+    fn execute(&mut self, mut tasks: Vec<OutageTask>) -> Result<Option<N1EventBatch>, String> {
+        let prepared = self.prepared;
+        let config = self.config;
+        let catalog = prepared.base().catalog();
         let actual = tasks.len();
-        summary.submitted += actual;
+        self.summary.submitted += actual;
         while tasks.len() < config.batch_size {
             tasks.push(tasks[0]);
         }
         let solve_started = Instant::now();
-        let solved = executor.solve_outages(&tasks, config.max_iter, config.tolerance)?;
-        summary.ac_time += solve_started.elapsed();
+        let solved = self
+            .executor
+            .solve_outages(&tasks, config.max_iter, config.tolerance)?;
+        self.summary.ac_time += solve_started.elapsed();
         let mut events = Vec::new();
         for scenario in 0..actual {
             let task = tasks[scenario];
             let case = &solved.cases[scenario];
             let converged = case.status == CudaCaseStatus::Converged;
-            summary.processed += 1;
-            summary.total_iterations += case.iterations;
-            summary.attempted_iterations += case.iterations;
-            summary.failed += usize::from(!converged);
-            summary.newton_failed += usize::from(!converged);
+            self.summary.processed += 1;
+            self.summary.total_iterations += case.iterations;
+            self.summary.attempted_iterations += case.iterations;
+            self.summary.failed += usize::from(!converged);
+            self.summary.newton_failed += usize::from(!converged);
             let watch_started = Instant::now();
             let (hits, violated) = match config.reporting {
                 N1Reporting::Detailed => {
@@ -821,9 +1059,9 @@ where
                 }
                 N1Reporting::StatusOnly => (WatchHits::default(), false),
             };
-            summary.watch_time += watch_started.elapsed();
-            summary.violated_cases += usize::from(violated);
-            summary.violation_hits += hits.violation_count();
+            self.summary.watch_time += watch_started.elapsed();
+            self.summary.violated_cases += usize::from(violated);
+            self.summary.violation_hits += hits.violation_count();
             let outcome = if !converged {
                 N1Outcome::NumericalFailure
             } else if violated {
@@ -836,14 +1074,14 @@ where
                 N1Reporting::StatusOnly => outcome != N1Outcome::Passed,
             };
             if emit {
-                summary.emitted_cases += 1;
-                summary.emitted_hits += hits.len();
+                self.summary.emitted_cases += 1;
+                self.summary.emitted_hits += hits.len();
                 events.push(N1Event {
                     case_id: task.case_id,
                     outage_index: task.branch_index,
                     outage: catalog.identities()[task.branch_index],
                     outage_entity: catalog.source_entities()[task.branch_index],
-                    worker_id: 0,
+                    worker_id: self.worker_id,
                     stage: if converged {
                         SolveStage::Converged
                     } else {
@@ -858,11 +1096,80 @@ where
                 });
             }
         }
-        if !events.is_empty() {
-            collect(N1EventBatch { events });
+        Ok((!events.is_empty()).then_some(N1EventBatch { events }))
+    }
+}
+
+fn run_n1_cuda_single<I, F>(
+    prepared: &PreparedN1,
+    config: CudaN1Config,
+    candidates: I,
+    mut collect: F,
+) -> Result<N1Summary, String>
+where
+    I: IntoIterator<Item = usize>,
+    F: FnMut(N1EventBatch),
+{
+    validate_cuda_n1(prepared, config)?;
+    let base = prepared.base().baseline();
+    let catalog = prepared.base().catalog();
+    let mut runner = CudaN1Runner::new(prepared, config, 0)?;
+    let mut input = candidates.into_iter();
+    let mut case_id = 0_usize;
+    loop {
+        let mut tasks = Vec::with_capacity(config.batch_size);
+        while tasks.len() < config.batch_size {
+            let Some(branch_index) = input.next() else {
+                break;
+            };
+            tasks.push(OutageTask::for_ac_branch(
+                base,
+                catalog,
+                branch_index,
+                case_id,
+            )?);
+            case_id += 1;
+        }
+        if tasks.is_empty() {
+            break;
+        }
+        if let Some(events) = runner.execute(tasks)? {
+            collect(events);
         }
     }
-    Ok(summary)
+    Ok(runner.summary)
+}
+
+fn run_n1_cuda_shared(
+    prepared: &PreparedN1,
+    config: CudaN1Config,
+    worker_id: usize,
+    rx: crossbeam_channel::Receiver<OutageTask>,
+    tx: crossbeam_channel::Sender<N1EventBatch>,
+) -> Result<N1Summary, String> {
+    let mut runner = CudaN1Runner::new(prepared, config, worker_id)?;
+    loop {
+        let mut tasks = Vec::with_capacity(config.batch_size);
+        match rx.recv() {
+            Ok(task) => tasks.push(task),
+            Err(_) => break,
+        }
+        while tasks.len() < config.batch_size {
+            match rx.try_recv() {
+                Ok(task) => tasks.push(task),
+                Err(
+                    crossbeam_channel::TryRecvError::Empty
+                    | crossbeam_channel::TryRecvError::Disconnected,
+                ) => break,
+            }
+        }
+        if let Some(events) = runner.execute(tasks)? {
+            if tx.send(events).is_err() {
+                return Err("N-1 collector disconnected".into());
+            }
+        }
+    }
+    Ok(runner.summary)
 }
 
 fn to_i32(values: &[usize], name: &str) -> Result<Vec<i32>, String> {

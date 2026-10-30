@@ -166,7 +166,7 @@ impl Default for N1Config {
     }
 }
 impl N1Config {
-    fn validate(self, prepared: &PreparedN1) -> Result<(), String> {
+    pub(crate) fn validate(self, prepared: &PreparedN1) -> Result<(), String> {
         if self.workers == 0 || self.workers > usize::MAX / 2 {
             return Err("N-1 worker count must be positive and representable".into());
         }
@@ -245,6 +245,7 @@ impl N1Summary {
         self.processed - self.rejected()
     }
     pub(crate) fn add(&mut self, r: Self) {
+        self.submitted += r.submitted;
         self.processed += r.processed;
         self.failed += r.failed;
         self.emitted_cases += r.emitted_cases;
@@ -431,16 +432,13 @@ fn record_solution(
     };
     state.events.push(event);
 }
-fn worker(
+fn worker_app(
     prepared: &PreparedN1,
     config: N1Config,
     initialization: N1Initialization,
     emit_all: bool,
     id: usize,
-    rx: Receiver<Vec<OutageTask>>,
-    tx: Sender<N1EventBatch>,
-    done: &AtomicBool,
-) -> Result<N1Summary, String> {
+) -> App {
     let mut app = App::new();
     app.insert_resource(Input(prepared));
     let engine = match initialization {
@@ -463,19 +461,48 @@ fn worker(
         },
     });
     app.add_plugins(N1WorkerPlugin);
+    app
+}
+fn execute_worker_group(
+    app: &mut App,
+    group: Vec<OutageTask>,
+    tx: &Sender<N1EventBatch>,
+) -> Result<(), String> {
+    app.world_mut().resource_mut::<State>().inbox = Some(group);
+    app.world_mut().write_message(ExecuteGroup);
+    app.update();
+    let events = std::mem::take(&mut app.world_mut().resource_mut::<State>().events);
+    if !events.is_empty() && tx.send(N1EventBatch { events }).is_err() {
+        return Err("N-1 collector disconnected".into());
+    }
+    Ok(())
+}
+fn finish_worker(app: &mut App) -> Result<N1Summary, String> {
+    let mut state = app.world_mut().resource_mut::<State>();
+    if let Some(error) = state.fatal_error.take() {
+        Err(error)
+    } else {
+        Ok(state.summary)
+    }
+}
+fn worker(
+    prepared: &PreparedN1,
+    config: N1Config,
+    initialization: N1Initialization,
+    emit_all: bool,
+    id: usize,
+    rx: Receiver<Vec<OutageTask>>,
+    tx: Sender<N1EventBatch>,
+    done: &AtomicBool,
+) -> Result<N1Summary, String> {
+    let mut app = worker_app(prepared, config, initialization, emit_all, id);
     let mut empty = 0usize;
     loop {
         let finished = done.load(Ordering::Acquire);
         match rx.try_recv() {
             Ok(group) => {
                 empty = 0;
-                app.world_mut().resource_mut::<State>().inbox = Some(group);
-                app.world_mut().write_message(ExecuteGroup);
-                app.update();
-                let events = std::mem::take(&mut app.world_mut().resource_mut::<State>().events);
-                if !events.is_empty() && tx.send(N1EventBatch { events }).is_err() {
-                    return Err("N-1 collector disconnected".into());
-                }
+                execute_worker_group(&mut app, group, &tx)?;
                 if app.world().resource::<State>().fatal_error.is_some() {
                     break;
                 }
@@ -492,12 +519,39 @@ fn worker(
             }
         }
     }
-    let mut state = app.world_mut().resource_mut::<State>();
-    if let Some(error) = state.fatal_error.take() {
-        Err(error)
-    } else {
-        Ok(state.summary)
+    finish_worker(&mut app)
+}
+
+/// 每个 worker 都守着自己的小舞台；这里只共享任务，不共享求解状态。
+#[cfg(feature = "experimental_n1_cuda")]
+pub(crate) fn worker_shared(
+    prepared: &PreparedN1,
+    config: N1Config,
+    initialization: N1Initialization,
+    id: usize,
+    rx: Receiver<OutageTask>,
+    tx: Sender<N1EventBatch>,
+) -> Result<N1Summary, String> {
+    let mut app = worker_app(prepared, config, initialization, false, id);
+    loop {
+        let mut group = Vec::with_capacity(config.batch_size);
+        match rx.recv() {
+            Ok(task) => group.push(task),
+            Err(_) => break,
+        }
+        while group.len() < config.batch_size {
+            match rx.try_recv() {
+                Ok(task) => group.push(task),
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+            }
+        }
+        app.world_mut().resource_mut::<State>().summary.submitted += group.len();
+        execute_worker_group(&mut app, group, &tx)?;
+        if app.world().resource::<State>().fatal_error.is_some() {
+            break;
+        }
     }
+    finish_worker(&mut app)
 }
 /// Run selected in-service branch indices as independent single-device outages.
 /// Omit watchers for a silent run; callback receives only configured rule hits.
