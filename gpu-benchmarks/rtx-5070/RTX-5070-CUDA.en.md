@@ -123,6 +123,26 @@ The RTX 5070 was **2.658× faster end to end** in this run. Both paths used the 
 
 This is a large-system result, not a promise that CUDA should receive every N-1 workload. Small systems can remain faster on the CPU because local KLU solves, cache locality, and multi-core scheduling outweigh GPU batching benefits.
 
+## CPU + CUDA hybrid N-1
+
+`run_n1_hybrid` and `run_n1_study_hybrid` use two independent bounded queues. The dispatcher first attempts a nonblocking send to the dedicated CUDA queue; only when that queue is full does the task overflow to the CPU queue. `cuda_queue_batches` retains two batches per stream by default. This is not a static partition: the CPU consumes overflow while CUDA is busy, and CUDA again receives priority when capacity becomes available.
+
+Queueing is independent of solve batch size. CPU workers still consume small groups, while each CUDA consumer assembles its own fixed large batch. Tail padding is never counted as additional scenarios. The producer compiles each `OutageTask` once, and both backends retain the same base-AC initialization, island screening, watch plan, events, and convergence semantics. `HybridN1Summary` preserves separate CPU, CUDA, and combined statistics.
+
+Full real PEGASE 9241 N-1, B=64, one CUDA stream, and four CPU workers, measured in one three-way comparison:
+
+| Path | Numerical scenarios | Wall time | Numerical throughput | Failed | Violated | Islanded |
+|---|---:|---:|---:|---:|---:|---:|
+| CPU only | 14,384 | 58.765 s | 244.77/s | 10 | 485 | 1,665 |
+| CUDA only | 14,384 | 23.036 s | 624.42/s | 10 | 485 | 1,665 |
+| Hybrid | 14,384 | **19.544 s** | **735.98/s** | 10 | 485 | 1,665 |
+
+CUDA completed 9,967 scenarios and the CPU completed 4,417, with exactly 14,384 submissions and processed results. Hybrid throughput was **3.007×** the CPU-only result and **1.179×** the CUDA-only result, establishing a clear end-to-end gain. All three paths reported identical failure, violation, and island counts; the validation subset had a maximum absolute voltage error of `1.481e-12`.
+
+Adding CPU workers indiscriminately is not beneficial: an otherwise identical eight-worker run took 26.500 seconds, only **0.883×** the CUDA-only throughput. For this machine at B=64, four-worker overflow scheduling outperformed that eight-worker configuration. Queue depth and CPU worker count should still be retested for other GPUs and network sizes.
+
+An additional IEEE118 run with eight repetitions processed 1,416 scenarios: 1,089 on the CPU and 327 on CUDA. Hybrid execution took 0.034432 seconds, only **1.008×** the CPU-only throughput but **2.675×** the CUDA-only throughput. Light workloads therefore have no compelling reason to enable CUDA.
+
 ## Limitations and unmeasured items
 
 - `nvidia-smi` still returns `Failed to initialize NVML: Unknown Error`; reliable temperature, power, and instantaneous clock records are therefore unavailable.
@@ -147,10 +167,10 @@ $env:RUSTPOWER_CUDA_ARCH = "sm_120"
 cargo run --release --features experimental_n1_cuda --bin bench_cuda_base -- cases/pegase9241/data.zip 256 1 3
 ```
 
-Run the full real N-1 comparison:
+Run the full real N-1 three-way comparison (CPU, CUDA, and hybrid):
 
 ```powershell
-cargo run --release --features experimental_n1_cuda --bin bench_cuda_n1 -- cases/pegase9241/data.zip 64 8 16049 1 1
+cargo run --release --features experimental_n1_cuda --bin bench_cuda_n1 -- cases/pegase9241/data.zip 64 4 16049 1 1
 ```
 
 ## Raw files
@@ -161,5 +181,8 @@ cargo run --release --features experimental_n1_cuda --bin bench_cuda_n1 -- cases
 - `results/cuda-benchmark.log`: third-run console log.
 - `results/acpf-batch-{1,2,4,8,16,32,64,128,256,512,768,1024}.json`: complete Newton batch sweep.
 - `results/acpf-regression-{1,2,64,256}.json`: regressions after the B=1 fix.
-- `results/n1-pegase9241-full-b64-s1.json`: full PEGASE 9241 N-1 comparison used in this report.
-- `results/n1-ieee118-*.json`: IEEE118 batch, multi-stream, and repeated-scenario experiments.
+- `results/n1-pegase9241-full-b64-s1.json`: earlier full PEGASE 9241 CPU/CUDA comparison.
+- `results/n1-pegase9241-hybrid-priority-b64-s1-c4.json`: full PEGASE 9241 comparison with four CPU workers and CUDA-queue overflow dispatch.
+- `results/n1-pegase9241-hybrid-priority-b64-s1-c8.json`: eight-CPU-worker overflow comparison.
+- `results/n1-ieee118-hybrid-priority-repeat8-b64-s1-c2.json`: IEEE118 overflow comparison with eight repetitions.
+- `results/n1-ieee118-*.json`: other IEEE118 batch, multi-stream, and repeated-scenario experiments.
