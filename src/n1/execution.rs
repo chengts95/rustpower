@@ -24,6 +24,14 @@ pub enum N1Initialization {
     DcPerCase,
 }
 
+/// Immutable, reusable snapshot of an initialized N-1 base case.
+///
+/// This object owns all shared numerical and monitoring data. Workers borrow it
+/// only for the duration of a run; each worker keeps its own mutable Newton and
+/// KLU numeric state. Source-World changes are deliberately not tracked.
+///
+/// Create this with [`prepare_n1`] or [`prepare_n1_with_initialization`], then use
+/// [`PreparedN1::study`] for the high-level API.
 pub struct PreparedN1 {
     base: PreparedBase,
     watch: WatchPlan,
@@ -136,6 +144,10 @@ pub enum N1Reporting {
     #[default]
     StatusOnly,
 }
+/// Terminal result of a numerically dispatched scenario.
+///
+/// Topology rejections are reported separately as [`crate::n1::N1Island`] and do
+/// not receive an [`N1Event`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum N1Outcome {
     Passed,
@@ -143,14 +155,20 @@ pub enum N1Outcome {
     NumericalFailure,
 }
 
+/// CPU scheduling, convergence, memory-budget, and output settings for one run.
 #[derive(Clone, Copy, Debug)]
 pub struct N1Config {
+    /// Number of scoped worker threads, each with private numerical buffers.
     pub workers: usize,
+    /// Scenarios per task group, in `1..=32`.
     pub batch_size: usize,
+    /// Maximum Newton iterations per scenario.
     pub max_iter: usize,
+    /// Convergence tolerance for the maximum absolute power mismatch.
     pub tolerance: f64,
     /// Upper bound on per-group task/event scratch. Excludes persistent solver buffers and LU.
     pub max_batch_bytes: usize,
+    /// Whether to stop at the first violation or retain all configured rule hits.
     pub reporting: N1Reporting,
 }
 impl Default for N1Config {
@@ -196,6 +214,10 @@ impl N1Config {
         Ok(())
     }
 }
+/// Retained result for one emitted numerical scenario.
+///
+/// `outage` is the stable device identity, while `outage_entity` refers to the
+/// prepared source World. Events arrive in completion order, not fault-set order.
 #[derive(Debug)]
 pub struct N1Event {
     pub case_id: usize,

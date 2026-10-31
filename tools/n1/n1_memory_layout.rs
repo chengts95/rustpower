@@ -2,11 +2,10 @@
 use rustpower::{n1::*, prelude::*};
 use std::mem::size_of;
 fn main() -> Result<(), String> {
-    let net = rustpower::io::pandapower::load_csv_zip(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/cases/pegase9241/data.zip"
-    ))
-    .map_err(|e| e.to_string())?;
+    let input = std::env::args().nth(1).unwrap_or_else(|| {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/cases/pegase9241/data.zip").to_owned()
+    });
+    let net = rustpower::io::pandapower::load_csv_zip(&input).map_err(|e| e.to_string())?;
     let mut main_world = PowerGrid::default();
     main_world.world_mut().insert_resource(PPNetwork(net));
     main_world.init_pf_net();

@@ -867,9 +867,15 @@ impl Drop for CudaExecutor {
     }
 }
 
+/// CUDA-only execution settings.
+///
+/// Each stream owns an independent fixed-batch executor on device 0. CUDA studies
+/// currently require [`N1Initialization::BaseAc`](super::N1Initialization::BaseAc).
 #[derive(Clone, Copy, Debug)]
 pub struct CudaN1Config {
+    /// Scenarios uploaded and solved per device batch.
     pub batch_size: usize,
+    /// Number of independent CUDA streams and executors.
     pub streams: usize,
     pub max_iter: usize,
     pub tolerance: f64,

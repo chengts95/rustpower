@@ -7,6 +7,11 @@ use super::{
 use num_complex::Complex64;
 use std::ops::AddAssign;
 
+/// Absolute CSC values at a fixed set of slots.
+///
+/// Slots refer to the prepared baseline's compressed value array, not matrix
+/// coordinates. Patches change numbers only: sparsity patterns and KLU symbolic
+/// analyses remain valid for every scenario.
 #[derive(Clone, Copy, Debug)]
 pub struct ValuePatch<T, const N: usize> {
     len: usize,

@@ -43,17 +43,22 @@ impl FromIterator<Entity> for N1FaultSet {
     }
 }
 
-/// Options belong to this run; the shared baseline is reused by later runs.
+/// Per-run execution and output options.
+///
+/// Options never modify the prepared baseline, so the same [`N1Study`] can be
+/// reused for screening, DCPF-initialized retries, and detailed inspection.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct N1RunOptions {
+    /// Worker count, batching, convergence, and reporting configuration.
     pub config: N1Config,
-    /// None inherits the baseline preparation's default policy.
+    /// `None` inherits the initialization selected during preparation.
     pub initialization: Option<N1Initialization>,
-    /// Include successful selected scenarios in the callback, with the requested
-    /// payload level. Useful for a small retry batch and explicit detail requests.
+    /// Emit successful scenarios as well as rejected ones. Screening normally
+    /// leaves this false; [`N1Study::details`] always enables it.
     pub emit_all: bool,
 }
 
+/// A bridge outage rejected before dispatch because it creates a Slackless island.
 #[derive(Clone, Debug)]
 pub struct N1Island {
     pub outage_index: usize,
@@ -62,11 +67,16 @@ pub struct N1Island {
     pub cut: BridgeCut,
 }
 
-/// Four disjoint terminal categories cover the supplied fault set. Detailed
-/// numerical events travel through the callback; topology records remain here.
+/// Aggregate numerical results plus topology-rejected scenarios.
+///
+/// Passed, constraint-violated, numerically failed, and islanded scenarios are
+/// disjoint categories whose counts sum to [`N1StudyReport::processed`]. Numerical
+/// events travel through the run callback; island records remain in this report.
 #[derive(Debug, Default)]
 pub struct N1StudyReport {
+    /// Counts and timings for scenarios that reached numerical execution.
     pub solve: N1Summary,
+    /// Bridge outages rejected before numerical execution.
     pub islands: Vec<N1Island>,
 }
 impl N1StudyReport {
