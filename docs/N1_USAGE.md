@@ -199,27 +199,137 @@ Build with both `python` and `experimental_n1`, for example in your virtualenv:
 maturin develop --release --features python,experimental_n1
 ```
 
+### Quick start
+
 ```python
 import rustpower as rp
-import pandas as pd
 
 grid = rp.PowerGrid("network.zip", qlim=False)
-# Pass line/transformer handles in faults, or omit it for all active branches.
-study = grid.prepare_n1()
-report = study.run(workers=16, batch_size=8)
+study = grid.prepare_n1(
+    voltage_limits=True,
+    line_loading_limit=100.0,
+)
+
+# Screen all initially active lines and two-winding transformers.
+report = study.run(workers=4, batch_size=8, backend="auto")
 print(report.summary)
 
-retry = study.run(report.numerical_failures, initialization="dc", workers=16)
-details = study.details(report.rejected_faults, workers=16)
+# Retry numerical failures with a fresh DCPF start for each scenario.
+retry = study.run(
+    report.numerical_failures,
+    initialization="dc",
+    workers=4,
+    backend="cpu",
+)
+
+# Rerun rejected scenarios and retain every status and configured rule hit.
+details = study.details(report.rejected_faults, workers=4)
+```
+
+Preparation solves and validates the unchanged baseline. The N-1 model uses a fixed
+PQ/PV/Slack partition, so create the grid with `qlim=False`. A prepared study owns an
+immutable snapshot: later edits to the source grid do not affect it; prepare a new study
+to analyze the edited model.
+
+### Preparing a study and selecting faults
+
+```python
+study = grid.prepare_n1(
+    faults=None,                    # None selects all initially active branches
+    initialization="base-ac",      # or "dc"
+    voltage_limits=False,
+    line_loading_limit=None,        # for example, 100.0 (percent)
+)
+```
+
+`voltage_limits=True` uses each bus's existing voltage bounds. A line loading limit
+applies to lines. The baseline must satisfy all enabled rules. Preparation without
+security rules checks numerical convergence only.
+
+For a smaller study, pass an iterable containing line or two-winding transformer
+handles from the same grid. Handles are deduplicated while preserving their first
+occurrence. An empty iterable selects no scenarios.
+
+```python
+line = grid.line(from_bus=0, to_bus=1)
+study = grid.prepare_n1(faults=[line])
+print(len(study.faults))
+print(study.faults.entity_ids)
+print(study.preparation_seconds)
+```
+
+`N1Faults` selections returned by a study or report retain their source grid and can be
+reused by later runs of that study. Handles or selections from another grid are rejected.
+
+### Screening and detailed reruns
+
+`run()` and `details()` accept the same arguments:
+
+```python
+result = study.run(
+    faults=None,                    # None reuses the prepared selection
+    workers=1,
+    batch_size=8,                  # 1 through 32 on the CPU backend
+    initialization=None,            # None inherits the prepared setting
+    max_iter=30,
+    tolerance=1e-10,
+    backend="auto",               # "auto", "cpu", "cuda", or "hybrid"
+    cuda_batch_size=64,
+    cuda_streams=1,
+    cuda_queue_batches=2,
+)
+```
+
+Call `study.details(...)` instead of `study.run(...)` for detailed output. Their result
+retention differs:
+
+- `run()` aggregates passing scenarios and emits rejected numerical statuses. It stops
+  assessment at the first violated constraint in a scenario.
+- `details()` emits every selected numerical status and all configured rule hits.
+
+Thus an unconstrained, fully convergent screening run can have no event rows; use
+`details()` when successful per-scenario records are needed. Island rejections are
+reported separately and do not produce numerical event rows.
+
+`backend="auto"` uses CUDA only when a CUDA-enabled build, runtime, driver, and device
+are available for a `base-ac` run; otherwise it uses the CPU. Explicit `cuda` and
+`hybrid` requests fail rather than silently changing backends. CUDA and hybrid execution
+currently require `initialization="base-ac"`. See the
+[CUDA guide](n1_cuda.md#backend-selection) for accelerated execution.
+
+### Reports and tabular results
+
+`N1Report.summary` is a dictionary containing `processed`, `passed`, `violated`,
+`numerical_failed`, `islanded`, `numerically_solved`, iteration and factorization counts,
+the actual `backend`, and preparation/execution timings.
+
+Three properties return reusable `N1Faults` selections:
+
+- `numerical_failures`: numerical failures only;
+- `rejected_faults`: constraint violations and numerical failures, excluding islands;
+- `island_faults`: scenarios rejected by topology screening.
+
+`N1Report.events`, `hits`, and `branch_results` are column dictionaries. Convert them
+directly to pandas DataFrames when tabular processing is useful:
+
+```python
+import pandas as pd
+
 events = pd.DataFrame(details.events)
 hits = pd.DataFrame(details.hits)
 flows = pd.DataFrame(details.branch_results)
 ```
 
-The default checks numerical convergence. Enable `voltage_limits=True` and/or
-`line_loading_limit=100.0` during preparation for security rules. The baseline must
-satisfy those rules. Temporary source-World watches used for preparation are restored;
-the snapshot owns the compiled plan.
+Event columns include stable outage kind/ID, source Entity, outcome, solver stage,
+iterations, residual, and error. `hits.event_row` links each rule hit to an event;
+`hits.result_index` links branch hits to `branch_results`, with `-1` when no branch
+payload is present. `flows.event_row` also identifies the source event. Missing scalar
+values use NaN. Numeric columns are independent NumPy arrays created on access, so they
+remain valid after the report is dropped.
+
+Native execution releases the GIL. Passing screening scenarios are aggregated without
+retaining per-scenario voltage arrays; detailed events and their configured payloads are
+held in Rust until the Python columns are requested.
 
 `N1Faults` retains its source grid and can be passed to a study of that grid.
 Selections deduplicate handles and preserve an explicit empty set.

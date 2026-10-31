@@ -408,6 +408,7 @@ impl Drop for NumericKlu {
     }
 }
 
+/// Terminal solver stage, used to distinguish initialization and Newton failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SolveStage {
     Converged,
@@ -429,6 +430,10 @@ pub struct SolveTimings {
     pub attempted_iterations: usize,
 }
 
+/// Owned result of one base or patched numerical solve.
+///
+/// Unlike worker-internal status, this type retains a voltage snapshot for callers
+/// that need it after the worker advances to another scenario.
 #[derive(Debug)]
 pub struct CaseSolution {
     pub converged: bool,

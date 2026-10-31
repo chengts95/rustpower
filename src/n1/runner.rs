@@ -1,4 +1,8 @@
-//! Base-case application/queue foundation, with explicit diagnostic emit policy.
+//! Lower-level unchanged-base batch execution and shared preparation.
+//!
+//! Most callers should use [`crate::n1::N1Study`] instead. This module exposes
+//! the worker/queue foundation for custom repeated-base computations and owns
+//! construction of the numerical baseline and branch catalog used by N-1.
 use super::{BranchCatalog, CaseSolution, N1Worker, SharedBaseline};
 use crate::basic::branch::BranchFlowResult;
 use crate::basic::ecs::{elements::*, powerflow::systems::PowerFlowMat};

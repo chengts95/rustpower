@@ -17,27 +17,38 @@ use num_complex::Complex64;
 use soa_rs::{Soa, Soars};
 use std::collections::{HashMap, HashSet};
 
-/// Source-World configuration. Workers borrow the compiled plan, not this ECS.
+/// Monitoring rules attached to a source branch or bus Entity.
+///
+/// Insert this component before preparation. [`WatchPlan::from_world`] resolves
+/// source Entities into solver indices and freezes the rules; workers never query
+/// the source ECS while solving.
 #[derive(Component, Clone, Debug, Default)]
 pub struct N1Watch {
     pub rules: Vec<WatchRule>,
 }
+/// A caller-defined rule ID and the condition evaluated for each scenario.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WatchRule {
+    /// Unique within one Entity's [`N1Watch`] and retained in [`WatchHit`].
     pub rule_id: u64,
     pub condition: WatchCondition,
 }
+/// Security constraints and diagnostic triggers supported by the compiled plan.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum WatchCondition {
-    /// Explicit diagnostic trigger for every scenario, including solve failure.
+    /// Emit a diagnostic hit for every scenario, including solve failure.
     Always,
+    /// Branch loading in percent; valid on line and transformer Entities.
     BranchLoadingAbove(f64),
+    /// Maximum terminal current in kA; valid on branch Entities.
     BranchCurrentAbove(f64),
+    /// Emit a diagnostic hit when DCPF or Newton fails.
     SolveFailed,
-    /// Bounds are captured from VmLimit<PerUnit> on this bus entity.
+    /// Bounds are captured from `VmLimit<PerUnit>` on this bus Entity.
     BusVoltageOutsideLimits,
 }
 
+/// Resolved location of a rule hit in the prepared numerical model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WatchTarget {
     Branch {
