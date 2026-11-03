@@ -73,6 +73,13 @@ unsigned grid_for(std::size_t threads, unsigned block) {
     return static_cast<unsigned>(blocks);
 }
 
+// Grid-stride kernels need enough blocks for the actual work, not a fixed armada.
+unsigned strided_grid_for(std::size_t work, unsigned block) {
+    const auto blocks = (work + block - 1) / block;
+    require(blocks > 0, "CUDA grid is empty");
+    return static_cast<unsigned>(std::min<std::size_t>(blocks, 65535));
+}
+
 struct DeviceBuffer {
     void* pointer{};
     std::size_t bytes{};
@@ -314,7 +321,7 @@ struct RpCudaExecutor {
         std::vector<double> host_norms(b, std::numeric_limits<double>::infinity());
         mask.upload(host_mask.data(), mask.bytes);
 
-        executor_prepare_voltage_kernel<<<65535, 256, 0, stream>>>(
+        executor_prepare_voltage_kernel<<<strided_grid_for(std::max(b * nbus, b * ynnz), 256), 256, 0, stream>>>(
             static_cast<const double*>(base_v_re.pointer), static_cast<const double*>(base_v_im.pointer),
             static_cast<double*>(v_re.pointer), static_cast<double*>(v_im.pointer),
             static_cast<double*>(inv_vmag.pointer),
@@ -393,7 +400,7 @@ struct RpCudaExecutor {
                 break;
             }
 
-            newton_jacobian_csr_mapped_kernel<<<65535, 256, 0, stream>>>(
+            newton_jacobian_csr_mapped_kernel<<<strided_grid_for(b * active_ynnz, 256), 256, 0, stream>>>(
                 static_cast<const int*>(y_col_ptr.pointer), static_cast<const int*>(y_row_indices.pointer),
                 static_cast<const int*>(mirror.pointer), static_cast<const double*>(y_re.pointer),
                 static_cast<const double*>(y_im.pointer), static_cast<const double*>(v_re.pointer),
@@ -412,7 +419,7 @@ struct RpCudaExecutor {
             cudss_check(cudssExecute(handle, CUDSS_PHASE_SOLVE, config, data,
                                      matrix, solution_matrix, rhs_matrix),
                         "cuDSS Newton solve");
-            newton_update_voltage_kernel<<<65535, 256, 0, stream>>>(
+            newton_update_voltage_kernel<<<strided_grid_for(b * n_active, 256), 256, 0, stream>>>(
                 static_cast<double*>(v_re.pointer), static_cast<double*>(v_im.pointer),
                 static_cast<double*>(inv_vmag.pointer), static_cast<const double*>(solution.pointer),
                 static_cast<int*>(mask.pointer), b, nbus, n_active, npq, n);

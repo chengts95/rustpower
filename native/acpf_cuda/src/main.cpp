@@ -316,6 +316,12 @@ unsigned grid_for(std::size_t threads, unsigned block) {
     return static_cast<unsigned>(blocks);
 }
 
+unsigned strided_grid_for(std::size_t work, unsigned block) {
+    const auto blocks = (work + block - 1) / block;
+    require(blocks > 0, "CUDA grid is empty");
+    return static_cast<unsigned>(std::min<std::size_t>(blocks, 65535));
+}
+
 template <typename F>
 double timed(Stream& stream, F&& action) {
     stream.synchronize();
@@ -521,7 +527,7 @@ int main(int argc, char** argv) {
         void* prepare_args[] = {&base_v_re, &base_v_im, &v_re, &v_im, &inv_vmag, &expected,
                                 &batch_arg, &nbus_arg, &n_arg};
         const auto prepare_ms = timed(stream, [&] {
-            cu_check(api, api.cuLaunchKernel_fn(kernels.prepare, 65535, 1, 1, 256, 1, 1, 0,
+            cu_check(api, api.cuLaunchKernel_fn(kernels.prepare, strided_grid_for(std::max(batch * nbus, batch * n), 256), 1, 1, 256, 1, 1, 0,
                                                 reinterpret_cast<CUstream>(stream.value), prepare_args, nullptr),
                      "launch prepare_voltage_kernel");
         });
@@ -554,7 +560,7 @@ int main(int argc, char** argv) {
                                  &row_ptr, &values, &batch_arg, &n_active_arg, &npq_arg, &nnz_arg,
                                  &active_ynnz_arg, &nbus_arg};
         const auto jacobian_ms = timed(stream, [&] {
-            cu_check(api, api.cuLaunchKernel_fn(kernels.jacobian, 65535, 1, 1, 256, 1, 1, 0,
+            cu_check(api, api.cuLaunchKernel_fn(kernels.jacobian, strided_grid_for(batch * active_ynnz, 256), 1, 1, 256, 1, 1, 0,
                                                 reinterpret_cast<CUstream>(stream.value), jacobian_args, nullptr),
                      "launch batch_jacobian_csr_kernel");
         });
@@ -610,13 +616,13 @@ int main(int argc, char** argv) {
             std::size_t vector_count = batch * n;
             void* cast_values_args[] = {&values, &values32, &value_count};
             fp32_cast_ms += timed(stream, [&] {
-                cu_check(api, api.cuLaunchKernel_fn(kernels.cast_fp32, 65535, 1, 1, 256, 1, 1, 0,
+                cu_check(api, api.cuLaunchKernel_fn(kernels.cast_fp32, strided_grid_for(value_count, 256), 1, 1, 256, 1, 1, 0,
                                                     reinterpret_cast<CUstream>(stream.value), cast_values_args, nullptr),
                          "cast Jacobian to FP32");
             });
             void* cast_expected_args[] = {&expected, &expected32, &vector_count};
             fp32_cast_ms += timed(stream, [&] {
-                cu_check(api, api.cuLaunchKernel_fn(kernels.cast_fp32, 65535, 1, 1, 256, 1, 1, 0,
+                cu_check(api, api.cuLaunchKernel_fn(kernels.cast_fp32, strided_grid_for(vector_count, 256), 1, 1, 256, 1, 1, 0,
                                                     reinterpret_cast<CUstream>(stream.value), cast_expected_args, nullptr),
                          "cast expected solution to FP32");
             });
@@ -688,7 +694,7 @@ int main(int argc, char** argv) {
             void* cast_rhs_args[] = {&rhs_ptr, &rhs32, const_cast<std::size_t*>(&vector_count)};
             d_mask.upload(ones.data(), batch * sizeof(int));
             void* newton_prepare_args[] = {&base_v_re, &base_v_im, &v_re, &v_im, &inv_vmag, &batch_arg, &nbus_arg};
-            cu_check(api, api.cuLaunchKernel_fn(newton_kernels.prepare, 65535, 1, 1, 256, 1, 1, 0,
+            cu_check(api, api.cuLaunchKernel_fn(newton_kernels.prepare, strided_grid_for(batch * nbus, 256), 1, 1, 256, 1, 1, 0,
                                                 reinterpret_cast<CUstream>(stream.value), newton_prepare_args, nullptr),
                      "launch Newton voltage preparation");
             void* power_args_newton[] = {&y_col_ptr, &y_row_indices, &mirror, &y_re, &y_im, &v_re, &v_im,
@@ -771,11 +777,11 @@ int main(int argc, char** argv) {
                 }
                 newton_jacobian_ms.push_back(timed(stream, [&] {
                     if (mapped_jacobian) {
-                        cu_check(api, api.cuLaunchKernel_fn(newton_kernels.jacobian_mapped, 65535, 1, 1, 256, 1, 1, 0,
+                        cu_check(api, api.cuLaunchKernel_fn(newton_kernels.jacobian_mapped, strided_grid_for(batch * active_ynnz, 256), 1, 1, 256, 1, 1, 0,
                                                             reinterpret_cast<CUstream>(stream.value), jacobian_args_mapped, nullptr),
                                  "launch Newton mapped Jacobian");
                     } else if (jacobian_lanes == 1) {
-                        cu_check(api, api.cuLaunchKernel_fn(newton_kernels.jacobian, 65535, 1, 1, 256, 1, 1, 0,
+                        cu_check(api, api.cuLaunchKernel_fn(newton_kernels.jacobian, strided_grid_for(batch * active_ynnz, 256), 1, 1, 256, 1, 1, 0,
                                                             reinterpret_cast<CUstream>(stream.value), jacobian_args_newton, nullptr),
                                  "launch Newton itemwise Jacobian");
                     } else {
@@ -788,10 +794,10 @@ int main(int argc, char** argv) {
                 }));
                 if (mixed_newton_mode) {
                     newton_cast_ms.push_back(timed(stream, [&] {
-                        cu_check(api, api.cuLaunchKernel_fn(kernels.cast_fp32, 65535, 1, 1, 256, 1, 1, 0,
+                        cu_check(api, api.cuLaunchKernel_fn(kernels.cast_fp32, strided_grid_for(value_count, 256), 1, 1, 256, 1, 1, 0,
                                                             reinterpret_cast<CUstream>(stream.value), cast_values_args, nullptr),
                                  "cast Newton Jacobian to FP32");
-                        cu_check(api, api.cuLaunchKernel_fn(kernels.cast_fp32, 65535, 1, 1, 256, 1, 1, 0,
+                        cu_check(api, api.cuLaunchKernel_fn(kernels.cast_fp32, strided_grid_for(vector_count, 256), 1, 1, 256, 1, 1, 0,
                                                             reinterpret_cast<CUstream>(stream.value), cast_rhs_args, nullptr),
                                  "cast Newton RHS to FP32");
                     }));
@@ -809,7 +815,7 @@ int main(int argc, char** argv) {
                 }));
                 newton_update_ms.push_back(timed(stream, [&] {
                     const CUfunction update_kernel = mixed_newton_mode ? newton_kernels.update_fp32 : newton_kernels.update;
-                    cu_check(api, api.cuLaunchKernel_fn(update_kernel, 65535, 1, 1, 256, 1, 1, 0,
+                    cu_check(api, api.cuLaunchKernel_fn(update_kernel, strided_grid_for(batch * n_active, 256), 1, 1, 256, 1, 1, 0,
                                                         reinterpret_cast<CUstream>(stream.value), update_args, nullptr),
                              "launch Newton voltage update");
                 }));
