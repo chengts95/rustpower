@@ -8,7 +8,8 @@ def main() -> None:
         raise SystemExit("usage: python scripts/ci_failure_annotation.py <log-file>")
     text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")[-12000:]
     escaped = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-    print(f"::error::{escaped}")
+    payload = f"::error::{escaped}\n".encode("ascii", "backslashreplace")
+    sys.stdout.buffer.write(payload)
 
 
 if __name__ == "__main__":
