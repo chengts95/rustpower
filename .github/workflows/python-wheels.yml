@@ -13,6 +13,7 @@ on:
       - "src/**"
       - "scripts/test_n1_api.py"
       - "scripts/bundle_windows_cuda.py"
+      - "scripts/ci_failure_annotation.py"
       - "Cargo.toml"
       - "Cargo.lock"
       - "pyproject.toml"
@@ -78,7 +79,12 @@ jobs:
           python -m pip install "pandapower==3.5.4"
           python -m pip install --no-index --no-deps --find-links dist rustpower==0.6.0
           python -c "import rustpower; print(rustpower.__file__); print(rustpower.features())"
-          RUSTPOWER_N1_DISABLE_CUDA=1 python scripts/test_n1_api.py
+          set -o pipefail
+          RUSTPOWER_N1_DISABLE_CUDA=1 python scripts/test_n1_api.py \
+            2>&1 | tee "$RUNNER_TEMP/n1-api.log" || {
+              python scripts/ci_failure_annotation.py "$RUNNER_TEMP/n1-api.log"
+              exit 1
+            }
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -130,11 +136,16 @@ jobs:
           echo "RUSTPOWER_CUDA_ARCH=sm_75" >> "$GITHUB_ENV"
 
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          target: x86_64
-          args: --release --out dist --no-default-features --features python,archive,klu,arrow,experimental_n1_cuda
-          sccache: 'true'
+        shell: bash
+        run: |
+          python -m pip install maturin==1.16.0
+          set -o pipefail
+          maturin build --release --out dist --no-default-features \
+            --features python,archive,klu,arrow,experimental_n1_cuda \
+            2>&1 | tee "$RUNNER_TEMP/maturin-windows.log" || {
+              python scripts/ci_failure_annotation.py "$RUNNER_TEMP/maturin-windows.log"
+              exit 1
+            }
 
       - name: Add the small CUDA bridge to the wheel
         shell: bash
@@ -148,7 +159,12 @@ jobs:
           python -m pip install "pandapower==3.5.4"
           python -m pip install --no-index --no-deps --find-links dist rustpower==0.6.0
           python -c "import rustpower as rp; print(rp.__file__); print(rp.features()); print(rp.n1_cuda_status())"
-          RUSTPOWER_N1_DISABLE_CUDA=1 python scripts/test_n1_api.py
+          set -o pipefail
+          RUSTPOWER_N1_DISABLE_CUDA=1 python scripts/test_n1_api.py \
+            2>&1 | tee "$RUNNER_TEMP/n1-api.log" || {
+              python scripts/ci_failure_annotation.py "$RUNNER_TEMP/n1-api.log"
+              exit 1
+            }
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -188,7 +204,12 @@ jobs:
           python -m pip install "pandapower==3.5.4"
           python -m pip install --no-index --no-deps --find-links dist rustpower==0.6.0
           python -c "import rustpower; print(rustpower.__file__); print(rustpower.features())"
-          RUSTPOWER_N1_DISABLE_CUDA=1 python scripts/test_n1_api.py
+          set -o pipefail
+          RUSTPOWER_N1_DISABLE_CUDA=1 python scripts/test_n1_api.py \
+            2>&1 | tee "$RUNNER_TEMP/n1-api.log" || {
+              python scripts/ci_failure_annotation.py "$RUNNER_TEMP/n1-api.log"
+              exit 1
+            }
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
