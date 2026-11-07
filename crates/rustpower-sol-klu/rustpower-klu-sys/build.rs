@@ -128,8 +128,23 @@ fn main() {
     println!("cargo:rustc-link-lib={}colamd", link_type);
     println!("cargo:rustc-link-lib={}suitesparseconfig", link_type);
 
+    // 让小星星都能找到 SuiteSparse：CI 和本机都尊重同一个显式安装路径。
+    println!("cargo:rerun-if-env-changed=SUITESPARSE_DIR");
+    let suitesparse_dir = env::var("SUITESPARSE_DIR").unwrap_or_default();
+    if !suitesparse_dir.is_empty() {
+        println!("cargo:rustc-link-search={}/lib64", suitesparse_dir);
+        println!("cargo:rustc-link-search={}/lib", suitesparse_dir);
+    }
+
+    if is_static && cfg!(target_os = "linux") {
+        println!("cargo:rustc-link-lib=gomp");
+        println!("cargo:rustc-link-lib=m");
+    }
+
     if cfg!(target_os = "linux") {
+        println!("cargo:rustc-link-search=/usr/local/lib64");
         println!("cargo:rustc-link-search=/usr/local/lib");
+        println!("cargo:rustc-link-search=/usr/lib64");
         println!("cargo:rustc-link-search=/usr/lib");
     } else if cfg!(target_os = "macos") {
         // Search Homebrew paths
@@ -152,6 +167,12 @@ fn main() {
         .blocklist_item("FP_INFINITE")
         .blocklist_item("FP_NAN")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()));
+
+    if !suitesparse_dir.is_empty() {
+        builder = builder
+            .clang_arg(format!("-I{}/include", suitesparse_dir))
+            .clang_arg(format!("-I{}/include/suitesparse", suitesparse_dir));
+    }
 
     if cfg!(target_os = "linux") {
         builder = builder
