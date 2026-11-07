@@ -116,7 +116,8 @@ class N1ApiTests(unittest.TestCase):
         try:
             available, diagnostic = rp.n1_cuda_status()
             self.assertFalse(available)
-            self.assertIn('disabled', diagnostic)
+            expected = 'disabled' if 'experimental_n1_cuda' in rp.features() else 'not included'
+            self.assertIn(expected, diagnostic)
             g = grid()
             study = g.prepare_n1([first_line(g)])
             report = study.run(backend='auto')
