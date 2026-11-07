@@ -138,11 +138,14 @@ jobs:
       - name: Build wheels
         shell: bash
         run: |
-          python -m pip install maturin==1.16.0
           set -o pipefail
-          maturin build --release --out dist --no-default-features \
-            --features python,archive,klu,arrow,experimental_n1_cuda \
-            2>&1 | tee "$RUNNER_TEMP/maturin-windows.log" || {
+          {
+            python --version
+            python -m pip install maturin==1.16.0 &&
+            python -m maturin --version &&
+            python -m maturin build --release --out dist --no-default-features \
+              --features python,archive,klu,arrow,experimental_n1_cuda
+          } 2>&1 | tee "$RUNNER_TEMP/maturin-windows.log" || {
               python scripts/ci_failure_annotation.py "$RUNNER_TEMP/maturin-windows.log"
               exit 1
             }
