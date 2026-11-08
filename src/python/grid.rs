@@ -660,6 +660,35 @@ impl PowerGrid {
         )
     }
 
+    /// Trace a PV curve by scaling all current net injections together.
+    #[pyo3(signature = (*, tol=1e-6, step0=0.2, step_max=1.0, step_min=1e-3, step_grow=1.3, step_shrink=0.5, max_corr_iter=10, max_points=300, base_max_iter=100))]
+    #[allow(clippy::too_many_arguments)]
+    fn run_cpf(
+        &mut self,
+        tol: f64,
+        step0: f64,
+        step_max: f64,
+        step_min: f64,
+        step_grow: f64,
+        step_shrink: f64,
+        max_corr_iter: usize,
+        max_points: usize,
+        base_max_iter: usize,
+    ) -> PyResult<super::cpf::Report> {
+        super::cpf::run(
+            &mut self.inner,
+            tol,
+            step0,
+            step_max,
+            step_min,
+            step_grow,
+            step_shrink,
+            max_corr_iter,
+            max_points,
+            base_max_iter,
+        )
+    }
+
     /// Run the power flow. Fully event-driven: pending FullRebuildEvents
     /// (editor commits, in_service toggles) make structure_update run the
     /// PFInit schedule inside this same update; parameter changes flow

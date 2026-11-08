@@ -1,6 +1,7 @@
 //! Python bindings for the RustPower simulation framework.
 #![cfg(feature = "python")]
 #![allow(dead_code)]
+pub mod cpf;
 pub mod grid;
 pub mod handles;
 #[cfg(feature = "experimental_n1")]
@@ -82,6 +83,8 @@ pub fn rustpower(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<grid::PowerGrid>()?;
     m.add_class::<grid::GridEditor>()?;
     m.add_class::<grid::SolveReport>()?;
+    m.add_class::<cpf::Report>()?;
+    m.add_class::<cpf::Nose>()?;
 
     #[cfg(feature = "experimental_n1")]
     {

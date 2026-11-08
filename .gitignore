@@ -37,5 +37,6 @@ __pycache__/
 /gpu-benchmarks/**/results/
 /gpu-benchmarks/**/cudss-jit-cache/
 /native/acpf_cuda/reference-attachment.txt
+ /paper/
 .tmp-paper
 .kimi-tmp 

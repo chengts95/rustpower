@@ -253,6 +253,60 @@ impl PowerGrid {
     pub fn app_mut(&mut self) -> &mut App {
         &mut self.data_storage
     }
+
+    /// Trace a PV curve by scaling the present net injections with one lambda.
+    /// Bus types remain fixed and network parameters are not modified.
+    pub fn run_cpf(
+        &mut self,
+        options: crate::cpf::CpfOptions,
+    ) -> Result<crate::cpf::CpfReport, String> {
+        use crate::cpf::{CpfNose, CpfSolver};
+        options.validate()?;
+        let previous = self.world().resource::<PowerFlowConfig>().clone();
+        self.world_mut().insert_resource(PowerFlowConfig {
+            max_it: Some(options.base_max_iter),
+            tol: Some(options.tol),
+        });
+        self.run_pf();
+        self.world_mut().insert_resource(previous);
+
+        let base = self.world().resource::<PowerFlowResult>();
+        if !base.converged {
+            return Err(format!(
+                "CPF base power flow did not converge after {} iterations",
+                base.iterations
+            ));
+        }
+        let mat = self.world().resource::<PowerFlowMat>().clone();
+        let mut solver_base = nalgebra::DVector::zeros(mat.v_bus_init.len());
+        for (solver, &physical) in mat.from_perm.iter().enumerate() {
+            solver_base[solver] = base.v[physical];
+        }
+        let mut solver = CpfSolver::new(
+            &mat.y_bus,
+            mat.npv,
+            mat.npq,
+            mat.s_bus.clone(),
+            mat.v_bus_init.clone(),
+            DefaultSolver::default(),
+        );
+        let mut report =
+            solver.run_from_base(&mat.y_bus, solver_base, base.iterations, &options)?;
+        let physical = |voltage: &nalgebra::DVector<num_complex::Complex64>| {
+            let mut result = nalgebra::DVector::zeros(voltage.len());
+            for (solver, &physical) in mat.from_perm.iter().enumerate() {
+                result[physical] = voltage[solver];
+            }
+            result
+        };
+        for point in &mut report.points {
+            point.voltage = physical(&point.voltage);
+        }
+        if let Some(CpfNose { voltage, .. }) = &mut report.nose {
+            *voltage = physical(voltage);
+        }
+        Ok(report)
+    }
 }
 impl DataOps for PowerGrid {
     fn world(&self) -> &World {

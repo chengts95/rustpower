@@ -201,6 +201,40 @@ if solver.solve(max_iter=15, tol=1e-8):
 
 ---
 
+## Continuation power flow
+
+`PowerGrid.run_cpf()` traces a PV curve with tangent prediction and perpendicular
+correction. It scales the present net injections as `S(lambda) = lambda * S_base`,
+keeps PQ/PV/Slack types fixed, and leaves network parameters unchanged. No optional
+Cargo feature or additional dependency is required.
+
+```python
+result = grid.run_cpf(
+    tol=1e-6,
+    step0=0.2,
+    step_max=1.0,
+    step_min=1e-3,
+    max_corr_iter=10,
+    max_points=300,
+    base_max_iter=100,
+)
+
+print(result.passed_nose, result.lambda_max, result.stop_reason)
+lambda_values = result.lambda_values  # (n_points,)
+voltages = result.voltages            # (n_points, n_buses), physical bus order
+
+if result.nose is not None:
+    print(result.nose.lambda_)
+    print(result.nose.voltage)
+```
+
+`result.nose` is present only when the directed tangent passes through zero. A run
+that reaches `max_points` or the minimum step returns the accepted curve but does not
+claim a nose. `result.stats` contains factorization, resolve, and elapsed-time counters.
+Use `base_max_iter` to control the initial ACPF solve independently of the corrector.
+
+---
+
 ## API Reference
 
 ### `PowerGrid`

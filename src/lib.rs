@@ -1,5 +1,6 @@
 mod basic;
 pub mod bevy_cmdbuffer;
+pub mod cpf;
 pub mod io;
 pub mod native;
 #[cfg(feature = "python")]
@@ -14,6 +15,7 @@ pub mod prelude {
     pub use crate::basic::ecs::post_processing::PostProcessing;
     pub use crate::basic::ecs::powerflow::prelude::PowerFlowResult;
     pub use crate::basic::*;
+    pub use crate::cpf::{CpfNose, CpfOptions, CpfPoint, CpfReport, CpfStats, CpfTermination};
     pub use crate::io::pandapower;
     pub use crate::native::solver::NewtonSolver;
 }
