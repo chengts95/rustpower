@@ -52,5 +52,11 @@ pub trait Solve {
         _n: usize,
     ) -> Result<(), &'static str>;
 
+    /// Solve another right-hand side with the most recent factorization.
+    /// Backends without reusable numeric factors return an error.
+    fn resolve(&mut self, _b: &mut [f64]) -> Result<(), &'static str> {
+        Err("linear solver does not retain a reusable factorization")
+    }
+
     fn reset(&mut self);
 }

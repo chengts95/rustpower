@@ -71,6 +71,18 @@ impl Solve for KLUSolver {
         }
         Ok(())
     }
+
+    fn resolve(&mut self, b: &mut [f64]) -> Result<(), &'static str> {
+        if self.0.numeric.is_null() {
+            return Err("KLU has no reusable numeric factorization");
+        }
+        let status = unsafe { self.0.solve(b.as_mut_ptr(), b.len() as i32, 1) };
+        if status != 0 {
+            return Err("error occurred when reusing the KLU factorization");
+        }
+        Ok(())
+    }
+
     fn reset(&mut self) {
         self.0.reset();
     }

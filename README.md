@@ -8,6 +8,7 @@ RustPower is an ECS-based power flow calculation library designed primarily for 
 - **High-Performance Newton-Raphson Engine**: Optimized single-pass $O(\text{nnz})$ `dSbus_dV` evaluation and branch-free symbolic Jacobian filling (`fill_jacobian_ultimate`).
 - **DCPF Solver & Warm-Start Initialization**: Built-in DC power flow calculation and DCPF-initialized Newton-Raphson for accelerated convergence on stressed networks.
 - **Iwamoto Optimal Multiplier**: Robust nonlinear solver using optimal deceleration step size $\mu$ to ensure convergence on ill-conditioned or heavily-loaded grids.
+- **Continuation Power Flow (CPF)**: Trace PV curves with tangent prediction and perpendicular correction in Rust or Python, without optional features or extra dependencies.
 - **Standard 2-Port Branch Modeling**: Rigorous $\Pi$-equivalent model for lines and transformers with complex tap ratios and phase shifts.
 - **Stateful Jacobian & Solver Caching (`NewtonCache`)**: Reuses symbolic LU factorization and sparsity patterns across consecutive iterations.
 - **Modular ECS Architecture**: Built on Bevy ECS for data-oriented composability, custom plugins, and zero heap allocation during hot iteration loops.
@@ -165,72 +166,37 @@ grid.solve()  # Automatically triggers topology rebuild
 
 ### **Rust ECS Examples**
 
-#### 1. Basic Power Flow
-Run with: `cargo run --example basic_powerflow`
+#### Basic Power Flow
+Run the complete [`ecs_net`](examples/ecs_net.rs) example with: `cargo run --example ecs_net`
 
 ```rust
 use std::env;
-use rustpower::io::pandapower::load_csv_zip;
-use rustpower::prelude::*;
-use ecs::post_processing::PostProcessing;
+use rustpower::{io::pandapower::load_csv_zip, prelude::*};
 
 fn main() {
-    let dir = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+    let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let zipfile = format!("{}/cases/IEEE118/data.zip", dir);
-    let net = load_csv_zip(&zipfile).expect("Failed to load case zip");
+    let net = load_csv_zip(&zipfile).unwrap();
 
-    // Initialize the ECS application with default plugins
-    let mut pf_net = default_app();
+    let mut pf_net = PowerGrid::default();
     pf_net.world_mut().insert_resource(PPNetwork(net));
-    pf_net.update(); // Initializes and solves power flow
+    pf_net.init_pf_net();
+    pf_net.run_pf();
 
-    // Retrieve results
     let results = pf_net.world().get_resource::<PowerFlowResult>().unwrap();
     assert!(results.converged);
     println!("Converged in {} iterations", results.iterations);
 
-    // Post-process and print results
     pf_net.post_process();
     pf_net.print_res_bus();
 }
 ```
 
-#### 2. DCPF-Initialized Power Flow
-Run with: `cargo run --example dcpf_example`
-
-```rust
-use rustpower::prelude::{
-    default_app,
-    ecs::dcpf::{DcpfNewtonPfPlugin, DcpfSolverActive},
-    PPNetwork, PowerFlowResult,
-};
-
-let mut pf_net = default_app();
-pf_net.add_plugins(DcpfNewtonPfPlugin);
-pf_net.world_mut().insert_resource(DcpfSolverActive);
-pf_net.world_mut().insert_resource(PPNetwork(net));
-pf_net.update();
-```
-
-#### 3. Iwamoto Optimal Multiplier Solver
-Run with: `cargo run --example iwamoto_example`
-
-```rust
-use rustpower::prelude::{
-    default_app,
-    CustomSolverActive, IwamotoPlugin, PPNetwork, PowerFlowResult,
-};
-
-let mut pf_net = default_app();
-pf_net.add_plugins(IwamotoPlugin);
-pf_net.world_mut().insert_resource(CustomSolverActive);
-pf_net.world_mut().insert_resource(PPNetwork(net));
-pf_net.update();
-```
+For DCPF initialization and Iwamoto optimal-multiplier solves, enable the corresponding plugins listed above. N-1 screening has dedicated runnable examples and commands in the [N-1 usage guide](docs/N1_USAGE.md#two-rust-examples).
 
 Additional examples available in the `examples/` directory:
-- `archive_example.rs`: TOML-based state restoration.
-- `arrow_archive_example.rs`: Apache Arrow / Parquet snapshot serialization.
+- [`archive_example.rs`](examples/archive_example.rs): TOML-based state restoration.
+- [`arrow_archive_example.rs`](examples/arrow_archive_example.rs): Apache Arrow / Parquet snapshot serialization.
 
 ## **License**
 

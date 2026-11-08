@@ -12,6 +12,7 @@ on:
       - "native/**"
       - "src/**"
       - "scripts/test_n1_api.py"
+      - "scripts/test_cpf_api.py"
       - "scripts/bundle_windows_cuda.py"
       - "scripts/ci_failure_annotation.py"
       - "Cargo.toml"
@@ -80,6 +81,7 @@ jobs:
           python -m pip install --no-index --no-deps --find-links dist rustpower==0.6.0
           python -c "import rustpower; print(rustpower.__file__); print(rustpower.features())"
           set -o pipefail
+          python scripts/test_cpf_api.py
           RUSTPOWER_N1_DISABLE_CUDA=1 python scripts/test_n1_api.py \
             2>&1 | tee "$RUNNER_TEMP/n1-api.log" || {
               python scripts/ci_failure_annotation.py "$RUNNER_TEMP/n1-api.log"
@@ -164,6 +166,7 @@ jobs:
           python -m pip install --no-index --no-deps --find-links dist rustpower==0.6.0
           python -c "import rustpower as rp; print(rp.__file__); print(rp.features()); print(rp.n1_cuda_status())"
           set -o pipefail
+          python scripts/test_cpf_api.py
           RUSTPOWER_N1_DISABLE_CUDA=1 python scripts/test_n1_api.py \
             2>&1 | tee "$RUNNER_TEMP/n1-api.log" || {
               python scripts/ci_failure_annotation.py "$RUNNER_TEMP/n1-api.log"
@@ -209,6 +212,7 @@ jobs:
           python -m pip install --no-index --no-deps --find-links dist rustpower==0.6.0
           python -c "import rustpower; print(rustpower.__file__); print(rustpower.features())"
           set -o pipefail
+          python scripts/test_cpf_api.py
           RUSTPOWER_N1_DISABLE_CUDA=1 python scripts/test_n1_api.py \
             2>&1 | tee "$RUNNER_TEMP/n1-api.log" || {
               python scripts/ci_failure_annotation.py "$RUNNER_TEMP/n1-api.log"

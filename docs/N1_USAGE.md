@@ -560,6 +560,8 @@ full local measurements remain in n1-scalability, n1-6515, n1-all-cores,
 n1-acpf-estimate, and n1-spsc-performance. The consolidated record retains preparation
 and first-call end-to-end fields.
 
-Jacobian-only GPU offload is deferred. The owner reports about 100 microseconds for
-Jacobian fill while factorization dominates. A suitable batched sparse factor/refactor/
-solve backend is the next prerequisite for evaluating a complete GPU executor.
+Historical note: this measurement section predates the experimental CUDA executor.
+The owner reported about 100 microseconds for Jacobian fill while factorization
+dominated, motivating a complete batched factor/refactor/solve path rather than
+Jacobian-only offload. RustPower 0.6.0 now provides that experimental CUDA/cuDSS
+path; see the [CUDA N-1 guide](n1_cuda.md) for its current scope and limitations.
