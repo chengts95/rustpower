@@ -309,8 +309,8 @@ Three properties return reusable `N1Faults` selections:
 - `rejected_faults`: constraint violations and numerical failures, excluding islands;
 - `island_faults`: scenarios rejected by topology screening.
 
-`N1Report.events`, `hits`, and `branch_results` are column dictionaries. Convert them
-directly to pandas DataFrames when tabular processing is useful:
+`N1Report.events`, `hits`, `branch_results`, and `islands` are column dictionaries.
+Convert them directly to pandas DataFrames when tabular processing is useful:
 
 ```python
 import pandas as pd
@@ -318,7 +318,12 @@ import pandas as pd
 events = pd.DataFrame(details.events)
 hits = pd.DataFrame(details.hits)
 flows = pd.DataFrame(details.branch_results)
+islands = pd.DataFrame(report.islands)
 ```
+
+`islands` contains `outage_kind`, `outage_id`, `outage_index`, `outage_entity`, and
+`slackless_bus_count`. Use `outage_kind` and `outage_id` to identify the source device;
+`outage_entity` is an internal ECS identifier, not a pandapower table index.
 
 Event columns include stable outage kind/ID, source Entity, outcome, solver stage,
 iterations, residual, and error. `hits.event_row` links each rule hit to an event;

@@ -64,6 +64,10 @@ class N1ApiTests(unittest.TestCase):
         self.assertEqual(one.summary['processed'], len(study.faults))
         self.assertGreater(one.summary['islanded'], 0)
         self.assertEqual(len(one.island_faults), one.summary['islanded'])
+        islands = one.islands
+        self.assertEqual(len(islands['outage_id']), one.summary['islanded'])
+        self.assertTrue(set(islands['outage_kind']) <= {'Line', 'Transformer'})
+        self.assertTrue((islands['slackless_bus_count'] > 0).all())
 
     def test_rules_columns_and_stale_source_snapshot(self):
         net = networks.case14()
