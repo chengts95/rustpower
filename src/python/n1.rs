@@ -424,6 +424,57 @@ impl Report {
                 .collect(),
         }
     }
+    /// Topology-rejected outages with stable, user-readable device identities.
+    #[getter]
+    fn islands<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new(py);
+        d.set_item(
+            "outage_index",
+            self.report
+                .islands
+                .iter()
+                .map(|island| island.outage_index as u64)
+                .collect::<Vec<_>>()
+                .into_pyarray(py),
+        )?;
+        d.set_item(
+            "outage_id",
+            self.report
+                .islands
+                .iter()
+                .map(|island| island.outage.id)
+                .collect::<Vec<_>>()
+                .into_pyarray(py),
+        )?;
+        d.set_item(
+            "outage_entity",
+            self.report
+                .islands
+                .iter()
+                .map(|island| island.outage_entity.to_bits())
+                .collect::<Vec<_>>()
+                .into_pyarray(py),
+        )?;
+        d.set_item(
+            "outage_kind",
+            self.report
+                .islands
+                .iter()
+                .map(|island| format!("{:?}", island.outage.kind))
+                .collect::<Vec<_>>(),
+        )?;
+        d.set_item(
+            "slackless_bus_count",
+            self.report
+                .islands
+                .iter()
+                .map(|island| island.cut.slackless_bus_count() as u64)
+                .collect::<Vec<_>>()
+                .into_pyarray(py),
+        )?;
+        Ok(d)
+    }
+
     /// Numeric columns are independent NumPy buffers, constructed on demand.
     #[getter]
     fn events<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
