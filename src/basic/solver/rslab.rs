@@ -1,22 +1,21 @@
 use rslab::{
-    CscMatrix, GeneralCsc, LdltSolver, LdltSymbolic, LuSolver, LuSymbolic, SolverSettings,
+    AutoSettings, AutoSolver, CscMatrix, GeneralCsc, LdltSolver, LdltSymbolic, SolverSettings,
 };
 
 use super::Solve;
 
 #[derive(Default)]
 pub struct RslabLuSolver {
-    symbolic: Option<LuSymbolic>,
-    factor: Option<LuSolver<f64>>,
+    solver: Option<AutoSolver<'static, f64>>,
 }
 
 impl RslabLuSolver {
     pub fn resolve(&mut self, b: &mut [f64]) -> Result<(), &'static str> {
-        let factor = self
-            .factor
+        let solver = self
+            .solver
             .as_ref()
             .ok_or("RSLAB LU has no factorization")?;
-        let solution = factor.solve(b).map_err(|_| "RSLAB LU solve failed")?;
+        let solution = solver.solve(b).map_err(|_| "RSLAB LU solve failed")?;
         b.copy_from_slice(&solution);
         Ok(())
     }
@@ -34,25 +33,24 @@ impl Solve for RslabLuSolver {
         if n == 0 {
             return Ok(());
         }
-        let matrix = GeneralCsc {
-            n,
-            col_ptr: ap.to_vec(),
-            row_idx: ai.to_vec(),
-            values: ax.to_vec(),
-        };
-        let settings = SolverSettings::default();
-        if self.symbolic.is_none() {
-            self.symbolic = Some(
-                LuSymbolic::analyze(&matrix, &settings).map_err(|_| "RSLAB LU analysis failed")?,
+        if self.solver.is_none() {
+            let matrix = GeneralCsc {
+                n,
+                col_ptr: ap.to_vec(),
+                row_idx: ai.to_vec(),
+                values: ax.to_vec(),
+            };
+            self.solver = Some(
+                AutoSolver::factor(&matrix, &AutoSettings::default())
+                    .map_err(|_| "RSLAB LU factorization failed")?,
             );
+        } else {
+            let solver = self.solver.as_mut().expect("solver was initialized");
+            solver.values_mut().copy_from_slice(ax);
+            solver
+                .refactor(&AutoSettings::default())
+                .map_err(|_| "RSLAB LU refactorization failed")?;
         }
-        self.factor = Some(
-            self.symbolic
-                .as_ref()
-                .expect("symbolic was initialized")
-                .factor(&matrix, &settings)
-                .map_err(|_| "RSLAB LU factorization failed")?,
-        );
         self.resolve(b)
     }
 
@@ -61,8 +59,7 @@ impl Solve for RslabLuSolver {
     }
 
     fn reset(&mut self) {
-        self.symbolic = None;
-        self.factor = None;
+        self.solver = None;
     }
 }
 
