@@ -137,6 +137,7 @@ jobs:
           python -m zipfile -e "$WHEEL" "$RUNNER_TEMP/cudss/package"
           echo "CUDSS_DIR=$RUNNER_TEMP/cudss/package/nvidia/cu12" >> "$GITHUB_ENV"
           echo "RUSTPOWER_CUDA_ARCH=sm_75" >> "$GITHUB_ENV"
+          echo "RUSTPOWER_CUDA_PTX=compute_75" >> "$GITHUB_ENV"
 
       - name: Build wheels
         shell: bash

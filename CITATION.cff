@@ -1,4 +1,4 @@
-﻿# This CITATION.cff file was generated with cffinit.
+# This CITATION.cff file was generated with cffinit.
 # Visit https://bit.ly/cffinit to generate yours today!
 
 cff-version: 1.2.0
@@ -20,5 +20,5 @@ keywords:
   - data-oriented programming
   - high-performance computing
 license: MPL-2.0
-version: 0.5.0
-date-released: '2026-06-21'
+version: 0.6.0
+date-released: '2026-11-14'
