@@ -661,8 +661,9 @@ impl PowerGrid {
     }
 
     /// Prepare a reusable fixed-topology LMPF study.
-    fn prepare_lmpf(slf: Py<Self>, py: Python<'_>) -> super::lmpf::Study {
-        super::lmpf::prepare(slf, py)
+    #[pyo3(signature = (*, backend="qdldl"))]
+    fn prepare_lmpf(slf: Py<Self>, py: Python<'_>, backend: &str) -> PyResult<super::lmpf::Study> {
+        super::lmpf::prepare(slf, py, backend)
     }
 
     /// Trace a PV curve by scaling all current net injections together.

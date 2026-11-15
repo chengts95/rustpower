@@ -21,4 +21,4 @@ pub use flat::{FlatLayout, fill_kkt, fill_kkt_flat};
 pub use kernels::{apply_mu_delta, fill_h, fill_jt};
 pub use pattern::KktPattern;
 pub use step_control::{DampingMetric, LmOptions, TrustRegionOptions};
-pub use study::{LmpfReport, LmpfRunOptions, LmpfStatus, PreparedLmpf};
+pub use study::{LmpfBackend, LmpfReport, LmpfRunOptions, LmpfStatus, PreparedLmpf};

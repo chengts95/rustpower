@@ -26,6 +26,15 @@ fn prepared_lmpf_converges_and_reuses_study() {
     }
 }
 
+#[cfg(feature = "rslab")]
+#[test]
+fn rslab_ldlt_converges_on_ieee39() {
+    let mut grid = grid();
+    let mut study = grid.prepare_lmpf_with_backend(rustpower::lm::LmpfBackend::RslabLdlt);
+    assert_eq!(study.backend(), "rslab-ldlt");
+    assert!(study.run(LmpfRunOptions::default()).unwrap().converged);
+}
+
 #[test]
 fn lmpf_rejects_invalid_options() {
     let mut grid = grid();

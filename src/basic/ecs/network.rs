@@ -256,8 +256,18 @@ impl PowerGrid {
 
     /// Prepare a reusable fixed-topology LMPF study from the current grid.
     pub fn prepare_lmpf(&mut self) -> crate::lm::study::PreparedLmpf {
+        self.prepare_lmpf_with_backend(crate::lm::LmpfBackend::default())
+    }
+
+    pub fn prepare_lmpf_with_backend(
+        &mut self,
+        backend: crate::lm::LmpfBackend,
+    ) -> crate::lm::study::PreparedLmpf {
         self.run_pf();
-        crate::lm::study::PreparedLmpf::new(self.world().resource::<PowerFlowMat>().clone())
+        crate::lm::study::PreparedLmpf::with_backend(
+            self.world().resource::<PowerFlowMat>().clone(),
+            backend,
+        )
     }
 
     /// Trace a PV curve by scaling the present net injections with one lambda.

@@ -69,33 +69,92 @@ pub struct LmpfReport {
     pub elapsed: Duration,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LmpfBackend {
+    #[default]
+    Qdldl,
+    #[cfg(feature = "rslab")]
+    RslabLdlt,
+}
+
+enum LinearSolver {
+    Default(DefaultLmSolver),
+    #[cfg(feature = "rslab")]
+    Rslab(crate::basic::solver::RslabLdltSolver),
+}
+
+impl Solve for LinearSolver {
+    fn solve(
+        &mut self,
+        ap: &mut [usize],
+        ai: &mut [usize],
+        ax: &mut [f64],
+        b: &mut [f64],
+        n: usize,
+    ) -> Result<(), &'static str> {
+        match self {
+            Self::Default(solver) => solver.solve(ap, ai, ax, b, n),
+            #[cfg(feature = "rslab")]
+            Self::Rslab(solver) => solver.solve(ap, ai, ax, b, n),
+        }
+    }
+
+    fn resolve(&mut self, b: &mut [f64]) -> Result<(), &'static str> {
+        match self {
+            Self::Default(solver) => solver.resolve(b),
+            #[cfg(feature = "rslab")]
+            Self::Rslab(solver) => solver.resolve(b),
+        }
+    }
+
+    fn reset(&mut self) {
+        match self {
+            Self::Default(solver) => solver.reset(),
+            #[cfg(feature = "rslab")]
+            Self::Rslab(solver) => solver.reset(),
+        }
+    }
+}
+
 /// Reusable fixed-topology LMPF study with private numerical workspaces.
 pub struct PreparedLmpf {
     mat: PowerFlowMat,
     driver: LmDriver,
-    solver: DefaultLmSolver,
+    solver: LinearSolver,
 }
 
 impl PreparedLmpf {
     pub fn backend(&self) -> &'static str {
-        if cfg!(feature = "qdldl") {
-            "qdldl"
-        } else {
-            "default"
+        match &self.solver {
+            LinearSolver::Default(_) if cfg!(feature = "qdldl") => "qdldl",
+            LinearSolver::Default(_) => "default",
+            #[cfg(feature = "rslab")]
+            LinearSolver::Rslab(_) => "rslab-ldlt",
         }
     }
 
     pub fn new(mat: PowerFlowMat) -> Self {
+        Self::with_backend(mat, LmpfBackend::default())
+    }
+
+    pub fn with_backend(mat: PowerFlowMat, backend: LmpfBackend) -> Self {
         let driver = LmDriver::build(
             &mat.y_bus,
             mat.npv,
             mat.npq,
             mat.s_bus.iter().copied().collect(),
         );
+        let solver = match backend {
+            LmpfBackend::Qdldl => LinearSolver::Default(DefaultLmSolver::default()),
+            #[cfg(feature = "rslab")]
+            LmpfBackend::RslabLdlt => {
+                LinearSolver::Rslab(crate::basic::solver::RslabLdltSolver::default())
+            }
+        };
         Self {
             mat,
             driver,
-            solver: DefaultLmSolver::default(),
+            solver,
         }
     }
 

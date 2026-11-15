@@ -43,6 +43,9 @@ pub fn features() -> Vec<&'static str> {
     if cfg!(feature = "qdldl") {
         f.push("qdldl");
     }
+    if cfg!(feature = "rslab") {
+        f.push("rslab");
+    }
     if cfg!(feature = "python") {
         f.push("python");
     }

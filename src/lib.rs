@@ -44,7 +44,7 @@ pub mod prelude {
     pub use crate::basic::*;
     pub use crate::cpf::{CpfNose, CpfOptions, CpfPoint, CpfReport, CpfStats, CpfTermination};
     pub use crate::io::pandapower;
-    pub use crate::lm::{LmpfReport, LmpfRunOptions, LmpfStatus, PreparedLmpf};
+    pub use crate::lm::{LmpfBackend, LmpfReport, LmpfRunOptions, LmpfStatus, PreparedLmpf};
     pub use crate::native::solver::NewtonSolver;
 }
 

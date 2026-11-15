@@ -104,6 +104,7 @@ Available features:
 - `arrow` (default): Apache Arrow and Parquet snapshot support via `bevy_archive`.
 - `faer`: High-performance portable linear algebra solver.
 - `qdldl` (default): Pure-Rust QDLDL backend for LMPF augmented systems.
+- `rslab`: Optional RSLAB LU and LDLᵀ backends, including `prepare_lmpf(backend="rslab-ldlt")` in Python.
 - `klu`: SuiteSparse KLU direct sparse solver (statically or dynamically linked).
 - `python`: Python C-extension module bindings (PyO3).
 - `experimental_n1`: Fixed-partition N-1 screening with shared analysis and parallel CPU workers.

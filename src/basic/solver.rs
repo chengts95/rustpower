@@ -13,6 +13,11 @@ mod rsparse;
 #[cfg(feature = "rsparse")]
 pub use rsparse::*;
 
+#[cfg(feature = "rslab")]
+mod rslab;
+#[cfg(feature = "rslab")]
+pub use rslab::*;
+
 #[cfg(feature = "qdldl")]
 mod qdldl;
 #[cfg(feature = "qdldl")]

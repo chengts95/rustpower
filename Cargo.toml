@@ -37,6 +37,7 @@ experimental_n1_cuda = ["experimental_n1", "dep:libloading"]
 experimental_fused_scalc = []
 default=["rsparse", "arrow", "qdldl"]
 qdldl = ["dep:clarabel"]
+rslab = ["dep:rslab"]
 probe = []
 klu_dyn = ["dep:rustpower-sol-klu"]
 klu = ["dep:rustpower-sol-klu", "rustpower-sol-klu/static"]
@@ -82,6 +83,7 @@ pyo3 = { version = "0.23", features = ["extension-module", "abi3-py310"], option
 numpy = { version = "0.23", optional = true }
 libloading = { version = "0.8", optional = true }
 clarabel = { version = "0.11", optional = true }
+rslab = { git = "https://github.com/milanofthe/rslab", tag = "v1.2.0", optional = true }
 
 [dependencies.rustpower-sol-klu]
 path = "./crates/rustpower-sol-klu"

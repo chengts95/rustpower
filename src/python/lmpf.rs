@@ -109,10 +109,20 @@ impl Study {
     }
 }
 
-pub fn prepare(grid: Py<PowerGrid>, py: Python<'_>) -> Study {
-    let prepared = grid.borrow_mut(py).inner.prepare_lmpf();
-    Study {
+pub fn prepare(grid: Py<PowerGrid>, py: Python<'_>, backend: &str) -> PyResult<Study> {
+    let backend = match backend {
+        "qdldl" => crate::lm::LmpfBackend::Qdldl,
+        #[cfg(feature = "rslab")]
+        "rslab-ldlt" => crate::lm::LmpfBackend::RslabLdlt,
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "LMPF backend must be 'qdldl' or 'rslab-ldlt'",
+            ));
+        }
+    };
+    let prepared = grid.borrow_mut(py).inner.prepare_lmpf_with_backend(backend);
+    Ok(Study {
         owner: grid,
         prepared,
-    }
+    })
 }

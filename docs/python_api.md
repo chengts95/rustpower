@@ -207,7 +207,8 @@ if solver.solve(max_iter=15, tol=1e-8):
 sparse structure and numerical workspaces. Each `run()` uses the prepared model
 and returns an independent report. The default `qdldl` backend is a pure-Rust
 quasi-definite LDLᵀ solver for the LMPF augmented system; `study.backend` reports
-the selected backend.
+the selected backend. Builds with the optional `rslab` feature also accept
+`grid.prepare_lmpf(backend="rslab-ldlt")` for the pure-Rust RSLAB LDLᵀ path.
 
 ```python
 study = grid.prepare_lmpf()

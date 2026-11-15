@@ -28,6 +28,12 @@ class LmpfApiTests(unittest.TestCase):
         study.reset()
         self.assertTrue(study.run().converged)
 
+    @unittest.skipUnless("rslab" in rp.features(), "RSLAB is not included")
+    def test_rslab_ldlt_backend(self):
+        study = rp.PowerGrid.from_pandapower(networks.case39()).prepare_lmpf(backend="rslab-ldlt")
+        self.assertEqual(study.backend, "rslab-ldlt")
+        self.assertTrue(study.run().converged)
+
     def test_invalid_options(self):
         study = rp.PowerGrid.from_pandapower(networks.case39()).prepare_lmpf()
         with self.assertRaises(ValueError):
