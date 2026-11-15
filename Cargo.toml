@@ -35,14 +35,13 @@ experimental_n1 = ["klu_dyn", "dep:crossbeam-channel", "dep:soa-rs"]
 experimental_n1_cuda = ["experimental_n1", "dep:libloading"]
 # Experimental single-sweep Jacobian and calculated-power assembly.
 experimental_fused_scalc = []
-default=["rsparse", "arrow", "qdldl"]
+default=["rslab", "arrow", "qdldl"]
 qdldl = ["dep:clarabel"]
 rslab = ["dep:rslab"]
 probe = []
 klu_dyn = ["dep:rustpower-sol-klu"]
 klu = ["dep:rustpower-sol-klu", "rustpower-sol-klu/static"]
 faer = ["dep:faer"]
-rsparse = ["dep:rsparse"]
 archive = ["dep:bevy_archive"]   
 arrow = ["dep:bevy_archive", "bevy_archive/arrow_rs", "archive"] 
 python = ["dep:pyo3", "dep:numpy"]
@@ -67,7 +66,6 @@ serde_json = ">=1.0"
 num-traits = ">=0.2"
 num-derive = ">=0.3"
 num-complex = ">=0.4"
-rsparse = {version ="^1.2", optional = true}
 csv = "^1.3.0"
 zip = "^8.0.0"
 bevy_ecs = "0.19.0"

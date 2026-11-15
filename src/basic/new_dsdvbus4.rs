@@ -633,12 +633,12 @@ mod tests {
         assert_jacobians_agree(&j_v3, &j_v4);
     }
 
-    #[cfg(feature = "rsparse")]
+    #[cfg(feature = "rslab")]
     #[test]
     fn iwamoto_v4_matches_standard_newton_solution() {
         let mat = load_ieee118_mat();
-        let mut standard = crate::basic::solver::RSparseSolver::default();
-        let mut iwamoto = crate::basic::solver::RSparseSolver::default();
+        let mut standard = crate::basic::solver::RslabLuSolver::default();
+        let mut iwamoto = crate::basic::solver::RslabLuSolver::default();
         let (a, _) = crate::basic::newton_pf(
             &mat.y_bus,
             &mat.s_bus,

@@ -31,9 +31,6 @@ pub fn features() -> Vec<&'static str> {
     if cfg!(feature = "faer") {
         f.push("faer");
     }
-    if cfg!(feature = "rsparse") {
-        f.push("rsparse");
-    }
     if cfg!(feature = "archive") {
         f.push("archive");
     }

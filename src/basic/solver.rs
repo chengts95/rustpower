@@ -8,11 +8,6 @@ mod klu;
 #[cfg(any(feature = "klu", feature = "klu_dyn"))]
 pub use klu::*;
 
-#[cfg(feature = "rsparse")]
-mod rsparse;
-#[cfg(feature = "rsparse")]
-pub use rsparse::*;
-
 #[cfg(feature = "rslab")]
 mod rslab;
 #[cfg(feature = "rslab")]
@@ -32,9 +27,9 @@ pub type DefaultLmSolver = DefaultSolver;
     not(feature = "klu"),
     not(feature = "klu_dyn"),
     not(feature = "faer"),
-    feature = "rsparse"
+    feature = "rslab"
 ))]
-pub type DefaultSolver = RSparseSolver;
+pub type DefaultSolver = RslabLuSolver;
 
 #[cfg(any(feature = "klu", feature = "klu_dyn"))]
 pub type DefaultSolver = KLUSolver;
