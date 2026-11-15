@@ -13,6 +13,7 @@ fn grid() -> PowerGrid {
 fn prepared_lmpf_converges_and_reuses_study() {
     let mut grid = grid();
     let mut study = grid.prepare_lmpf();
+    assert_eq!(study.backend(), "qdldl");
     let first = study.run(LmpfRunOptions::default()).unwrap();
     assert!(first.converged);
     assert!(first.residual_norm < 1e-6);

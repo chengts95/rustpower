@@ -13,6 +13,16 @@ mod rsparse;
 #[cfg(feature = "rsparse")]
 pub use rsparse::*;
 
+#[cfg(feature = "qdldl")]
+mod qdldl;
+#[cfg(feature = "qdldl")]
+pub use qdldl::*;
+
+#[cfg(feature = "qdldl")]
+pub type DefaultLmSolver = QDLDLSolver;
+#[cfg(not(feature = "qdldl"))]
+pub type DefaultLmSolver = DefaultSolver;
+
 #[cfg(all(
     not(feature = "klu"),
     not(feature = "klu_dyn"),

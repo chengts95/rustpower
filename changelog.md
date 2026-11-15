@@ -6,6 +6,7 @@
 
 - Add exact and Gauss-Newton Levenberg-Marquardt power flow with reusable prepared studies in Rust and Python.
 - Reuse Ybus-derived sparse analyses and private numerical workspaces across LMPF runs.
+- Use the pure-Rust QDLDL backend by default for symmetric-indefinite LMPF augmented systems.
 - Report convergence status, residual norm, iteration count, voltage, and elapsed time without changing the source grid.
 
 ## [0.6.0] - 2026-11-14

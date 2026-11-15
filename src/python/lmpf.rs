@@ -99,6 +99,11 @@ impl Study {
     }
 
     #[getter]
+    fn backend(&self) -> &'static str {
+        self.prepared.backend()
+    }
+
+    #[getter]
     fn owner(&self, py: Python<'_>) -> Py<PowerGrid> {
         self.owner.clone_ref(py)
     }

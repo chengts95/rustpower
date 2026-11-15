@@ -35,7 +35,9 @@ experimental_n1 = ["klu_dyn", "dep:crossbeam-channel", "dep:soa-rs"]
 experimental_n1_cuda = ["experimental_n1", "dep:libloading"]
 # Experimental single-sweep Jacobian and calculated-power assembly.
 experimental_fused_scalc = []
-default=["rsparse", "arrow"] 
+default=["rsparse", "arrow", "qdldl"]
+qdldl = ["dep:clarabel"]
+probe = []
 klu_dyn = ["dep:rustpower-sol-klu"]
 klu = ["dep:rustpower-sol-klu", "rustpower-sol-klu/static"]
 faer = ["dep:faer"]
@@ -79,6 +81,7 @@ bumpalo = "^3.20.0"
 pyo3 = { version = "0.23", features = ["extension-module", "abi3-py310"], optional = true }
 numpy = { version = "0.23", optional = true }
 libloading = { version = "0.8", optional = true }
+clarabel = { version = "0.11", optional = true }
 
 [dependencies.rustpower-sol-klu]
 path = "./crates/rustpower-sol-klu"

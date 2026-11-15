@@ -10,6 +10,7 @@ class LmpfApiTests(unittest.TestCase):
         grid = rp.PowerGrid.from_pandapower(networks.case39())
         study = grid.prepare_lmpf()
         self.assertIs(study.owner, grid)
+        self.assertEqual(study.backend, "qdldl")
         first = study.run()
         self.assertTrue(first.converged)
         self.assertEqual(first.status, "converged")

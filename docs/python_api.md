@@ -205,7 +205,9 @@ if solver.solve(max_iter=15, tol=1e-8):
 
 `prepare_lmpf()` creates a reusable fixed-topology study with its own augmented
 sparse structure and numerical workspaces. Each `run()` uses the prepared model
-and returns an independent report.
+and returns an independent report. The default `qdldl` backend is a pure-Rust
+quasi-definite LDLᵀ solver for the LMPF augmented system; `study.backend` reports
+the selected backend.
 
 ```python
 study = grid.prepare_lmpf()

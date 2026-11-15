@@ -1,4 +1,30 @@
 mod basic;
+
+#[macro_export]
+macro_rules! timeit {
+    ($counter:expr, $body:block) => {{
+        #[cfg(feature = "probe")]
+        let __timeit_start = std::time::Instant::now();
+        #[cfg(feature = "probe")]
+        let __timeit_out = $body;
+        #[cfg(feature = "probe")]
+        ($counter).fetch_add(
+            __timeit_start.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        #[cfg(not(feature = "probe"))]
+        $body
+    }};
+}
+
+#[macro_export]
+macro_rules! probe_count {
+    ($counter:expr) => {
+        #[cfg(feature = "probe")]
+        $counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    };
+}
+
 pub mod bevy_cmdbuffer;
 pub mod cpf;
 pub mod io;

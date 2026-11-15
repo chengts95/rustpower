@@ -40,6 +40,9 @@ pub fn features() -> Vec<&'static str> {
     if cfg!(feature = "arrow") {
         f.push("arrow");
     }
+    if cfg!(feature = "qdldl") {
+        f.push("qdldl");
+    }
     if cfg!(feature = "python") {
         f.push("python");
     }

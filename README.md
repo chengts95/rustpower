@@ -103,6 +103,7 @@ Available features:
 - `rsparse` (default): Fast native pure-Rust sparse solver.
 - `arrow` (default): Apache Arrow and Parquet snapshot support via `bevy_archive`.
 - `faer`: High-performance portable linear algebra solver.
+- `qdldl` (default): Pure-Rust QDLDL backend for LMPF augmented systems.
 - `klu`: SuiteSparse KLU direct sparse solver (statically or dynamically linked).
 - `python`: Python C-extension module bindings (PyO3).
 - `experimental_n1`: Fixed-partition N-1 screening with shared analysis and parallel CPU workers.
@@ -229,7 +230,7 @@ Although ECS-Grid is a more complex electromagnetic transient (EMT) simulation s
 
 ## Levenberg-Marquardt Power Flow
 
-RustPower 0.6.1 adds exact and Gauss-Newton Levenberg-Marquardt power flow through reusable prepared studies. `prepare_lmpf()` captures a fixed-topology model and its augmented sparse structure; `run()` applies independent convergence and damping settings and returns residual and voltage results without modifying the source grid. See the [Python LMPF guide](docs/python_api.md#levenberg-marquardt-power-flow).
+RustPower 0.6.1 adds exact and Gauss-Newton Levenberg-Marquardt power flow through reusable prepared studies. `prepare_lmpf()` captures a fixed-topology model and its augmented sparse structure; `run()` applies independent convergence and damping settings and returns residual and voltage results without modifying the source grid. The default LMPF backend is the pure-Rust QDLDL solver. See the [Python LMPF guide](docs/python_api.md#levenberg-marquardt-power-flow).
 
 ## Continuation Power Flow
 

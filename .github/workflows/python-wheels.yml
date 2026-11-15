@@ -38,7 +38,7 @@ jobs:
           RUSTFLAGS: "-C target-cpu=x86-64-v3"
         with:
           target: x86_64
-          args: --release --out dist --no-default-features --features python,archive,klu,arrow,experimental_n1
+          args: --release --out dist --no-default-features --features python,archive,klu,arrow,qdldl,experimental_n1
           sccache: 'true'
           manylinux: 2_28
           before-script-linux: |
@@ -150,7 +150,7 @@ jobs:
             python -m pip install maturin==1.16.0 &&
             python -m maturin --version &&
             python -m maturin build --release --out dist --no-default-features \
-              --features python,archive,klu,arrow,experimental_n1_cuda
+              --features python,archive,klu,arrow,qdldl,experimental_n1_cuda
           } 2>&1 | tee "$RUNNER_TEMP/maturin-windows.log" || {
               python scripts/ci_failure_annotation.py "$RUNNER_TEMP/maturin-windows.log"
               exit 1
@@ -206,7 +206,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: aarch64
-          args: --release --out dist --no-default-features --features python,archive,klu,arrow,experimental_n1
+          args: --release --out dist --no-default-features --features python,archive,klu,arrow,qdldl,experimental_n1
           sccache: 'true'
 
       - name: Test installed wheel with CPU N-1

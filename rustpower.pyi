@@ -467,6 +467,8 @@ class LmpfReport:
 class LmpfStudy:
     @property
     def owner(self) -> PowerGrid: ...
+    @property
+    def backend(self) -> str: ...
     def run(self, *, tol: float = 1e-6, max_iter: int = 100,
             exact: bool = True, initial_mu: float = 1e-2,
             mu_increase: float = 2.0, mu_decrease: float = 3.0,

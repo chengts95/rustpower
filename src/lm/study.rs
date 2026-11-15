@@ -5,7 +5,7 @@ use num_complex::Complex64;
 
 use crate::basic::{
     ecs::powerflow::systems::PowerFlowMat,
-    solver::{DefaultSolver, Solve},
+    solver::{DefaultLmSolver, Solve},
 };
 
 use super::{LmDriver, LmOptions};
@@ -73,10 +73,18 @@ pub struct LmpfReport {
 pub struct PreparedLmpf {
     mat: PowerFlowMat,
     driver: LmDriver,
-    solver: DefaultSolver,
+    solver: DefaultLmSolver,
 }
 
 impl PreparedLmpf {
+    pub fn backend(&self) -> &'static str {
+        if cfg!(feature = "qdldl") {
+            "qdldl"
+        } else {
+            "default"
+        }
+    }
+
     pub fn new(mat: PowerFlowMat) -> Self {
         let driver = LmDriver::build(
             &mat.y_bus,
@@ -87,7 +95,7 @@ impl PreparedLmpf {
         Self {
             mat,
             driver,
-            solver: DefaultSolver::default(),
+            solver: DefaultLmSolver::default(),
         }
     }
 
