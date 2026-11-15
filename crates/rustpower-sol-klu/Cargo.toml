@@ -1,6 +1,6 @@
 [package]
 name = "rustpower-sol-klu"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "A very basic KLU-based sparse linear solver unsafe wrapper."
 license = "MPL-2.0"
@@ -11,4 +11,4 @@ repository = "https://github.com/chengts95/rustpower"
 static = ["rustpower-klu-sys/static"]
 
 [dependencies]
-rustpower-klu-sys={path="./rustpower-klu-sys", version = "^0.1.2"}
+rustpower-klu-sys={path="./rustpower-klu-sys", version = "^0.1.5"}

@@ -82,7 +82,7 @@ libloading = { version = "0.8", optional = true }
 
 [dependencies.rustpower-sol-klu]
 path = "./crates/rustpower-sol-klu"
-version = "0.1.4"
+version = "0.1.5"
 optional = true
 
 [[example]]
