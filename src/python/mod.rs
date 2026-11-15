@@ -4,6 +4,7 @@
 pub mod cpf;
 pub mod grid;
 pub mod handles;
+pub mod lmpf;
 #[cfg(feature = "experimental_n1")]
 pub mod n1;
 pub mod network;
@@ -85,6 +86,8 @@ pub fn rustpower(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<grid::SolveReport>()?;
     m.add_class::<cpf::Report>()?;
     m.add_class::<cpf::Nose>()?;
+    m.add_class::<lmpf::Study>()?;
+    m.add_class::<lmpf::Report>()?;
 
     #[cfg(feature = "experimental_n1")]
     {

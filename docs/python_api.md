@@ -201,6 +201,37 @@ if solver.solve(max_iter=15, tol=1e-8):
 
 ---
 
+## Levenberg-Marquardt power flow
+
+`prepare_lmpf()` creates a reusable fixed-topology study with its own augmented
+sparse structure and numerical workspaces. Each `run()` uses the prepared model
+and returns an independent report.
+
+```python
+study = grid.prepare_lmpf()
+result = study.run(
+    tol=1e-6,
+    max_iter=100,
+    exact=True,        # False selects Gauss-Newton LM
+    initial_mu=1e-2,
+    mu_increase=2.0,
+    mu_decrease=3.0,
+    max_trials=30,
+)
+
+print(result.converged, result.status)
+print(result.residual_norm, result.iterations)
+print(result.voltage)  # complex128, physical bus order
+print(result.elapsed_seconds)
+```
+
+`converged=True` means the power-flow mismatch meets `tol`. A false report returns
+the best accepted iterate but does not claim a power-flow solution. Prepare a new
+study after changing network parameters or topology. `study.reset()` clears the
+linear solver's retained factorization without rebuilding the electrical model.
+
+---
+
 ## Continuation power flow
 
 `PowerGrid.run_cpf()` traces a PV curve with tangent prediction and perpendicular

@@ -227,6 +227,10 @@ Special thanks to:
 
 Although ECS-Grid is a more complex electromagnetic transient (EMT) simulation system, its design philosophy and methodologies greatly influenced the development of this steady-state power flow solver.
 
+## Levenberg-Marquardt Power Flow
+
+RustPower 0.6.1 adds exact and Gauss-Newton Levenberg-Marquardt power flow through reusable prepared studies. `prepare_lmpf()` captures a fixed-topology model and its augmented sparse structure; `run()` applies independent convergence and damping settings and returns residual and voltage results without modifying the source grid. See the [Python LMPF guide](docs/python_api.md#levenberg-marquardt-power-flow).
+
 ## Continuation Power Flow
 
 RustPower 0.6.0 includes continuation power flow in the standard Rust and Python APIs without an optional feature or additional dependency. It uses tangent prediction and perpendicular correction, reuses the fixed V4 Jacobian structure, and follows accepted AC solutions along the PV curve. Reports distinguish a detected nose from termination before a nose is confirmed. See the [Python CPF guide](docs/python_api.md#continuation-power-flow) and the [PEGASE 9241 demo](examples/python/n-1_and_cpf.ipynb).

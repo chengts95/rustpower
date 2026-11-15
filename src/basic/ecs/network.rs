@@ -254,6 +254,12 @@ impl PowerGrid {
         &mut self.data_storage
     }
 
+    /// Prepare a reusable fixed-topology LMPF study from the current grid.
+    pub fn prepare_lmpf(&mut self) -> crate::lm::study::PreparedLmpf {
+        self.run_pf();
+        crate::lm::study::PreparedLmpf::new(self.world().resource::<PowerFlowMat>().clone())
+    }
+
     /// Trace a PV curve by scaling the present net injections with one lambda.
     /// Bus types remain fixed and network parameters are not modified.
     pub fn run_cpf(

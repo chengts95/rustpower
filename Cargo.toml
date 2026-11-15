@@ -1,6 +1,6 @@
 [package]
 name = "rustpower"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 authors = ["cts chengts95@msn.cn"]
 description = "ECS-based power system simulation with AC/DC power flow, continuation power flow, and experimental N-1 screening."

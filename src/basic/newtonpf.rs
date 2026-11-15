@@ -314,6 +314,37 @@ pub(crate) fn assemble_f_v2(
         .zip_apply(&mis.rows_range(0..npq), |a, b| *a = b.simd_imaginary());
 }
 #[inline(always)]
+pub(crate) fn fill_f_from_power<const SPEC_MINUS_CALC: bool>(
+    mut scalc: impl FnMut(usize) -> Complex64,
+    sbus: &[Complex64],
+    npq: usize,
+    n_active: usize,
+    f: &mut [f64],
+) -> f64 {
+    let mut max_norm: f64 = 0.0;
+    for i in 0..npq {
+        let mis = if SPEC_MINUS_CALC {
+            sbus[i] - scalc(i)
+        } else {
+            scalc(i) - sbus[i]
+        };
+        f[i] = mis.re;
+        f[n_active + i] = mis.im;
+        max_norm = max_norm.max(mis.re.abs()).max(mis.im.abs());
+    }
+    for i in npq..n_active {
+        let mis = if SPEC_MINUS_CALC {
+            sbus[i] - scalc(i)
+        } else {
+            scalc(i) - sbus[i]
+        };
+        f[i] = mis.re;
+        max_norm = max_norm.max(mis.re.abs());
+    }
+    max_norm
+}
+
+#[inline(always)]
 pub(crate) fn fill_f_from_scalc<const SPEC_MINUS_CALC: bool>(
     scalc: &[Complex64],
     sbus: &[Complex64],
