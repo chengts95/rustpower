@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.0] - 2026-11-14
+
+### Added
+
+- Add continuation power flow with tangent prediction, perpendicular correction, adaptive stepping, and explicit nose/termination results in Rust and Python.
+- Add experimental fixed-partition N-1 studies with shared sparse analyses, bounded parallel workers, topology screening, detailed monitoring, and DCPF retries.
+- Add optional Windows CUDA/cuDSS and hybrid N-1 execution with runtime probing and CPU fallback.
+- Expose readable line/transformer identities for numerical events and islanded outages.
+- Add a PEGASE 9241 Python demonstration covering ACPF, CPF, and N-1 workflows.
+
+### Changed
+
+- Add reusable second-right-hand-side solving for backends that support it, used by CPF correction.
+
 ## [0.5.5]
 
 ### Fixed

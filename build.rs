@@ -11,7 +11,12 @@ fn main() {
     ] {
         println!("cargo:rerun-if-changed={file}");
     }
-    for variable in ["CUDA_PATH", "CUDSS_DIR", "RUSTPOWER_CUDA_ARCH"] {
+    for variable in [
+        "CUDA_PATH",
+        "CUDSS_DIR",
+        "RUSTPOWER_CUDA_ARCH",
+        "RUSTPOWER_CUDA_PTX",
+    ] {
         println!("cargo:rerun-if-env-changed={variable}");
     }
     // The ordinary CPU build must remain independent of every native CUDA tool.
