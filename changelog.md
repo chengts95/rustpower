@@ -14,6 +14,12 @@
 
 - Add reusable second-right-hand-side solving for backends that support it, used by CPF correction.
 
+### Implementation notes
+
+- The overall design was completed by the author, Tianshi Cheng.
+- GPT-6.1 implemented the CPU N-1 framework.
+- Kimi 3.1 Pro implemented the CUDA N-1 backend and continuation power flow.
+
 ## [0.5.5]
 
 ### Fixed

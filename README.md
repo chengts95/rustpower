@@ -227,9 +227,16 @@ Special thanks to:
 
 Although ECS-Grid is a more complex electromagnetic transient (EMT) simulation system, its design philosophy and methodologies greatly influenced the development of this steady-state power flow solver.
 
+## Continuation Power Flow
+
+RustPower 0.6.0 includes continuation power flow in the standard Rust and Python APIs without an optional feature or additional dependency. It uses tangent prediction and perpendicular correction, reuses the fixed V4 Jacobian structure, and follows accepted AC solutions along the PV curve. Reports distinguish a detected nose from termination before a nose is confirmed. See the [Python CPF guide](docs/python_api.md#continuation-power-flow) and the [PEGASE 9241 demo](examples/python/n-1_and_cpf.ipynb).
+
 ## Experimental N−1 contingency studies
 
-The `experimental_n1` feature provides shared-baseline contingency screening with
-bounded task/result queues, private numerical workers, and source-Entity traceability.
-See the [Rust and Python usage guide](docs/N1_USAGE.md) and
-[parallel execution design](docs/design/n1_parallel_execution.md).
+The `experimental_n1` feature provides fixed-partition contingency screening with reusable prepared baselines. Single-branch outages are applied as fixed-size CSC value patches, preserving sparsity patterns and shared KLU symbolic analyses. Bridge analysis rejects newly formed slackless islands before numerical dispatch. Bounded task/result queues connect private numerical workers to a collector, with status-only or detailed reporting and DCPF retries for numerical failures. See the [Rust and Python usage guide](docs/N1_USAGE.md) and [parallel execution design](docs/design/n1_parallel_execution.md).
+
+The optional Windows CUDA backend implements FP64 batched Newton execution with cuDSS sparse linear solves. It dynamically loads the native bridge, supports CPU fallback and hybrid CPU/GPU scheduling, and includes PTX for forward-compatible driver JIT on supported devices. CUDA and hybrid execution currently use base-AC initialization and device 0. See the [CUDA N-1 guide](docs/n1_cuda.md).
+
+### Implementation credits
+
+The overall design was completed by the author, Tianshi Cheng. GPT-6.1 implemented the CPU N-1 framework. Kimi 3.1 Pro implemented the CUDA N-1 backend and continuation power flow.
