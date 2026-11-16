@@ -309,6 +309,10 @@ Three properties return reusable `N1Faults` selections:
 - `rejected_faults`: constraint violations and numerical failures, excluding islands;
 - `island_faults`: scenarios rejected by topology screening.
 
+An `N1Faults` selection can also be applied to its source grid for follow-up analysis
+with `faults.apply()` and restored with `faults.restore()`. This is useful for LMPF
+retries or load-shedding studies; it does not modify existing prepared N-1 snapshots.
+
 `N1Report.events`, `hits`, `branch_results`, and `islands` are column dictionaries.
 Convert them directly to pandas DataFrames when tabular processing is useful:
 

@@ -47,6 +47,11 @@ class N1ApiTests(unittest.TestCase):
         failed = study.run(max_iter=0)
         self.assertEqual(failed.summary['numerical_failed'], 1)
         self.assertEqual(len(failed.numerical_failures), 1)
+        failures = failed.numerical_failures
+        failures.apply()
+        self.assertFalse(first_line(g).in_service)
+        failures.restore()
+        self.assertTrue(first_line(g).in_service)
         retry = study.run(failed.numerical_failures, initialization='dc')
         self.assertEqual(retry.summary['passed'], 1)
         self.assertEqual(retry.summary['numerical_failed'], 0)

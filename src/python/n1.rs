@@ -73,6 +73,29 @@ impl Faults {
             .collect::<Vec<_>>()
             .into_pyarray(py)
     }
+
+    /// Apply the selected outages to the source grid for follow-up analysis.
+    fn apply(&self, py: Python<'_>) {
+        let mut grid = self.owner.borrow_mut(py);
+        let world = grid.inner.world_mut();
+        for &entity in &self.entities {
+            world
+                .entity_mut(entity)
+                .insert(crate::basic::ecs::elements::bus::OutOfService);
+        }
+    }
+
+    /// Restore the selected devices to service. Fault selections contain only
+    /// devices that were active in the prepared baseline.
+    fn restore(&self, py: Python<'_>) {
+        let mut grid = self.owner.borrow_mut(py);
+        let world = grid.inner.world_mut();
+        for &entity in &self.entities {
+            world
+                .entity_mut(entity)
+                .remove::<crate::basic::ecs::elements::bus::OutOfService>();
+        }
+    }
 }
 
 fn resolve_faults(owner: &Py<PowerGrid>, faults: &Bound<'_, PyAny>) -> PyResult<N1FaultSet> {
